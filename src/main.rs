@@ -90,6 +90,15 @@ struct Args {
     /// One Euro derivative cutoff in Hz for gaze; lower keeps tracker noise from loosening the filter
     #[arg(long, default_value_t = 0.5)]
     gaze_d_cutoff: f32,
+    /// Gaze changes smaller than this (1.0 = 45°) are ignored so the eyes stay put while fixating
+    #[arg(long, default_value_t = 0.03)]
+    gaze_deadzone: f32,
+    /// Hold the gaze while either eye's Frame openness is below this; 0 disables
+    #[arg(long, default_value_t = 0.5)]
+    gaze_hold_below: f32,
+    /// Send each eye's own gaze instead of the combined gaze for both eyes (jittery on the Frame)
+    #[arg(long)]
+    independent_eyes: bool,
     /// One Euro minimum cutoff in Hz for eyelids
     #[arg(long, default_value_t = 6.0)]
     lid_min_cutoff: f32,
@@ -154,24 +163,55 @@ impl OneEuro {
     }
 }
 
+/// Backlash deadzone: the output only moves once the input drifts more than `width` away,
+/// which pins the eyes during fixation without adding delay to large movements.
+#[derive(Clone, Copy)]
+struct Deadzone {
+    width: f32,
+    value: Option<f32>,
+}
+
+impl Deadzone {
+    fn new(width: f32) -> Self {
+        Self { width, value: None }
+    }
+
+    fn apply(&mut self, x: f32) -> f32 {
+        let y = self
+            .value
+            .map_or(x, |held| held.clamp(x - self.width, x + self.width));
+        self.value = Some(y);
+        y
+    }
+
+    fn reset(&mut self) {
+        self.value = None;
+    }
+}
+
 /// Filters for the six gaze values and two eyelids, clocked by the eye server's sample time.
 struct Smoother {
     gaze: [OneEuro; 6],
+    deadzones: [Deadzone; 6],
     lids: [OneEuro; 2],
     last_time: Option<f64>,
+    last_gaze: Option<[f32; 6]>,
 }
 
 impl Smoother {
     fn new(args: &Args) -> Self {
         Self {
             gaze: [OneEuro::new(args.gaze_min_cutoff, args.gaze_beta, args.gaze_d_cutoff); 6],
+            deadzones: [Deadzone::new(args.gaze_deadzone); 6],
             lids: [OneEuro::new(args.lid_min_cutoff, args.lid_beta, LID_D_CUTOFF); 2],
             last_time: None,
+            last_gaze: None,
         }
     }
 
-    fn apply(&mut self, time: f64, gaze: &mut [f32; 6], lids: &mut [f32; 2]) {
-        let dt = match self.last_time.replace(time) {
+    /// `hold_gaze` keeps the previous gaze while the eyes are mostly shut, where the Frame's gaze jumps around.
+    fn apply(&mut self, time: f64, gaze: &mut [f32; 6], lids: &mut [f32; 2], hold_gaze: bool) {
+        let dt = match self.last_time {
             Some(last) if time > last && time - last < MAX_GAP => (time - last) as f32,
             Some(last) if time <= last => NOMINAL_DT,
             _ => {
@@ -179,8 +219,18 @@ impl Smoother {
                 NOMINAL_DT
             }
         };
-        for (value, filter) in gaze.iter_mut().zip(&mut self.gaze) {
-            *value = filter.filter(*value, dt);
+        // Set after the match: reset() clears last_time, and every later sample would reset again.
+        self.last_time = Some(time);
+        match self.last_gaze {
+            Some(last) if hold_gaze => *gaze = last,
+            _ => {
+                for ((value, filter), deadzone) in
+                    gaze.iter_mut().zip(&mut self.gaze).zip(&mut self.deadzones)
+                {
+                    *value = deadzone.apply(filter.filter(*value, dt));
+                }
+                self.last_gaze = Some(*gaze);
+            }
         }
         for (value, filter) in lids.iter_mut().zip(&mut self.lids) {
             *value = filter.filter(*value, dt);
@@ -189,7 +239,9 @@ impl Smoother {
 
     fn reset(&mut self) {
         self.gaze.iter_mut().chain(&mut self.lids).for_each(OneEuro::reset);
+        self.deadzones.iter_mut().for_each(Deadzone::reset);
         self.last_time = None;
+        self.last_gaze = None;
     }
 }
 
@@ -351,13 +403,21 @@ fn send_eye_data(
         format!("{prefix}/EyeTrackingActive"),
         vec![OscType::Bool(true)],
     )?;
-    let [left_x, left_y] = gaze_angles(data.gaze[0]);
-    let [right_x, right_y] = gaze_angles(data.gaze[1]);
     let [x, y] = gaze_angles(data.fixation_point);
-    let mut gaze = [left_x, left_y, right_x, right_y, x, y];
+    // Each eye wobbles on its own (L/R changes correlate only ~0.35), so share the combined gaze by default.
+    let (left, right) = if args.independent_eyes {
+        (gaze_angles(data.gaze[0]), gaze_angles(data.gaze[1]))
+    } else {
+        ([x, y], [x, y])
+    };
+    let mut gaze = [left[0], left[1], right[0], right[1], x, y];
     let mut lids = data.openness.map(|openness| lid_to_vrcft(openness, args));
     if !args.raw {
-        smoother.apply(data.sample_time, &mut gaze, &mut lids);
+        let hold_gaze = data
+            .openness
+            .iter()
+            .any(|openness| *openness < args.gaze_hold_below);
+        smoother.apply(data.sample_time, &mut gaze, &mut lids, hold_gaze);
     }
     let [left_x, left_y, right_x, right_y, x, y] = gaze;
     for (suffix, value) in [
@@ -404,11 +464,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cutoffs_ok = [args.gaze_min_cutoff, args.gaze_d_cutoff, args.lid_min_cutoff]
         .iter()
         .all(|cutoff| cutoff.is_finite() && *cutoff > 0.0);
-    let betas_ok = [args.gaze_beta, args.lid_beta]
+    let non_negative_ok = [args.gaze_beta, args.lid_beta, args.gaze_deadzone]
         .iter()
-        .all(|beta| beta.is_finite() && *beta >= 0.0);
-    if !cutoffs_ok || !betas_ok {
-        return Err("filter cutoffs must be positive and betas non-negative".into());
+        .all(|value| value.is_finite() && *value >= 0.0);
+    if !cutoffs_ok || !non_negative_ok {
+        return Err("filter cutoffs must be positive; betas and the deadzone non-negative".into());
+    }
+    if !args.gaze_hold_below.is_finite() {
+        return Err("--gaze-hold-below must be a number".into());
     }
     let mut smoother = Smoother::new(&args);
     let target: SocketAddr = args
@@ -443,5 +506,68 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args() -> Args {
+        Args::parse_from(["frameeyeosc"])
+    }
+
+    #[test]
+    fn deadzone_ignores_small_moves_and_follows_large_ones() {
+        let mut deadzone = Deadzone::new(0.03);
+        assert_eq!(deadzone.apply(0.10), 0.10);
+        assert_eq!(deadzone.apply(0.12), 0.10);
+        assert_eq!(deadzone.apply(0.08), 0.10);
+        assert!((deadzone.apply(0.30) - 0.27).abs() < 1e-6);
+        assert!((deadzone.apply(0.29) - 0.27).abs() < 1e-6);
+    }
+
+    #[test]
+    fn one_euro_damps_noise() {
+        let mut filter = OneEuro::new(0.4, 0.8, 0.5);
+        let mut last = 0.0;
+        for i in 0..90 {
+            let noise = if i % 2 == 0 { 0.02 } else { -0.02 };
+            last = filter.filter(noise, NOMINAL_DT);
+        }
+        assert!(last.abs() < 0.005, "{last}");
+    }
+
+    #[test]
+    fn smoother_keeps_filter_state_between_samples() {
+        let mut smoother = Smoother::new(&Args::parse_from(["frameeyeosc", "--gaze-deadzone", "0"]));
+        let mut lids = [0.75; 2];
+        let mut gaze = [0.0; 6];
+        smoother.apply(0.0, &mut gaze, &mut lids, false);
+        let mut jumped = [0.5; 6];
+        smoother.apply(NOMINAL_DT as f64, &mut jumped, &mut lids, false);
+        assert!(jumped[0] < 0.5, "a filtered step must not pass through untouched: {}", jumped[0]);
+    }
+
+    #[test]
+    fn gaze_is_held_while_eyes_are_shut() {
+        let mut smoother = Smoother::new(&args());
+        let mut lids = [0.75; 2];
+        let mut gaze = [0.2; 6];
+        smoother.apply(0.0, &mut gaze, &mut lids, false);
+        let before = gaze;
+        let mut jumped = [-0.4; 6];
+        smoother.apply(NOMINAL_DT as f64, &mut jumped, &mut lids, true);
+        assert_eq!(jumped, before);
+    }
+
+    #[test]
+    fn eyelids_map_onto_vrcft_scale() {
+        let args = args();
+        assert_eq!(lid_to_vrcft(0.22, &args), 0.0);
+        assert_eq!(lid_to_vrcft(0.80, &args), 0.75);
+        assert_eq!(lid_to_vrcft(0.88, &args), 0.75);
+        assert_eq!(lid_to_vrcft(1.00, &args), 1.0);
+        assert!(lid_to_vrcft(0.55, &args) > 0.0 && lid_to_vrcft(0.55, &args) < 0.75);
     }
 }
