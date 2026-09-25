@@ -15,6 +15,11 @@ const SHM_VERSION: u32 = 4;
 const SHM_SIZE: usize = 0x4f21a;
 const SOURCE: &str = "/dev/shm/eye-server.mmap";
 const TIMEOUT: Duration = Duration::from_secs(1);
+// The eye server produces samples at ~90 Hz.
+const NOMINAL_DT: f32 = 1.0 / 90.0;
+// Gaps longer than this restart the filters instead of smearing across them.
+const MAX_GAP: f64 = 0.25;
+const D_CUTOFF: f32 = 1.0;
 
 #[repr(C)]
 struct EyeServerMmap {
@@ -72,6 +77,123 @@ struct Args {
     target: String,
     #[arg(long, default_value = "/FT")]
     prefix: String,
+    /// Send unsmoothed values (eyelid remapping still applies)
+    #[arg(long)]
+    raw: bool,
+    /// One Euro minimum cutoff in Hz for gaze; lower is steadier at rest
+    #[arg(long, default_value_t = 1.5)]
+    gaze_min_cutoff: f32,
+    /// One Euro beta for gaze; higher follows fast eye movements with less lag
+    #[arg(long, default_value_t = 3.0)]
+    gaze_beta: f32,
+    /// One Euro minimum cutoff in Hz for eyelids
+    #[arg(long, default_value_t = 6.0)]
+    lid_min_cutoff: f32,
+    /// One Euro beta for eyelids
+    #[arg(long, default_value_t = 5.0)]
+    lid_beta: f32,
+    /// Frame openness at or below this counts as fully closed
+    #[arg(long, default_value_t = 0.30)]
+    lid_closed: f32,
+    /// Frame openness of a relaxed open eye (VRCFT 0.75)
+    #[arg(long, default_value_t = 0.80)]
+    lid_open: f32,
+    /// Frame openness of a fully widened eye (VRCFT 1.0)
+    #[arg(long, default_value_t = 1.00)]
+    lid_wide: f32,
+}
+
+/// One Euro filter: smooths hard while the signal is still and loosens up as it moves fast.
+#[derive(Clone, Copy)]
+struct OneEuro {
+    min_cutoff: f32,
+    beta: f32,
+    value: Option<f32>,
+    velocity: f32,
+}
+
+impl OneEuro {
+    fn new(min_cutoff: f32, beta: f32) -> Self {
+        Self {
+            min_cutoff,
+            beta,
+            value: None,
+            velocity: 0.0,
+        }
+    }
+
+    fn alpha(cutoff: f32, dt: f32) -> f32 {
+        let tau = 1.0 / (2.0 * std::f32::consts::PI * cutoff);
+        1.0 / (1.0 + tau / dt)
+    }
+
+    fn filter(&mut self, x: f32, dt: f32) -> f32 {
+        let Some(prev) = self.value else {
+            self.value = Some(x);
+            return x;
+        };
+        self.velocity += Self::alpha(D_CUTOFF, dt) * ((x - prev) / dt - self.velocity);
+        let cutoff = self.min_cutoff + self.beta * self.velocity.abs();
+        let y = prev + Self::alpha(cutoff, dt) * (x - prev);
+        self.value = Some(y);
+        y
+    }
+
+    fn reset(&mut self) {
+        self.value = None;
+        self.velocity = 0.0;
+    }
+}
+
+/// Filters for the six gaze values and two eyelids, clocked by the eye server's sample time.
+struct Smoother {
+    gaze: [OneEuro; 6],
+    lids: [OneEuro; 2],
+    last_time: Option<f64>,
+}
+
+impl Smoother {
+    fn new(args: &Args) -> Self {
+        Self {
+            gaze: [OneEuro::new(args.gaze_min_cutoff, args.gaze_beta); 6],
+            lids: [OneEuro::new(args.lid_min_cutoff, args.lid_beta); 2],
+            last_time: None,
+        }
+    }
+
+    fn apply(&mut self, time: f64, gaze: &mut [f32; 6], lids: &mut [f32; 2]) {
+        let dt = match self.last_time.replace(time) {
+            Some(last) if time > last && time - last < MAX_GAP => (time - last) as f32,
+            Some(last) if time <= last => NOMINAL_DT,
+            _ => {
+                self.reset();
+                NOMINAL_DT
+            }
+        };
+        for (value, filter) in gaze.iter_mut().zip(&mut self.gaze) {
+            *value = filter.filter(*value, dt);
+        }
+        for (value, filter) in lids.iter_mut().zip(&mut self.lids) {
+            *value = filter.filter(*value, dt);
+        }
+    }
+
+    fn reset(&mut self) {
+        self.gaze.iter_mut().chain(&mut self.lids).for_each(OneEuro::reset);
+        self.last_time = None;
+    }
+}
+
+/// Map Frame eye openness onto VRCFT EyeLid, where 0 is closed, 0.75 relaxed open and 1 widened.
+/// A held-closed eye reads ~0.2 on the Frame rather than 0, hence the closed threshold.
+fn lid_to_vrcft(openness: f32, args: &Args) -> f32 {
+    if openness <= args.lid_open {
+        0.75 * ((openness - args.lid_closed) / (args.lid_open - args.lid_closed)).clamp(0.0, 1.0)
+    } else if args.lid_wide > args.lid_open {
+        0.75 + 0.25 * ((openness - args.lid_open) / (args.lid_wide - args.lid_open)).clamp(0.0, 1.0)
+    } else {
+        0.75
+    }
 }
 
 struct EyeSource {
@@ -206,7 +328,12 @@ fn gaze_angles([x, y, z]: [f32; 3]) -> [f32; 2] {
     ]
 }
 
-fn send_eye_data(socket: &UdpSocket, args: &Args, data: EyeData) -> Result<(), Box<dyn Error>> {
+fn send_eye_data(
+    socket: &UdpSocket,
+    args: &Args,
+    smoother: &mut Smoother,
+    data: EyeData,
+) -> Result<(), Box<dyn Error>> {
     let prefix = format!("/avatar/parameters{}", args.prefix.trim_end_matches('/'));
     send(
         socket,
@@ -216,13 +343,19 @@ fn send_eye_data(socket: &UdpSocket, args: &Args, data: EyeData) -> Result<(), B
     let [left_x, left_y] = gaze_angles(data.gaze[0]);
     let [right_x, right_y] = gaze_angles(data.gaze[1]);
     let [x, y] = gaze_angles(data.fixation_point);
+    let mut gaze = [left_x, left_y, right_x, right_y, x, y];
+    let mut lids = data.openness.map(|openness| lid_to_vrcft(openness, args));
+    if !args.raw {
+        smoother.apply(data.sample_time, &mut gaze, &mut lids);
+    }
+    let [left_x, left_y, right_x, right_y, x, y] = gaze;
     for (suffix, value) in [
         ("EyeLeftX", left_x),
         ("EyeLeftY", left_y),
         ("EyeRightX", right_x),
         ("EyeRightY", right_y),
-        ("EyeLidLeft", data.openness[0].clamp(0.0, 1.0)),
-        ("EyeLidRight", data.openness[1].clamp(0.0, 1.0)),
+        ("EyeLidLeft", lids[0]),
+        ("EyeLidRight", lids[1]),
         ("EyeX", x),
         ("EyeY", y),
     ] {
@@ -251,6 +384,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     if !args.prefix.starts_with('/') || args.prefix.trim_matches('/').is_empty() {
         return Err("--prefix must be a nonempty OSC path starting with /".into());
     }
+    if !(args.lid_closed < args.lid_open) {
+        return Err("--lid-closed must be below --lid-open".into());
+    }
+    let cutoffs_ok = [args.gaze_min_cutoff, args.lid_min_cutoff]
+        .iter()
+        .all(|cutoff| cutoff.is_finite() && *cutoff > 0.0);
+    let betas_ok = [args.gaze_beta, args.lid_beta]
+        .iter()
+        .all(|beta| beta.is_finite() && *beta >= 0.0);
+    if !cutoffs_ok || !betas_ok {
+        return Err("filter cutoffs must be positive and betas non-negative".into());
+    }
+    let mut smoother = Smoother::new(&args);
     let target: SocketAddr = args
         .target
         .to_socket_addrs()?
@@ -273,11 +419,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     && data.fixation_point.iter().all(|value| value.is_finite())
                     && data.openness.iter().all(|value| value.is_finite()) =>
             {
-                send_eye_data(&socket, &args, data)?;
+                send_eye_data(&socket, &args, &mut smoother, data)?;
                 active = true;
             }
             _ if active => {
                 send_inactive(&socket, &args.prefix)?;
+                smoother.reset();
                 active = false;
             }
             _ => {}
