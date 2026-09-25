@@ -33,13 +33,15 @@ struct EyeServerMmap {
 #[derive(Clone, Copy)]
 struct EyeDataMmap {
     producer_state: u32,
-    unknown_04: u8,
+    sample_flag: u8,
     sample_time: f64,
-    eye_origins: [[f32; 3]; 2],
-    eye_directions: [[f32; 3]; 2],
-    fused_gaze: [f32; 3],
-    other_eye_origins: [[f32; 3]; 2],
-    other_eye_directions: [[f32; 3]; 2],
+    // Left, right; after stereo fusion.
+    gaze_direction: [[f32; 3]; 2],
+    gaze_covariance_diag: [[f32; 3]; 2],
+    // Head-relative, -Z forward, in metres.
+    fixation_point: [f32; 3],
+    pre_fusion_gaze: [[f32; 3]; 2],
+    pre_fusion_cov_diag: [[f32; 3]; 2],
     openness: [f32; 2],
     estimate_extra: [f32; 8],
     reserved: [u8; 0xe1b],
@@ -51,8 +53,11 @@ const _: () = {
     assert!(offset_of!(EyeServerMmap, metadata_requested) == 0x3c);
     assert!(offset_of!(EyeServerMmap, eye_data) == 0x152);
     assert!(offset_of!(EyeDataMmap, sample_time) == 0x05);
-    assert!(offset_of!(EyeDataMmap, eye_directions) == 0x25);
-    assert!(offset_of!(EyeDataMmap, fused_gaze) == 0x3d);
+    assert!(offset_of!(EyeDataMmap, gaze_direction) == 0x0d);
+    assert!(offset_of!(EyeDataMmap, gaze_covariance_diag) == 0x25);
+    assert!(offset_of!(EyeDataMmap, fixation_point) == 0x3d);
+    assert!(offset_of!(EyeDataMmap, pre_fusion_gaze) == 0x49);
+    assert!(offset_of!(EyeDataMmap, pre_fusion_cov_diag) == 0x61);
     assert!(offset_of!(EyeDataMmap, openness) == 0x79);
     assert!(size_of::<EyeDataMmap>() == 0xebc);
     assert!(size_of::<EyeServerMmap>() <= SHM_SIZE);
@@ -84,7 +89,7 @@ impl Drop for MutexGuard {
 struct EyeData {
     sample_time: f64,
     gaze: [[f32; 3]; 2],
-    fused_gaze: [f32; 3],
+    fixation_point: [f32; 3],
     openness: [f32; 2],
 }
 
@@ -171,8 +176,8 @@ impl EyeSource {
             if record.producer_state == 1 {
                 Some(EyeData {
                     sample_time: record.sample_time,
-                    gaze: record.eye_directions,
-                    fused_gaze: record.fused_gaze,
+                    gaze: record.gaze_direction,
+                    fixation_point: record.fixation_point,
                     openness: record.openness,
                 })
             } else {
@@ -192,6 +197,15 @@ fn send(socket: &UdpSocket, addr: String, args: Vec<OscType>) -> Result<(), Box<
     Ok(())
 }
 
+// Like Steam Link's OSC sender, ±45° maps to ±1; +Y is up (VRCFT convention, unverified on hardware).
+fn gaze_angles([x, y, z]: [f32; 3]) -> [f32; 2] {
+    let scale = 4.0 / std::f32::consts::PI;
+    [
+        (x.atan2(-z) * scale).clamp(-1.0, 1.0),
+        (y.atan2(-z) * scale).clamp(-1.0, 1.0),
+    ]
+}
+
 fn send_eye_data(socket: &UdpSocket, args: &Args, data: EyeData) -> Result<(), Box<dyn Error>> {
     let prefix = format!("/avatar/parameters{}", args.prefix.trim_end_matches('/'));
     send(
@@ -199,13 +213,9 @@ fn send_eye_data(socket: &UdpSocket, args: &Args, data: EyeData) -> Result<(), B
         format!("{prefix}/EyeTrackingActive"),
         vec![OscType::Bool(true)],
     )?;
-    // Eye order and vertical-axis sign remain provisional until checked on hardware.
-    let left_x = data.gaze[0][0].clamp(-1.0, 1.0);
-    let left_y = (-data.gaze[0][1]).clamp(-1.0, 1.0);
-    let right_x = data.gaze[1][0].clamp(-1.0, 1.0);
-    let right_y = (-data.gaze[1][1]).clamp(-1.0, 1.0);
-    let x = data.fused_gaze[0].clamp(-1.0, 1.0);
-    let y = (-data.fused_gaze[1]).clamp(-1.0, 1.0);
+    let [left_x, left_y] = gaze_angles(data.gaze[0]);
+    let [right_x, right_y] = gaze_angles(data.gaze[1]);
+    let [x, y] = gaze_angles(data.fixation_point);
     for (suffix, value) in [
         ("EyeLeftX", left_x),
         ("EyeLeftY", left_y),
@@ -260,7 +270,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             Some(data)
                 if data.sample_time.is_finite()
                     && data.gaze.iter().flatten().all(|value| value.is_finite())
-                    && data.fused_gaze.iter().all(|value| value.is_finite())
+                    && data.fixation_point.iter().all(|value| value.is_finite())
                     && data.openness.iter().all(|value| value.is_finite()) =>
             {
                 send_eye_data(&socket, &args, data)?;
