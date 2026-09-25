@@ -81,10 +81,10 @@ struct Args {
     #[arg(long)]
     raw: bool,
     /// One Euro minimum cutoff in Hz for gaze; lower is steadier at rest
-    #[arg(long, default_value_t = 1.5)]
+    #[arg(long, default_value_t = 0.6)]
     gaze_min_cutoff: f32,
     /// One Euro beta for gaze; higher follows fast eye movements with less lag
-    #[arg(long, default_value_t = 3.0)]
+    #[arg(long, default_value_t = 1.2)]
     gaze_beta: f32,
     /// One Euro minimum cutoff in Hz for eyelids
     #[arg(long, default_value_t = 6.0)]
@@ -98,6 +98,9 @@ struct Args {
     /// Frame openness of a relaxed open eye (VRCFT 0.75)
     #[arg(long, default_value_t = 0.80)]
     lid_open: f32,
+    /// Frame openness where widening begins; between --lid-open and this the eye stays at VRCFT 0.75
+    #[arg(long, default_value_t = 0.92)]
+    lid_widen_start: f32,
     /// Frame openness of a fully widened eye (VRCFT 1.0)
     #[arg(long, default_value_t = 1.00)]
     lid_wide: f32,
@@ -186,11 +189,13 @@ impl Smoother {
 
 /// Map Frame eye openness onto VRCFT EyeLid, where 0 is closed, 0.75 relaxed open and 1 widened.
 /// A held-closed eye reads ~0.2 on the Frame rather than 0, hence the closed threshold.
+/// A relaxed eye wanders between ~0.75 and ~0.9, so widening only starts past a deadzone.
 fn lid_to_vrcft(openness: f32, args: &Args) -> f32 {
     if openness <= args.lid_open {
         0.75 * ((openness - args.lid_closed) / (args.lid_open - args.lid_closed)).clamp(0.0, 1.0)
-    } else if args.lid_wide > args.lid_open {
-        0.75 + 0.25 * ((openness - args.lid_open) / (args.lid_wide - args.lid_open)).clamp(0.0, 1.0)
+    } else if openness > args.lid_widen_start && args.lid_wide > args.lid_widen_start {
+        let widen = (openness - args.lid_widen_start) / (args.lid_wide - args.lid_widen_start);
+        0.75 + 0.25 * widen.clamp(0.0, 1.0)
     } else {
         0.75
     }
@@ -386,6 +391,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if !(args.lid_closed < args.lid_open) {
         return Err("--lid-closed must be below --lid-open".into());
+    }
+    if !(args.lid_open <= args.lid_widen_start) {
+        return Err("--lid-widen-start must not be below --lid-open".into());
     }
     let cutoffs_ok = [args.gaze_min_cutoff, args.lid_min_cutoff]
         .iter()
