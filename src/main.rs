@@ -19,7 +19,8 @@ const TIMEOUT: Duration = Duration::from_secs(1);
 const NOMINAL_DT: f32 = 1.0 / 90.0;
 // Gaps longer than this restart the filters instead of smearing across them.
 const MAX_GAP: f64 = 0.25;
-const D_CUTOFF: f32 = 1.0;
+// Blinks are fast, so eyelids track their speed with a quicker derivative filter than gaze.
+const LID_D_CUTOFF: f32 = 1.0;
 
 #[repr(C)]
 struct EyeServerMmap {
@@ -81,11 +82,14 @@ struct Args {
     #[arg(long)]
     raw: bool,
     /// One Euro minimum cutoff in Hz for gaze; lower is steadier at rest
-    #[arg(long, default_value_t = 0.6)]
+    #[arg(long, default_value_t = 0.4)]
     gaze_min_cutoff: f32,
     /// One Euro beta for gaze; higher follows fast eye movements with less lag
-    #[arg(long, default_value_t = 1.2)]
+    #[arg(long, default_value_t = 0.8)]
     gaze_beta: f32,
+    /// One Euro derivative cutoff in Hz for gaze; lower keeps tracker noise from loosening the filter
+    #[arg(long, default_value_t = 0.5)]
+    gaze_d_cutoff: f32,
     /// One Euro minimum cutoff in Hz for eyelids
     #[arg(long, default_value_t = 6.0)]
     lid_min_cutoff: f32,
@@ -111,15 +115,17 @@ struct Args {
 struct OneEuro {
     min_cutoff: f32,
     beta: f32,
+    d_cutoff: f32,
     value: Option<f32>,
     velocity: f32,
 }
 
 impl OneEuro {
-    fn new(min_cutoff: f32, beta: f32) -> Self {
+    fn new(min_cutoff: f32, beta: f32, d_cutoff: f32) -> Self {
         Self {
             min_cutoff,
             beta,
+            d_cutoff,
             value: None,
             velocity: 0.0,
         }
@@ -135,7 +141,7 @@ impl OneEuro {
             self.value = Some(x);
             return x;
         };
-        self.velocity += Self::alpha(D_CUTOFF, dt) * ((x - prev) / dt - self.velocity);
+        self.velocity += Self::alpha(self.d_cutoff, dt) * ((x - prev) / dt - self.velocity);
         let cutoff = self.min_cutoff + self.beta * self.velocity.abs();
         let y = prev + Self::alpha(cutoff, dt) * (x - prev);
         self.value = Some(y);
@@ -158,8 +164,8 @@ struct Smoother {
 impl Smoother {
     fn new(args: &Args) -> Self {
         Self {
-            gaze: [OneEuro::new(args.gaze_min_cutoff, args.gaze_beta); 6],
-            lids: [OneEuro::new(args.lid_min_cutoff, args.lid_beta); 2],
+            gaze: [OneEuro::new(args.gaze_min_cutoff, args.gaze_beta, args.gaze_d_cutoff); 6],
+            lids: [OneEuro::new(args.lid_min_cutoff, args.lid_beta, LID_D_CUTOFF); 2],
             last_time: None,
         }
     }
@@ -395,7 +401,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if !(args.lid_open <= args.lid_widen_start) {
         return Err("--lid-widen-start must not be below --lid-open".into());
     }
-    let cutoffs_ok = [args.gaze_min_cutoff, args.lid_min_cutoff]
+    let cutoffs_ok = [args.gaze_min_cutoff, args.gaze_d_cutoff, args.lid_min_cutoff]
         .iter()
         .all(|cutoff| cutoff.is_finite() && *cutoff > 0.0);
     let betas_ok = [args.gaze_beta, args.lid_beta]
