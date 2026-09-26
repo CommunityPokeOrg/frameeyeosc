@@ -1,9 +1,14 @@
 //! Steam Frame 0.5.0 eye bridge using the private version-4 shared-memory ABI.
 
-use clap::Parser;
+mod config;
+mod status;
+
+use clap::{CommandFactory, FromArgMatches, Parser};
+use config::{Config, OutputKind, Reload, Settings};
 use memmap2::{MmapMut, MmapOptions};
 use rosc::{OscMessage, OscPacket, OscType, encoder};
-use std::collections::HashSet;
+use status::{CalibrationStatus, RawValues, SentValues, Status, StatusFile};
+use std::collections::{HashSet, VecDeque};
 use std::error::Error;
 use std::fs::{self, OpenOptions};
 use std::os::unix::fs::MetadataExt;
@@ -12,12 +17,18 @@ use std::mem::{align_of, offset_of, size_of};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::ptr;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 const SHM_VERSION: u32 = 4;
 const SHM_SIZE: usize = 0x4f21a;
 const SOURCE: &str = "/dev/shm/eye-server.mmap";
 const TIMEOUT: Duration = Duration::from_secs(1);
+// The eye server is waited on in slices this long, so the status file keeps updating while it is idle.
+const POLL: Duration = Duration::from_millis(100);
+// The status file's send rate counts the samples sent within this window.
+const RATE_WINDOW: Duration = Duration::from_secs(1);
+// Relaxed open is 0.75 in VRCFT units but 1.0 for the ETVR Tracking Module, which does not widen by default.
+const ETVR_LID_SCALE: f32 = 1.0 / 0.75;
 // The eye server produces samples at ~90 Hz.
 const NOMINAL_DT: f32 = 1.0 / 90.0;
 // Gaps longer than this restart the filters instead of smearing across them.
@@ -93,12 +104,16 @@ const _: () = {
 #[derive(Parser)]
 #[command(about = "Send Steam Frame eye tracking from shared memory over OSC")]
 struct Args {
+    /// What to send: VRChat avatar parameters, or VRCFaceTracking's ETVR Tracking Module format
+    #[arg(long, value_enum, default_value_t = OutputKind::Vrchat)]
+    output: OutputKind,
     /// OSC destination as HOST:PORT, or "auto" for the PC that Steam Link is streaming from
     #[arg(long, default_value = "auto")]
     target: String,
-    /// OSC port used with --target auto (VRChat listens on 9000)
-    #[arg(long, default_value_t = 9000)]
-    port: u16,
+    /// OSC port used with --target auto [default: 9000 for vrchat, 8889 for etvr]
+    #[arg(long)]
+    port: Option<u16>,
+    /// Parameter name prefix; "" or "/" for none
     #[arg(long, default_value = "/FT")]
     prefix: String,
     /// Send unsmoothed values (eyelid remapping still applies)
@@ -156,6 +171,10 @@ struct Args {
     /// larger differences such as winks pass through untouched. 0 disables
     #[arg(long, default_value_t = 0.4)]
     lid_sync: f32,
+    /// Settings file, re-read while running; options given here win over it
+    /// [default: ~/.config/frameeyeosc/config.json]
+    #[arg(long)]
+    config: Option<PathBuf>,
 }
 
 /// One Euro filter: smooths hard while the signal is still and loosens up as it moves fast.
@@ -238,13 +257,29 @@ struct Smoother {
 }
 
 impl Smoother {
-    fn new(args: &Args) -> Self {
+    fn new(settings: &Settings) -> Self {
         Self {
-            gaze: [OneEuro::new(args.gaze_min_cutoff, args.gaze_beta, args.gaze_d_cutoff); 6],
-            deadzones: [Deadzone::new(args.gaze_deadzone); 6],
-            lids: [OneEuro::new(args.lid_min_cutoff, args.lid_beta, LID_D_CUTOFF); 2],
+            gaze: [OneEuro::new(settings.gaze_min_cutoff, settings.gaze_beta, settings.gaze_d_cutoff); 6],
+            deadzones: [Deadzone::new(settings.gaze_deadzone); 6],
+            lids: [OneEuro::new(settings.lid_min_cutoff, settings.lid_beta, LID_D_CUTOFF); 2],
             last_time: None,
             last_gaze: None,
+        }
+    }
+
+    /// Take new filter parameters without dropping the filters' state, so the output does not jump.
+    fn configure(&mut self, settings: &Settings) {
+        for filter in &mut self.gaze {
+            filter.min_cutoff = settings.gaze_min_cutoff;
+            filter.beta = settings.gaze_beta;
+            filter.d_cutoff = settings.gaze_d_cutoff;
+        }
+        for filter in &mut self.lids {
+            filter.min_cutoff = settings.lid_min_cutoff;
+            filter.beta = settings.lid_beta;
+        }
+        for deadzone in &mut self.deadzones {
+            deadzone.width = settings.gaze_deadzone;
         }
     }
 
@@ -345,10 +380,7 @@ impl LidCalibration {
     }
 
     fn save_if_due(&mut self) {
-        let Some(path) = &self.path else {
-            return;
-        };
-        if self.last_save.elapsed() < CAL_SAVE_INTERVAL {
+        if self.path.is_none() || self.last_save.elapsed() < CAL_SAVE_INTERVAL {
             return;
         }
         self.last_save = Instant::now();
@@ -360,6 +392,13 @@ impl LidCalibration {
         {
             return;
         }
+        self.save();
+    }
+
+    fn save(&mut self) {
+        let Some(path) = &self.path else {
+            return;
+        };
         match write_calibration(path, self.relaxed) {
             Ok(()) => {
                 let [left, right] = self.relaxed;
@@ -369,13 +408,13 @@ impl LidCalibration {
             Err(error) => eprintln!("Could not save {}: {error}", path.display()),
         }
     }
-}
 
-fn default_calibration_file() -> Option<PathBuf> {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(config.join("frameeyeosc").join("calibration"))
+    /// Forget what was learned and start over from `default`, saving that right away.
+    fn reset(&mut self, default: f32) {
+        self.histograms.iter_mut().for_each(|histogram| histogram.fill(0.0));
+        self.relaxed = [default; 2];
+        self.save();
+    }
 }
 
 /// Saved as `left_relaxed=0.818` / `right_relaxed=0.777` lines; anything unreadable falls back to `default`.
@@ -415,15 +454,27 @@ fn sync_lids([left, right]: [f32; 2], threshold: f32) -> [f32; 2] {
 /// Map Frame eye openness onto VRCFT EyeLid, where 0 is closed, 0.75 relaxed open and 1 widened.
 /// A held-closed eye reads ~0.2 on the Frame rather than 0, hence the closed threshold.
 /// A relaxed eye wanders between ~0.75 and ~0.9, so widening only starts past a deadzone.
-fn lid_to_vrcft(openness: f32, args: &Args) -> f32 {
-    if openness <= args.lid_open {
-        0.75 * ((openness - args.lid_closed) / (args.lid_open - args.lid_closed)).clamp(0.0, 1.0)
-    } else if openness > args.lid_widen_start && args.lid_wide > args.lid_widen_start {
-        let widen = (openness - args.lid_widen_start) / (args.lid_wide - args.lid_widen_start);
+fn lid_to_vrcft(openness: f32, settings: &Settings) -> f32 {
+    let Settings {
+        lid_closed,
+        lid_open,
+        lid_widen_start,
+        lid_wide,
+        ..
+    } = *settings;
+    if openness <= lid_open {
+        0.75 * ((openness - lid_closed) / (lid_open - lid_closed)).clamp(0.0, 1.0)
+    } else if openness > lid_widen_start && lid_wide > lid_widen_start {
+        let widen = (openness - lid_widen_start) / (lid_wide - lid_widen_start);
         0.75 + 0.25 * widen.clamp(0.0, 1.0)
     } else {
         0.75
     }
+}
+
+/// The ETVR Tracking Module treats 1.0 as a relaxed open eye, so widening is cut off there.
+fn lid_to_etvr(vrcft: f32) -> f32 {
+    (vrcft * ETVR_LID_SCALE).clamp(0.0, 1.0)
 }
 
 struct EyeSource {
@@ -444,6 +495,23 @@ struct EyeData {
     gaze: [[f32; 3]; 2],
     fixation_point: [f32; 3],
     openness: [f32; 2],
+}
+
+impl EyeData {
+    fn is_finite(&self) -> bool {
+        self.sample_time.is_finite()
+            && self.gaze.iter().flatten().all(|value| value.is_finite())
+            && self.fixation_point.iter().all(|value| value.is_finite())
+            && self.openness.iter().all(|value| value.is_finite())
+    }
+}
+
+enum Next {
+    /// Nothing new within the timeout.
+    Waiting,
+    /// A new record, but the eye tracker is not producing.
+    Stopped,
+    Sample(EyeData),
 }
 
 impl EyeSource {
@@ -500,7 +568,7 @@ impl EyeSource {
         Ok(MutexGuard(mutex))
     }
 
-    fn next(&mut self, timeout: Duration) -> io::Result<Option<EyeData>> {
+    fn next(&mut self, timeout: Duration) -> io::Result<Next> {
         let guard = self.lock()?;
         let sequence_ptr = unsafe { &raw const (*self.layout()).sequence };
         let sequence = unsafe { ptr::read_volatile(sequence_ptr) };
@@ -536,27 +604,42 @@ impl EyeSource {
             let record_ptr = unsafe { &raw const (*self.layout()).eye_data };
             let record = unsafe { ptr::read_unaligned(record_ptr) };
             if record.producer_state == 1 {
-                Some(EyeData {
+                Next::Sample(EyeData {
                     sample_time: record.sample_time,
                     gaze: record.gaze_direction,
                     fixation_point: record.fixation_point,
                     openness: record.openness,
                 })
             } else {
-                None
+                Next::Stopped
             }
         } else {
-            None
+            Next::Waiting
         };
         drop(guard);
         Ok(data)
     }
 }
 
-/// Where OSC goes: a fixed address, or the PC that Steam Link is currently streaming from.
+/// Where OSC goes: a fixed host, or the PC that Steam Link is currently streaming from.
+#[derive(Clone, PartialEq)]
 enum Target {
-    Fixed(SocketAddr),
+    Fixed { host: String, port: u16 },
     SteamLink { port: u16 },
+}
+
+impl Target {
+    fn of(settings: &Settings) -> Self {
+        let port = settings.port();
+        if settings.host == "auto" {
+            Self::SteamLink { port }
+        } else {
+            Self::Fixed {
+                host: settings.host.clone(),
+                port,
+            }
+        }
+    }
 }
 
 /// UDP sender that re-resolves its target periodically and reconnects when it changes.
@@ -575,17 +658,32 @@ impl Output {
         }
     }
 
+    /// Switch to another target, looking it up on the next refresh instead of up to 5 s later.
+    fn set_target(&mut self, target: Target) {
+        if target != self.target {
+            self.target = target;
+            self.last_resolve = None;
+        }
+    }
+
     fn refresh(&mut self) -> io::Result<()> {
-        if self
-            .last_resolve
-            .is_some_and(|resolved| resolved.elapsed() < RESOLVE_INTERVAL)
-        {
-            return Ok(());
+        if let Some(resolved) = self.last_resolve {
+            // A fixed host is looked up once (like before the config file existed) unless that failed.
+            let settled = matches!(self.target, Target::Fixed { .. }) && self.socket.is_some();
+            if settled || resolved.elapsed() < RESOLVE_INTERVAL {
+                return Ok(());
+            }
         }
         self.last_resolve = Some(Instant::now());
-        let wanted = match self.target {
-            Target::Fixed(addr) => Some(addr),
-            Target::SteamLink { port } => steam_link_peer().map(|ip| SocketAddr::new(ip, port)),
+        let wanted = match &self.target {
+            Target::Fixed { host, port } => match (host.as_str(), *port).to_socket_addrs() {
+                Ok(mut addrs) => addrs.next(),
+                Err(error) => {
+                    eprintln!("Could not resolve {host}: {error}; retrying");
+                    None
+                }
+            },
+            Target::SteamLink { port } => steam_link_peer().map(|ip| SocketAddr::new(ip, *port)),
         };
         if wanted == self.socket.as_ref().map(|(_, addr)| *addr) {
             return Ok(());
@@ -597,12 +695,17 @@ impl Output {
                 eprintln!("Sending OSC to {addr}");
                 Some((socket, addr))
             }
-            None => {
+            None if matches!(self.target, Target::SteamLink { .. }) => {
                 eprintln!("No Steam Link connection found; waiting for one");
                 None
             }
+            None => None,
         };
         Ok(())
+    }
+
+    fn addr(&self) -> Option<SocketAddr> {
+        self.socket.as_ref().map(|(_, addr)| *addr)
     }
 
     fn send(&self, addr: String, args: Vec<OscType>) -> Result<(), Box<dyn Error>> {
@@ -702,154 +805,279 @@ fn gaze_angles([x, y, z]: [f32; 3]) -> [f32; 2] {
     ]
 }
 
-fn send_eye_data(
-    output: &Output,
-    args: &Args,
-    smoother: &mut Smoother,
-    calibration: &LidCalibration,
-    data: EyeData,
-) -> Result<(), Box<dyn Error>> {
-    let prefix = format!("/avatar/parameters{}", args.prefix.trim_end_matches('/'));
-    output.send(
-        format!("{prefix}/EyeTrackingActive"),
-        vec![OscType::Bool(true)],
-    )?;
-    let [x, y] = gaze_angles(data.fixation_point);
-    // Each eye wobbles on its own (L/R changes correlate only ~0.35), so share the combined gaze by default.
-    let (left, right) = if args.independent_eyes {
-        (gaze_angles(data.gaze[0]), gaze_angles(data.gaze[1]))
+/// One eye-server sample worked through the eyelid mapping and the filters.
+struct Sample {
+    openness: [f32; 2],
+    // After each eye's scale: what the --lid-* thresholds are compared against.
+    openness_scaled: [f32; 2],
+    // Left x/y, right x/y and combined x/y in -1..1, before smoothing.
+    raw_gaze: [f32; 6],
+    // The same layout, as sent.
+    gaze: [f32; 6],
+    // VRCFT eyelids, as sent to VRChat.
+    lids: [f32; 2],
+}
+
+/// Per-eye multipliers on Frame openness: the fixed ones, else the learned ones, else 1.
+fn lid_scales(settings: &Settings, calibration: &LidCalibration) -> [f32; 2] {
+    let learned = if settings.lid_calibration {
+        calibration.scales(settings.lid_open)
     } else {
-        ([x, y], [x, y])
-    };
-    let mut gaze = [left[0], left[1], right[0], right[1], x, y];
-    let learned = if args.no_lid_calibration {
         [1.0; 2]
-    } else {
-        calibration.scales(args.lid_open)
     };
-    let scales = [
-        args.lid_scale_left.unwrap_or(learned[0]),
-        args.lid_scale_right.unwrap_or(learned[1]),
-    ];
-    let mut lids = [0, 1].map(|eye| lid_to_vrcft(data.openness[eye] * scales[eye], args));
-    if !args.raw {
+    [
+        settings.lid_scale_left.unwrap_or(learned[0]),
+        settings.lid_scale_right.unwrap_or(learned[1]),
+    ]
+}
+
+fn process(settings: &Settings, smoother: &mut Smoother, scales: [f32; 2], data: &EyeData) -> Sample {
+    let [x, y] = gaze_angles(data.fixation_point);
+    let [left, right] = data.gaze.map(gaze_angles);
+    let raw_gaze = [left[0], left[1], right[0], right[1], x, y];
+    // Each eye wobbles on its own (L/R changes correlate only ~0.35), so share the combined gaze by default.
+    let mut gaze = if settings.independent_eyes {
+        raw_gaze
+    } else {
+        [x, y, x, y, x, y]
+    };
+    let openness_scaled = [0, 1].map(|eye| data.openness[eye] * scales[eye]);
+    let mut lids = openness_scaled.map(|openness| lid_to_vrcft(openness, settings));
+    if !settings.raw {
         let hold_gaze = data
             .openness
             .iter()
-            .any(|openness| *openness < args.gaze_hold_below);
+            .any(|openness| *openness < settings.gaze_hold_below);
         smoother.apply(data.sample_time, &mut gaze, &mut lids, hold_gaze);
     }
-    let lids = sync_lids(lids, args.lid_sync);
-    let [left_x, left_y, right_x, right_y, x, y] = gaze;
-    for (suffix, value) in [
+    Sample {
+        openness: data.openness,
+        openness_scaled,
+        raw_gaze,
+        gaze,
+        lids: sync_lids(lids, settings.lid_sync),
+    }
+}
+
+/// Eyelids on the scale of the given output.
+fn output_lids(output: OutputKind, lids: [f32; 2]) -> [f32; 2] {
+    match output {
+        OutputKind::Vrchat => lids,
+        OutputKind::Etvr => lids.map(lid_to_etvr),
+    }
+}
+
+/// The OSC messages for one sample. VRChat gets the full VRCFT v2 eye set. The ETVR Tracking Module
+/// gets per-eye values only: EyeX/EyeY switch it to a single-eye mode that reads an eyelid we do not send.
+fn osc_messages(settings: &Settings, sample: &Sample) -> Vec<(String, OscType)> {
+    let prefix = format!("/avatar/parameters{}", settings.prefix);
+    let [left_x, left_y, right_x, right_y, x, y] = sample.gaze;
+    let [lid_left, lid_right] = output_lids(settings.output, sample.lids);
+    let mut values = vec![
         ("EyeLeftX", left_x),
         ("EyeLeftY", left_y),
         ("EyeRightX", right_x),
         ("EyeRightY", right_y),
-        ("EyeLidLeft", lids[0]),
-        ("EyeLidRight", lids[1]),
-        ("EyeX", x),
-        ("EyeY", y),
-    ] {
-        output.send(
-            format!("{prefix}/v2/{suffix}"),
-            vec![OscType::Float(value)],
-        )?;
+        ("EyeLidLeft", lid_left),
+        ("EyeLidRight", lid_right),
+    ];
+    let mut messages = Vec::with_capacity(9);
+    if settings.output == OutputKind::Vrchat {
+        messages.push((format!("{prefix}/EyeTrackingActive"), OscType::Bool(true)));
+        values.extend([("EyeX", x), ("EyeY", y)]);
     }
-    Ok(())
+    messages.extend(
+        values
+            .into_iter()
+            .map(|(suffix, value)| (format!("{prefix}/v2/{suffix}"), OscType::Float(value))),
+    );
+    messages
 }
 
 fn send_inactive(output: &Output, prefix: &str) -> Result<(), Box<dyn Error>> {
     output.send(
-        format!(
-            "/avatar/parameters{}/EyeTrackingActive",
-            prefix.trim_end_matches('/')
-        ),
+        format!("/avatar/parameters{prefix}/EyeTrackingActive"),
         vec![OscType::Bool(false)],
     )
 }
 
+/// Where VRChat is being told that eye tracking is active, if anywhere. When this changes,
+/// the old destination gets a final "inactive" so the avatar's eyes do not freeze.
+fn vrchat_stream(settings: &Settings) -> Option<(&str, u16, &str)> {
+    (settings.sending && settings.output == OutputKind::Vrchat)
+        .then(|| (settings.host.as_str(), settings.port(), settings.prefix.as_str()))
+}
+
+/// Everything the main loop keeps between samples.
+struct Bridge {
+    config: Config,
+    settings: Settings,
+    output: Output,
+    smoother: Smoother,
+    calibration: LidCalibration,
+    started: SystemTime,
+    active_since: Option<Instant>,
+    last_data: Option<Instant>,
+    latest: Option<Sample>,
+    // When the samples of the last RATE_WINDOW went out.
+    sent: VecDeque<Instant>,
+}
+
+impl Bridge {
+    /// Take changed settings without restarting.
+    fn apply(&mut self, reload: Reload) -> Result<(), Box<dyn Error>> {
+        let Reload {
+            settings,
+            reset_calibration,
+        } = reload;
+        let stream = vrchat_stream(&self.settings);
+        if self.active_since.is_some() && stream.is_some() && stream != vrchat_stream(&settings) {
+            send_inactive(&self.output, &self.settings.prefix)?;
+        }
+        self.output.set_target(Target::of(&settings));
+        self.smoother.configure(&settings);
+        if reset_calibration {
+            eprintln!("Starting eyelid calibration over");
+            self.calibration.reset(settings.lid_open);
+        }
+        self.settings = settings;
+        Ok(())
+    }
+
+    fn on_sample(&mut self, data: EyeData) -> Result<(), Box<dyn Error>> {
+        let now = Instant::now();
+        self.last_data = Some(now);
+        let since = *self.active_since.get_or_insert(now);
+        if self.settings.lid_calibration && since.elapsed() >= CAL_SETTLE {
+            self.calibration.observe(data.openness);
+            self.calibration.save_if_due();
+        }
+        let scales = lid_scales(&self.settings, &self.calibration);
+        let sample = process(&self.settings, &mut self.smoother, scales, &data);
+        if self.settings.sending {
+            for (addr, arg) in osc_messages(&self.settings, &sample) {
+                self.output.send(addr, vec![arg])?;
+            }
+            if self.output.addr().is_some() {
+                self.sent.push_back(now);
+            }
+        }
+        while self
+            .sent
+            .front()
+            .is_some_and(|sent| sent.elapsed() >= RATE_WINDOW)
+        {
+            self.sent.pop_front();
+        }
+        self.latest = Some(sample);
+        Ok(())
+    }
+
+    fn on_lost(&mut self) -> Result<(), Box<dyn Error>> {
+        if vrchat_stream(&self.settings).is_some() {
+            send_inactive(&self.output, &self.settings.prefix)?;
+        }
+        self.smoother.reset();
+        self.active_since = None;
+        self.latest = None;
+        Ok(())
+    }
+
+    fn status(&self) -> Status<'_> {
+        let settings = &self.settings;
+        let pair = |values: [f32; 6], first: usize| status::round([values[first], values[first + 1]]);
+        Status {
+            version: 1,
+            pid: std::process::id(),
+            time: status::unix_time(SystemTime::now()),
+            started: status::unix_time(self.started),
+            sending: settings.sending,
+            output: settings.output,
+            target_mode: if settings.host == "auto" { "auto" } else { "fixed" },
+            target: self.output.addr().map(|addr| addr.to_string()),
+            rate: self
+                .sent
+                .iter()
+                .filter(|sent| sent.elapsed() < RATE_WINDOW)
+                .count() as f32,
+            tracking: self.active_since.is_some(),
+            raw: self.latest.as_ref().map(|sample| RawValues {
+                openness: status::round(sample.openness),
+                openness_scaled: status::round(sample.openness_scaled),
+                gaze: pair(sample.raw_gaze, 4),
+                gaze_left: pair(sample.raw_gaze, 0),
+                gaze_right: pair(sample.raw_gaze, 2),
+            }),
+            sent: self.latest.as_ref().map(|sample| SentValues {
+                lids: status::round(output_lids(settings.output, sample.lids)),
+                lids_vrcft: status::round(sample.lids),
+                gaze: pair(sample.gaze, 4),
+                gaze_left: pair(sample.gaze, 0),
+                gaze_right: pair(sample.gaze, 2),
+            }),
+            calibration: CalibrationStatus {
+                enabled: settings.lid_calibration,
+                relaxed: status::round(self.calibration.relaxed),
+                scales: status::round(lid_scales(settings, &self.calibration)),
+                learning: settings.lid_calibration
+                    && self
+                        .active_since
+                        .is_some_and(|since| since.elapsed() >= CAL_SETTLE),
+            },
+            config_path: self.config.path.as_deref(),
+            calibration_path: self.calibration.path.as_deref(),
+            config_error: self.config.error.as_deref(),
+            locked: &self.config.locked,
+            effective: settings,
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
-    let args = Args::parse();
-    if !args.prefix.starts_with('/') || args.prefix.trim_matches('/').is_empty() {
-        return Err("--prefix must be a nonempty OSC path starting with /".into());
+    let matches = Args::command().get_matches();
+    let args = Args::from_arg_matches(&matches)?;
+    if args.target != "auto" && config::split_target(&args.target).is_none() {
+        return Err("--target must be HOST:PORT or auto".into());
     }
-    if !(args.lid_closed < args.lid_open) {
-        return Err("--lid-closed must be below --lid-open".into());
-    }
-    if !(args.lid_open <= args.lid_widen_start) {
-        return Err("--lid-widen-start must not be below --lid-open".into());
-    }
-    let cutoffs_ok = [args.gaze_min_cutoff, args.gaze_d_cutoff, args.lid_min_cutoff]
-        .iter()
-        .all(|cutoff| cutoff.is_finite() && *cutoff > 0.0);
-    let non_negative_ok = [args.gaze_beta, args.lid_beta, args.gaze_deadzone]
-        .iter()
-        .all(|value| value.is_finite() && *value >= 0.0);
-    if !cutoffs_ok || !non_negative_ok {
-        return Err("filter cutoffs must be positive; betas and the deadzone non-negative".into());
-    }
-    if !args.gaze_hold_below.is_finite() {
-        return Err("--gaze-hold-below must be a number".into());
-    }
-    if ![args.lid_scale_left, args.lid_scale_right]
-        .iter()
-        .flatten()
-        .all(|scale| scale.is_finite() && *scale > 0.0)
-    {
-        return Err("--lid-scale-left/right must be positive".into());
-    }
-    if !(args.lid_sync.is_finite() && args.lid_sync >= 0.0) {
-        return Err("--lid-sync must be non-negative".into());
-    }
-    let mut smoother = Smoother::new(&args);
-    let mut calibration = LidCalibration::load(
-        (!args.no_lid_calibration)
-            .then(|| args.calibration_file.clone().or_else(default_calibration_file))
-            .flatten(),
-        args.lid_open,
-    );
-    let target = if args.target == "auto" {
-        Target::SteamLink { port: args.port }
-    } else {
-        Target::Fixed(
-            args.target
-                .to_socket_addrs()?
-                .next()
-                .ok_or("--target did not resolve to an address")?,
-        )
+    let in_config_dir = |name: &str| Some(config::config_dir()?.join(name));
+    let calibration_path = args.calibration_file.clone().or_else(|| in_config_dir("calibration"));
+    let config_path = args.config.clone().or_else(|| in_config_dir("config.json"));
+    let mut config = Config::new(config_path, args, config::given_options(&matches));
+    let settings = config.load()?;
+    let mut bridge = Bridge {
+        output: Output::new(Target::of(&settings)),
+        smoother: Smoother::new(&settings),
+        calibration: LidCalibration::load(calibration_path, settings.lid_open),
+        config,
+        settings,
+        started: SystemTime::now(),
+        active_since: None,
+        last_data: None,
+        latest: None,
+        sent: VecDeque::new(),
     };
-    let mut output = Output::new(target);
+    let mut status_file = StatusFile::new(status::status_path());
     let mut source = EyeSource::open()?;
     eprintln!("Reading {SOURCE}");
-    let mut active_since: Option<Instant> = None;
     loop {
-        output.refresh()?;
-        match source.next(TIMEOUT)? {
-            Some(data)
-                if data.sample_time.is_finite()
-                    && data.gaze.iter().flatten().all(|value| value.is_finite())
-                    && data.fixation_point.iter().all(|value| value.is_finite())
-                    && data.openness.iter().all(|value| value.is_finite()) =>
-            {
-                let since = *active_since.get_or_insert_with(Instant::now);
-                if !args.no_lid_calibration && since.elapsed() >= CAL_SETTLE {
-                    calibration.observe(data.openness);
-                    calibration.save_if_due();
-                }
-                send_eye_data(&output, &args, &mut smoother, &calibration, data)?;
-            }
-            _ if active_since.is_some() => {
-                send_inactive(&output, &args.prefix)?;
-                smoother.reset();
-                active_since = None;
-            }
+        if let Some(reload) = bridge.config.poll() {
+            bridge.apply(reload)?;
+        }
+        bridge.output.refresh()?;
+        match source.next(POLL)? {
+            Next::Sample(data) if data.is_finite() => bridge.on_sample(data)?,
+            // Short waits are normal; only a whole second without data means tracking stopped.
+            Next::Waiting if bridge.last_data.is_some_and(|last| last.elapsed() < TIMEOUT) => {}
+            _ if bridge.active_since.is_some() => bridge.on_lost()?,
             // Idle: if the eye server recreated its shared memory, our mapping would go silent forever.
             _ if source.is_stale() => {
                 eprintln!("{SOURCE} was replaced; reopening");
                 source = EyeSource::open()?;
             }
             _ => {}
+        }
+        if status_file.due() {
+            status_file.write(&bridge.status());
         }
     }
 }
@@ -858,8 +1086,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
 
-    fn args() -> Args {
-        Args::parse_from(["frameeyeosc"])
+    fn settings() -> Settings {
+        Settings::default()
     }
 
     #[test]
@@ -885,7 +1113,10 @@ mod tests {
 
     #[test]
     fn smoother_keeps_filter_state_between_samples() {
-        let mut smoother = Smoother::new(&Args::parse_from(["frameeyeosc", "--gaze-deadzone", "0"]));
+        let mut smoother = Smoother::new(&Settings {
+            gaze_deadzone: 0.0,
+            ..settings()
+        });
         let mut lids = [0.75; 2];
         let mut gaze = [0.0; 6];
         smoother.apply(0.0, &mut gaze, &mut lids, false);
@@ -896,7 +1127,7 @@ mod tests {
 
     #[test]
     fn gaze_is_held_while_eyes_are_shut() {
-        let mut smoother = Smoother::new(&args());
+        let mut smoother = Smoother::new(&settings());
         let mut lids = [0.75; 2];
         let mut gaze = [0.2; 6];
         smoother.apply(0.0, &mut gaze, &mut lids, false);
@@ -991,11 +1222,154 @@ mod tests {
 
     #[test]
     fn eyelids_map_onto_vrcft_scale() {
-        let args = args();
+        let args = settings();
         assert_eq!(lid_to_vrcft(0.22, &args), 0.0);
         assert_eq!(lid_to_vrcft(0.80, &args), 0.75);
         assert_eq!(lid_to_vrcft(0.88, &args), 0.75);
         assert_eq!(lid_to_vrcft(1.00, &args), 1.0);
         assert!(lid_to_vrcft(0.55, &args) > 0.0 && lid_to_vrcft(0.55, &args) < 0.75);
+    }
+
+    #[test]
+    fn etvr_eyelids_treat_relaxed_as_fully_open() {
+        assert_eq!(lid_to_etvr(0.0), 0.0);
+        assert_eq!(lid_to_etvr(0.375), 0.5);
+        assert_eq!(lid_to_etvr(0.75), 1.0);
+        // Widening does not reach the ETVR Tracking Module.
+        assert_eq!(lid_to_etvr(1.0), 1.0);
+        assert_eq!(output_lids(OutputKind::Vrchat, [0.375, 1.0]), [0.375, 1.0]);
+        assert_eq!(output_lids(OutputKind::Etvr, [0.375, 1.0]), [0.5, 1.0]);
+    }
+
+    fn sample() -> Sample {
+        Sample {
+            openness: [0.8; 2],
+            openness_scaled: [0.8; 2],
+            raw_gaze: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+            gaze: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+            lids: [0.375, 0.75],
+        }
+    }
+
+    fn sent(settings: &Settings) -> Vec<(String, OscType)> {
+        osc_messages(settings, &sample())
+    }
+
+    #[test]
+    fn vrchat_gets_the_full_eye_set() {
+        let messages = sent(&settings());
+        let addrs: Vec<&str> = messages.iter().map(|(addr, _)| addr.as_str()).collect();
+        assert_eq!(
+            addrs,
+            [
+                "/avatar/parameters/FT/EyeTrackingActive",
+                "/avatar/parameters/FT/v2/EyeLeftX",
+                "/avatar/parameters/FT/v2/EyeLeftY",
+                "/avatar/parameters/FT/v2/EyeRightX",
+                "/avatar/parameters/FT/v2/EyeRightY",
+                "/avatar/parameters/FT/v2/EyeLidLeft",
+                "/avatar/parameters/FT/v2/EyeLidRight",
+                "/avatar/parameters/FT/v2/EyeX",
+                "/avatar/parameters/FT/v2/EyeY",
+            ]
+        );
+        assert_eq!(messages[0].1, OscType::Bool(true));
+        assert_eq!(messages[6].1, OscType::Float(0.75));
+    }
+
+    #[test]
+    fn etvr_gets_only_the_six_per_eye_values() {
+        let messages = sent(&Settings {
+            output: OutputKind::Etvr,
+            ..settings()
+        });
+        let addrs: Vec<&str> = messages.iter().map(|(addr, _)| addr.as_str()).collect();
+        assert_eq!(
+            addrs,
+            [
+                "/avatar/parameters/FT/v2/EyeLeftX",
+                "/avatar/parameters/FT/v2/EyeLeftY",
+                "/avatar/parameters/FT/v2/EyeRightX",
+                "/avatar/parameters/FT/v2/EyeRightY",
+                "/avatar/parameters/FT/v2/EyeLidLeft",
+                "/avatar/parameters/FT/v2/EyeLidRight",
+            ]
+        );
+        assert_eq!(messages[4].1, OscType::Float(0.5));
+        assert_eq!(messages[5].1, OscType::Float(1.0));
+    }
+
+    #[test]
+    fn empty_prefix_sends_bare_names() {
+        let messages = sent(&Settings {
+            prefix: String::new(),
+            ..settings()
+        });
+        assert_eq!(messages[0].0, "/avatar/parameters/EyeTrackingActive");
+        assert_eq!(messages[1].0, "/avatar/parameters/v2/EyeLeftX");
+    }
+
+    #[test]
+    fn each_output_has_its_default_port() {
+        assert_eq!(settings().port(), 9000);
+        let etvr = Settings {
+            output: OutputKind::Etvr,
+            ..settings()
+        };
+        assert_eq!(etvr.port(), 8889);
+        assert_eq!(Settings { port: Some(9100), ..etvr }.port(), 9100);
+        assert!(Target::of(&settings()) == Target::SteamLink { port: 9000 });
+    }
+
+    #[test]
+    fn stopping_or_moving_the_vrchat_stream_is_noticed() {
+        let base = settings();
+        let paused = Settings {
+            sending: false,
+            ..settings()
+        };
+        let etvr = Settings {
+            output: OutputKind::Etvr,
+            ..settings()
+        };
+        let moved = Settings {
+            port: Some(9001),
+            ..settings()
+        };
+        assert!(vrchat_stream(&base).is_some());
+        assert!(vrchat_stream(&paused).is_none() && vrchat_stream(&etvr).is_none());
+        assert_ne!(vrchat_stream(&base), vrchat_stream(&moved));
+        let tweaked = Settings {
+            lid_open: 0.85,
+            ..settings()
+        };
+        assert_eq!(vrchat_stream(&base), vrchat_stream(&tweaked));
+    }
+
+    #[test]
+    fn lid_calibration_reset_starts_over_from_lid_open() {
+        let mut calibration = LidCalibration::load(None, 0.80);
+        for i in 0..90 * 30 {
+            calibration.observe([0.90 + wobble(i); 2]);
+        }
+        calibration.reset(0.80);
+        assert_eq!(calibration.relaxed, [0.80; 2]);
+        assert!(calibration.histograms.iter().flatten().all(|weight| *weight == 0.0));
+    }
+
+    #[test]
+    fn filters_take_new_parameters_without_losing_state() {
+        let mut smoother = Smoother::new(&settings());
+        let mut lids = [0.75; 2];
+        let mut gaze = [0.0; 6];
+        smoother.apply(0.0, &mut gaze, &mut lids, false);
+        smoother.configure(&Settings {
+            lid_min_cutoff: 10.0,
+            gaze_deadzone: 0.0,
+            ..settings()
+        });
+        assert_eq!(smoother.lids[0].min_cutoff, 10.0);
+        assert_eq!(smoother.deadzones[0].width, 0.0);
+        assert_eq!(smoother.lids[0].value, Some(0.75));
     }
 }
