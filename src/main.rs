@@ -3,14 +3,15 @@
 use clap::Parser;
 use memmap2::{MmapMut, MmapOptions};
 use rosc::{OscMessage, OscPacket, OscType, encoder};
+use std::collections::HashSet;
 use std::error::Error;
 use std::fs::{self, OpenOptions};
 use std::os::unix::fs::MetadataExt;
 use std::io;
 use std::mem::{align_of, offset_of, size_of};
-use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
 use std::ptr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const SHM_VERSION: u32 = 4;
 const SHM_SIZE: usize = 0x4f21a;
@@ -22,6 +23,8 @@ const NOMINAL_DT: f32 = 1.0 / 90.0;
 const MAX_GAP: f64 = 0.25;
 // Blinks are fast, so eyelids track their speed with a quicker derivative filter than gaze.
 const LID_D_CUTOFF: f32 = 1.0;
+// How often the Steam Link PC is looked up again, to follow reconnects over another network.
+const RESOLVE_INTERVAL: Duration = Duration::from_secs(5);
 
 #[repr(C)]
 struct EyeServerMmap {
@@ -75,8 +78,12 @@ const _: () = {
 #[derive(Parser)]
 #[command(about = "Send Steam Frame eye tracking from shared memory over OSC")]
 struct Args {
-    #[arg(long, default_value = "127.0.0.1:9000")]
+    /// OSC destination as HOST:PORT, or "auto" for the PC that Steam Link is streaming from
+    #[arg(long, default_value = "auto")]
     target: String,
+    /// OSC port used with --target auto (VRChat listens on 9000)
+    #[arg(long, default_value_t = 9000)]
+    port: u16,
     #[arg(long, default_value = "/FT")]
     prefix: String,
     /// Send unsmoothed values (eyelid remapping still applies)
@@ -408,10 +415,144 @@ impl EyeSource {
     }
 }
 
-fn send(socket: &UdpSocket, addr: String, args: Vec<OscType>) -> Result<(), Box<dyn Error>> {
-    let packet = OscPacket::Message(OscMessage { addr, args });
-    socket.send(&encoder::encode(&packet)?)?;
-    Ok(())
+/// Where OSC goes: a fixed address, or the PC that Steam Link is currently streaming from.
+enum Target {
+    Fixed(SocketAddr),
+    SteamLink { port: u16 },
+}
+
+/// UDP sender that re-resolves its target periodically and reconnects when it changes.
+struct Output {
+    target: Target,
+    socket: Option<(UdpSocket, SocketAddr)>,
+    last_resolve: Option<Instant>,
+}
+
+impl Output {
+    fn new(target: Target) -> Self {
+        Self {
+            target,
+            socket: None,
+            last_resolve: None,
+        }
+    }
+
+    fn refresh(&mut self) -> io::Result<()> {
+        if self
+            .last_resolve
+            .is_some_and(|resolved| resolved.elapsed() < RESOLVE_INTERVAL)
+        {
+            return Ok(());
+        }
+        self.last_resolve = Some(Instant::now());
+        let wanted = match self.target {
+            Target::Fixed(addr) => Some(addr),
+            Target::SteamLink { port } => steam_link_peer().map(|ip| SocketAddr::new(ip, port)),
+        };
+        if wanted == self.socket.as_ref().map(|(_, addr)| *addr) {
+            return Ok(());
+        }
+        self.socket = match wanted {
+            Some(addr) => {
+                let socket = UdpSocket::bind(if addr.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" })?;
+                socket.connect(addr)?;
+                eprintln!("Sending OSC to {addr}");
+                Some((socket, addr))
+            }
+            None => {
+                eprintln!("No Steam Link connection found; waiting for one");
+                None
+            }
+        };
+        Ok(())
+    }
+
+    fn send(&self, addr: String, args: Vec<OscType>) -> Result<(), Box<dyn Error>> {
+        let Some((socket, _)) = &self.socket else {
+            return Ok(());
+        };
+        let packet = OscPacket::Message(OscMessage { addr, args });
+        match socket.send(&encoder::encode(&packet)?) {
+            // Nothing is listening yet (e.g. VRChat is closed); keep running rather than exit.
+            Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => Ok(()),
+            result => result.map(drop).map_err(Into::into),
+        }
+    }
+}
+
+/// The PC Steam Link is streaming from: the remote end of the `vrlink` client's connected UDP socket.
+/// Over the bundled wireless adapter this is the PC's side of the direct link, not its home LAN address.
+fn steam_link_peer() -> Option<IpAddr> {
+    let inodes = vrlink_socket_inodes();
+    if inodes.is_empty() {
+        return None;
+    }
+    ["/proc/net/udp", "/proc/net/udp6"].iter().find_map(|path| {
+        let table = fs::read_to_string(path).ok()?;
+        connected_udp_peer(&table, &inodes)
+    })
+}
+
+/// Socket inodes held by the Steam Link client process. Matched by executable name, because its
+/// main thread renames itself (comm reads "vrlinkrunthread").
+fn vrlink_socket_inodes() -> HashSet<u64> {
+    let Ok(processes) = fs::read_dir("/proc") else {
+        return HashSet::new();
+    };
+    processes
+        .flatten()
+        .filter(|process| {
+            fs::read_link(process.path().join("exe"))
+                .is_ok_and(|exe| exe.file_name().is_some_and(|name| name == "vrlink"))
+        })
+        .filter_map(|process| fs::read_dir(process.path().join("fd")).ok())
+        .flatten()
+        .flatten()
+        .filter_map(|fd| {
+            let link = fs::read_link(fd.path()).ok()?;
+            link.to_str()?
+                .strip_prefix("socket:[")?
+                .strip_suffix(']')?
+                .parse()
+                .ok()
+        })
+        .collect()
+}
+
+/// Remote address of the first connected (state 01), non-loopback socket in a /proc/net/udp{,6}
+/// table whose inode is in `inodes`.
+fn connected_udp_peer(table: &str, inodes: &HashSet<u64>) -> Option<IpAddr> {
+    table.lines().skip(1).find_map(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let (remote, state, inode) = (fields.get(2)?, fields.get(3)?, fields.get(9)?);
+        if *state != "01" || !inodes.contains(&inode.parse().ok()?) {
+            return None;
+        }
+        let ip = parse_proc_ip(remote.split(':').next()?)?;
+        (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
+    })
+}
+
+/// /proc/net writes addresses as 32-bit words in host (little-endian) byte order, in hex.
+fn parse_proc_ip(hex: &str) -> Option<IpAddr> {
+    if hex.len() % 8 != 0 {
+        return None;
+    }
+    let words = (0..hex.len() / 8)
+        .map(|i| u32::from_str_radix(hex.get(i * 8..i * 8 + 8)?, 16).ok())
+        .collect::<Option<Vec<u32>>>()?;
+    match words[..] {
+        [word] => Some(IpAddr::V4(Ipv4Addr::from(word.to_le_bytes()))),
+        [_, _, _, _] => {
+            let mut bytes = [0u8; 16];
+            for (chunk, word) in bytes.chunks_mut(4).zip(&words) {
+                chunk.copy_from_slice(&word.to_le_bytes());
+            }
+            let ip = Ipv6Addr::from(bytes);
+            Some(ip.to_ipv4_mapped().map_or(IpAddr::V6(ip), IpAddr::V4))
+        }
+        _ => None,
+    }
 }
 
 // Like Steam Link's OSC sender, ±45° maps to ±1; +Y is up (VRCFT convention, unverified on hardware).
@@ -424,14 +565,13 @@ fn gaze_angles([x, y, z]: [f32; 3]) -> [f32; 2] {
 }
 
 fn send_eye_data(
-    socket: &UdpSocket,
+    output: &Output,
     args: &Args,
     smoother: &mut Smoother,
     data: EyeData,
 ) -> Result<(), Box<dyn Error>> {
     let prefix = format!("/avatar/parameters{}", args.prefix.trim_end_matches('/'));
-    send(
-        socket,
+    output.send(
         format!("{prefix}/EyeTrackingActive"),
         vec![OscType::Bool(true)],
     )?;
@@ -467,8 +607,7 @@ fn send_eye_data(
         ("EyeX", x),
         ("EyeY", y),
     ] {
-        send(
-            socket,
+        output.send(
             format!("{prefix}/v2/{suffix}"),
             vec![OscType::Float(value)],
         )?;
@@ -476,9 +615,8 @@ fn send_eye_data(
     Ok(())
 }
 
-fn send_inactive(socket: &UdpSocket, prefix: &str) -> Result<(), Box<dyn Error>> {
-    send(
-        socket,
+fn send_inactive(output: &Output, prefix: &str) -> Result<(), Box<dyn Error>> {
+    output.send(
         format!(
             "/avatar/parameters{}/EyeTrackingActive",
             prefix.trim_end_matches('/')
@@ -520,21 +658,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("--lid-sync must be non-negative".into());
     }
     let mut smoother = Smoother::new(&args);
-    let target: SocketAddr = args
-        .target
-        .to_socket_addrs()?
-        .next()
-        .ok_or("--target did not resolve to an address")?;
-    let socket = UdpSocket::bind(if target.is_ipv4() {
-        "0.0.0.0:0"
+    let target = if args.target == "auto" {
+        Target::SteamLink { port: args.port }
     } else {
-        "[::]:0"
-    })?;
-    socket.connect(target)?;
+        Target::Fixed(
+            args.target
+                .to_socket_addrs()?
+                .next()
+                .ok_or("--target did not resolve to an address")?,
+        )
+    };
+    let mut output = Output::new(target);
     let mut source = EyeSource::open()?;
-    eprintln!("Reading {SOURCE} and sending OSC to {target}");
+    eprintln!("Reading {SOURCE}");
     let mut active = false;
     loop {
+        output.refresh()?;
         match source.next(TIMEOUT)? {
             Some(data)
                 if data.sample_time.is_finite()
@@ -542,11 +681,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                     && data.fixation_point.iter().all(|value| value.is_finite())
                     && data.openness.iter().all(|value| value.is_finite()) =>
             {
-                send_eye_data(&socket, &args, &mut smoother, data)?;
+                send_eye_data(&output, &args, &mut smoother, data)?;
                 active = true;
             }
             _ if active => {
-                send_inactive(&socket, &args.prefix)?;
+                send_inactive(&output, &args.prefix)?;
                 smoother.reset();
                 active = false;
             }
@@ -610,6 +749,30 @@ mod tests {
         let mut jumped = [-0.4; 6];
         smoother.apply(NOMINAL_DT as f64, &mut jumped, &mut lids, true);
         assert_eq!(jumped, before);
+    }
+
+    #[test]
+    fn proc_net_addresses_decode_in_host_byte_order() {
+        assert_eq!(parse_proc_ip("1A4E230A"), Some(IpAddr::V4(Ipv4Addr::new(10, 35, 78, 26))));
+        assert_eq!(
+            parse_proc_ip("0000000000000000FFFF00001A4E230A"),
+            Some(IpAddr::V4(Ipv4Addr::new(10, 35, 78, 26)))
+        );
+        assert_eq!(parse_proc_ip("xyz"), None);
+    }
+
+    #[test]
+    fn steam_link_peer_is_the_connected_socket_of_vrlink() {
+        let table = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n\
+            \x20 10: 014E230A:28A0 00000000:0000 07 00000000:00000000 00:00000000 00000000  1000        0 111 2 0 0\n\
+            \x20 11: 0100007F:28A0 0100007F:1F90 01 00000000:00000000 00:00000000 00000000  1000        0 222 2 0 0\n\
+            \x20 12: 014E230A:28A0 1A4E230A:28A0 01 00000000:00000000 00:00000000 00000000  1000        0 333 2 0 0\n";
+        let inodes: HashSet<u64> = [111, 222, 333].into();
+        assert_eq!(
+            connected_udp_peer(table, &inodes),
+            Some(IpAddr::V4(Ipv4Addr::new(10, 35, 78, 26)))
+        );
+        assert_eq!(connected_udp_peer(table, &[111, 222].into()), None);
     }
 
     #[test]
