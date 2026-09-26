@@ -31,8 +31,11 @@ const CAL_BINS: usize = 300;
 const CAL_BIN_WIDTH: f32 = 0.005;
 // Readings fade with a 10 minute half-life at ~90 Hz, so a short squint barely moves the estimate.
 const CAL_HALF_LIFE_SAMPLES: f32 = 90.0 * 600.0;
-// Only readings above this fraction of the current estimate count as "open".
-const CAL_GATE: f32 = 0.85;
+// Only readings above this fraction of the current estimate count as "open". Higher gates resist
+// squints better but ratchet the estimate upward on eyes whose readings spread widely.
+const CAL_GATE: f32 = 0.75;
+// Skip this long after tracking starts, while the headset is still being put on and adjusted.
+const CAL_SETTLE: Duration = Duration::from_secs(20);
 // Weight (~10 s of open eyes) before the histogram overrides the saved or default estimate.
 const CAL_WARMUP_WEIGHT: f32 = 900.0;
 const CAL_SCALE_RANGE: (f32, f32) = (0.75, 1.33);
@@ -819,7 +822,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut output = Output::new(target);
     let mut source = EyeSource::open()?;
     eprintln!("Reading {SOURCE}");
-    let mut active = false;
+    let mut active_since: Option<Instant> = None;
     loop {
         output.refresh()?;
         match source.next(TIMEOUT)? {
@@ -829,17 +832,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                     && data.fixation_point.iter().all(|value| value.is_finite())
                     && data.openness.iter().all(|value| value.is_finite()) =>
             {
-                if !args.no_lid_calibration {
+                let since = *active_since.get_or_insert_with(Instant::now);
+                if !args.no_lid_calibration && since.elapsed() >= CAL_SETTLE {
                     calibration.observe(data.openness);
                     calibration.save_if_due();
                 }
                 send_eye_data(&output, &args, &mut smoother, &calibration, data)?;
-                active = true;
             }
-            _ if active => {
+            _ if active_since.is_some() => {
                 send_inactive(&output, &args.prefix)?;
                 smoother.reset();
-                active = false;
+                active_since = None;
             }
             // Idle: if the eye server recreated its shared memory, our mapping would go silent forever.
             _ if source.is_stale() => {
@@ -946,11 +949,24 @@ mod tests {
     #[test]
     fn lid_calibration_shrugs_off_a_minute_of_squinting() {
         let mut calibration = LidCalibration::load(None, 0.80);
-        for i in 0..90 * 120 {
+        for i in 0..90 * 600 {
             calibration.observe([0.82 + wobble(i); 2]);
         }
         for _ in 0..90 * 60 {
-            calibration.observe([0.66; 2]);
+            calibration.observe([0.70, 0.55]);
+        }
+        let [left, right] = calibration.relaxed;
+        // A light squint counts toward the estimate but barely moves it; a deep one is ignored.
+        assert!((left - 0.82).abs() < 0.02, "{left}");
+        assert!((right - 0.82).abs() < 0.01, "{right}");
+    }
+
+    #[test]
+    fn lid_calibration_does_not_ratchet_up_on_widely_spread_readings() {
+        let mut calibration = LidCalibration::load(None, 0.80);
+        let spread = [0.63, 0.70, 0.76, 0.82, 0.87, 0.93, 0.97];
+        for i in 0..90 * 120 {
+            calibration.observe([spread[i % spread.len()]; 2]);
         }
         assert!((calibration.relaxed[0] - 0.82).abs() < 0.01, "{}", calibration.relaxed[0]);
     }
