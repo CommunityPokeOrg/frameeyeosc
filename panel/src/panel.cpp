@@ -1,0 +1,1421 @@
+// The panel. Colors only come from theme.h (in step with the --contrast-report pairs).
+#include "panel.h"
+
+#include "draw.h"
+#include "theme.h"
+
+#include <cairo.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+
+namespace {
+
+// Left: the status column (always visible). Right: tabs over a content card.
+constexpr int kWidth = 1200;
+constexpr int kHeight = 700;
+constexpr double kPad = 24;
+constexpr double kStatusX = kPad;
+constexpr double kStatusY = kPad;
+constexpr double kStatusW = 372;
+constexpr double kStatusH = kHeight - kPad * 2;
+constexpr double kRightX = 416;
+constexpr double kRight = kWidth - kPad;
+constexpr double kTabY = kPad;
+constexpr double kTabH = 56;
+constexpr double kContentY = 96;
+constexpr double kContentH = kHeight - kPad - kContentY;
+constexpr double kInnerX = kRightX + 22;
+constexpr double kInnerRight = kRight - 22;
+constexpr double kLabelW = 206;
+constexpr double kControlX = kInnerX + kLabelW + 14;
+constexpr double kControlW = kInnerRight - kControlX;
+constexpr double kRowTop = 116;
+constexpr double kRowH = 64;
+constexpr double kRowGap = 2;
+constexpr double kCaptionRowH = 84;
+constexpr double kControlH = 52;
+/** The raw openness range drawn in the lid mark bars. */
+constexpr double kLidScaleMax = 1.2;
+
+/**
+ * The largest text size (down to a minimum) that fits a width.
+ * @param pen drawing tools
+ * @param text the text
+ * @param size the size to start from
+ * @param minSize never smaller than this
+ * @param maxWidth the width to fit (px)
+ * @param bold whether bold
+ * @return the size
+ */
+double fitSize(const Pen& pen, const std::string& text, double size, double minSize, double maxWidth, bool bold) {
+    while (size > minSize && pen.measure(text, size, bold) > maxWidth) size -= 1;
+    return size;
+}
+
+/**
+ * The baseline that centers text vertically in a band.
+ * @param top band top
+ * @param h band height
+ * @param size text size
+ * @return the baseline y
+ */
+double centerBaseline(double top, double h, double size) {
+    return top + h / 2 + size * 0.36;
+}
+
+/**
+ * Draw text centered horizontally.
+ * @param pen drawing tools
+ * @param cx center x
+ * @param baseline baseline
+ * @param text the text
+ * @param size text size
+ * @param c color
+ * @param bold whether bold
+ */
+void textCentered(const Pen& pen, double cx, double baseline, const std::string& text, double size, Color c,
+                  bool bold) {
+    pen.text(cx - pen.measure(text, size, bold) / 2, baseline, text, size, c, bold);
+}
+
+/**
+ * Length in bytes of the UTF-8 character that starts with this byte.
+ * @param lead the first byte
+ * @return 1..4
+ */
+size_t utf8Length(unsigned char lead) {
+    if (lead < 0x80) return 1;
+    if ((lead >> 5) == 0x6) return 2;
+    if ((lead >> 4) == 0xE) return 3;
+    if ((lead >> 3) == 0x1E) return 4;
+    return 1;
+}
+
+/**
+ * Shorten text with "…" until it fits.
+ * @param pen drawing tools
+ * @param text the text
+ * @param size text size
+ * @param bold whether bold
+ * @param maxWidth the width to fit
+ * @param keepEnd keep the end and cut the start (for file paths)
+ * @return the text that fits
+ */
+std::string ellipsize(const Pen& pen, const std::string& text, double size, bool bold, double maxWidth, bool keepEnd) {
+    if (pen.measure(text, size, bold) <= maxWidth) return text;
+    std::vector<std::string> chars;
+    for (size_t i = 0; i < text.size();) {
+        const size_t n = std::min(utf8Length(static_cast<unsigned char>(text[i])), text.size() - i);
+        chars.push_back(text.substr(i, n));
+        i += n;
+    }
+    while (!chars.empty()) {
+        if (keepEnd) {
+            chars.erase(chars.begin());
+        } else {
+            chars.pop_back();
+        }
+        std::string joined;
+        for (const auto& c : chars) joined += c;
+        const std::string candidate = keepEnd ? "…" + joined : joined + "…";
+        if (pen.measure(candidate, size, bold) <= maxWidth) return candidate;
+    }
+    return "…";
+}
+
+/**
+ * Break text into lines that fit a width. Breaks at spaces, and between any two CJK characters.
+ * The last allowed line is shortened with "…" if the text does not fit.
+ * @param pen drawing tools
+ * @param text the text
+ * @param size text size
+ * @param bold whether bold
+ * @param maxWidth line width
+ * @param maxLines most lines
+ * @return the lines
+ */
+std::vector<std::string> wrapText(const Pen& pen, const std::string& text, double size, bool bold, double maxWidth,
+                                  size_t maxLines) {
+    // Units: a word with its trailing spaces, or one CJK character
+    std::vector<std::string> units;
+    std::string word;
+    for (size_t i = 0; i < text.size();) {
+        const size_t n = std::min(utf8Length(static_cast<unsigned char>(text[i])), text.size() - i);
+        const std::string ch = text.substr(i, n);
+        i += n;
+        if (n >= 3) {
+            if (!word.empty()) units.push_back(word);
+            word.clear();
+            units.push_back(ch);
+        } else if (ch == " ") {
+            word += ch;
+            units.push_back(word);
+            word.clear();
+        } else {
+            word += ch;
+        }
+    }
+    if (!word.empty()) units.push_back(word);
+
+    std::vector<std::string> lines;
+    std::string line;
+    for (size_t u = 0; u < units.size(); ++u) {
+        const std::string candidate = line + units[u];
+        std::string trimmed = candidate;
+        while (!trimmed.empty() && trimmed.back() == ' ') trimmed.pop_back();
+        if (line.empty() || pen.measure(trimmed, size, bold) <= maxWidth) {
+            line = candidate;
+            continue;
+        }
+        while (!line.empty() && line.back() == ' ') line.pop_back();
+        lines.push_back(line);
+        line = units[u];
+        if (lines.size() == maxLines) {
+            // Out of lines: put the rest on the last line and cut it with "…"
+            std::string rest = lines.back();
+            for (size_t r = u; r < units.size(); ++r) rest += units[r];
+            lines.back() = ellipsize(pen, rest, size, bold, maxWidth, false);
+            return lines;
+        }
+    }
+    while (!line.empty() && line.back() == ' ') line.pop_back();
+    if (!line.empty()) lines.push_back(ellipsize(pen, line, size, bold, maxWidth, false));
+    return lines;
+}
+
+/**
+ * Draw a card: stacked shadow, fill, border and a 1 px inner highlight on the top edge.
+ * @param pen drawing tools
+ * @param x left
+ * @param y top
+ * @param w width
+ * @param h height
+ * @param r corner radius
+ * @param fill fill color
+ * @param border border color
+ * @param borderWidth border width (0 = none)
+ */
+void drawCard(const Pen& pen, double x, double y, double w, double h, double r, Color fill, Color border,
+              double borderWidth) {
+    cairo_t* cr = pen.cr;
+    cairo_set_source_rgba(cr, 0, 0, 0, 0.22);
+    pen.roundedRect(x - 2, y + 6, w + 4, h + 6, r + 2);
+    cairo_fill(cr);
+    cairo_set_source_rgba(cr, 0, 0, 0, 0.30);
+    pen.roundedRect(x, y + 2, w, h + 1, r);
+    cairo_fill(cr);
+    pen.color(fill);
+    pen.roundedRect(x, y, w, h, r);
+    cairo_fill(cr);
+    if (borderWidth > 0) {
+        pen.color(border);
+        cairo_set_line_width(cr, borderWidth);
+        pen.roundedRect(x + borderWidth / 2, y + borderWidth / 2, w - borderWidth, h - borderWidth, r - borderWidth / 2);
+        cairo_stroke(cr);
+    }
+    cairo_set_source_rgba(cr, 1, 1, 1, 0.07);
+    cairo_set_line_width(cr, 1);
+    const double inset = borderWidth + 0.5;
+    cairo_move_to(cr, x + r, y + inset);
+    cairo_line_to(cr, x + w - r, y + inset);
+    cairo_stroke(cr);
+}
+
+/**
+ * Stroke a rounded rectangle.
+ * @param pen drawing tools
+ * @param x left
+ * @param y top
+ * @param w width
+ * @param h height
+ * @param r corner radius
+ * @param c color
+ * @param width line width
+ */
+void strokeRounded(const Pen& pen, double x, double y, double w, double h, double r, Color c, double width) {
+    pen.color(c);
+    cairo_set_line_width(pen.cr, width);
+    pen.roundedRect(x + width / 2, y + width / 2, w - width, h - width, std::max(0.0, r - width / 2));
+    cairo_stroke(pen.cr);
+}
+
+/**
+ * Fill a rounded rectangle.
+ * @param pen drawing tools
+ * @param x left
+ * @param y top
+ * @param w width
+ * @param h height
+ * @param r corner radius
+ * @param c color
+ */
+void fillRounded(const Pen& pen, double x, double y, double w, double h, double r, Color c) {
+    pen.color(c);
+    pen.roundedRect(x, y, w, h, std::min(r, std::min(w, h) / 2));
+    cairo_fill(pen.cr);
+}
+
+/**
+ * Draw a check mark with lines (no font needed).
+ * @param cr cairo
+ * @param cx center x
+ * @param cy center y
+ * @param s size (px)
+ * @param c color
+ */
+void drawCheck(cairo_t* cr, double cx, double cy, double s, Color c) {
+    cairo_set_source_rgb(cr, c.r, c.g, c.b);
+    cairo_set_line_width(cr, s * 0.16);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+    cairo_move_to(cr, cx - s * 0.36, cy + s * 0.02);
+    cairo_line_to(cr, cx - s * 0.10, cy + s * 0.28);
+    cairo_line_to(cr, cx + s * 0.38, cy - s * 0.26);
+    cairo_stroke(cr);
+}
+
+/**
+ * Draw a filled circle.
+ * @param cr cairo
+ * @param cx center x
+ * @param cy center y
+ * @param r radius
+ * @param c color
+ */
+void drawDot(cairo_t* cr, double cx, double cy, double r, Color c) {
+    cairo_set_source_rgb(cr, c.r, c.g, c.b);
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, cx, cy, r, 0, 2 * M_PI);
+    cairo_fill(cr);
+}
+
+/**
+ * Draw a circle outline.
+ * @param cr cairo
+ * @param cx center x
+ * @param cy center y
+ * @param r radius
+ * @param width line width
+ * @param c color
+ */
+void drawRing(cairo_t* cr, double cx, double cy, double r, double width, Color c) {
+    cairo_set_source_rgb(cr, c.r, c.g, c.b);
+    cairo_set_line_width(cr, width);
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, cx, cy, r, 0, 2 * M_PI);
+    cairo_stroke(cr);
+}
+
+/**
+ * Draw a small padlock (the "locked by command line" note).
+ * @param pen drawing tools
+ * @param x left
+ * @param baseline the text baseline next to it
+ * @param s height (px)
+ * @param c color
+ */
+void drawLock(const Pen& pen, double x, double baseline, double s, Color c) {
+    const double bodyW = s * 0.78;
+    const double bodyH = s * 0.55;
+    const double top = baseline - bodyH;
+    fillRounded(pen, x, top, bodyW, bodyH, s * 0.12, c);
+    pen.color(c);
+    cairo_set_line_width(pen.cr, s * 0.14);
+    cairo_new_sub_path(pen.cr);
+    cairo_arc(pen.cr, x + bodyW / 2, top, bodyW * 0.30, M_PI, 2 * M_PI);
+    cairo_stroke(pen.cr);
+}
+
+/**
+ * Draw a horizontal line (a minus sign) or a cross (a plus sign).
+ * @param cr cairo
+ * @param cx center x
+ * @param cy center y
+ * @param s length (px)
+ * @param plus draw the vertical stroke too
+ * @param c color
+ */
+void drawPlusMinus(cairo_t* cr, double cx, double cy, double s, bool plus, Color c) {
+    cairo_set_source_rgb(cr, c.r, c.g, c.b);
+    cairo_set_line_width(cr, 3.2);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    cairo_move_to(cr, cx - s / 2, cy);
+    cairo_line_to(cr, cx + s / 2, cy);
+    if (plus) {
+        cairo_move_to(cr, cx, cy - s / 2);
+        cairo_line_to(cr, cx, cy + s / 2);
+    }
+    cairo_stroke(cr);
+}
+
+/**
+ * A numbered circle (the lid marks ① to ④).
+ * @param pen drawing tools
+ * @param cx center x
+ * @param cy center y
+ * @param number 1..4
+ */
+void drawNumberBadge(const Pen& pen, double cx, double cy, int number) {
+    drawDot(pen.cr, cx, cy, 10, kAccent);
+    const std::string text = std::to_string(number);
+    textCentered(pen, cx, cy + 5, text, 14, kOnAccent, true);
+}
+
+/**
+ * Format a pair of numbers as "x 0.02  y -0.10".
+ * @param pair the numbers
+ * @return the text ("—" if missing)
+ */
+std::string xyText(const Pair& pair) {
+    if (!pair.valid()) return "—";
+    char text[64];
+    std::snprintf(text, sizeof(text), "x %+.2f   y %+.2f", pair.v[0], pair.v[1]);
+    return text;
+}
+
+/**
+ * Format a value with 2 decimals.
+ * @param value the value
+ * @return the text ("—" if NaN)
+ */
+std::string twoDecimals(double value) {
+    if (!std::isfinite(value)) return "—";
+    char text[32];
+    std::snprintf(text, sizeof(text), "%.2f", value);
+    return text;
+}
+
+/**
+ * A printf into a std::string.
+ * @param format the format (one string argument)
+ * @param value the argument
+ * @return the text
+ */
+std::string formatText(const char* format, const std::string& value) {
+    char text[256];
+    std::snprintf(text, sizeof(text), format, value.c_str());
+    return text;
+}
+
+}  // namespace
+
+bool PanelHit::operator==(const PanelHit& other) const {
+    const bool sameKey = key == other.key || (key != nullptr && other.key != nullptr && std::strcmp(key, other.key) == 0);
+    return action == other.action && sameKey && arg == other.arg;
+}
+
+EyePanel::EyePanel(const FontSet& fonts) : fonts_(fonts) {
+    surface_ = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, kWidth, kHeight);
+    cr_ = cairo_create(surface_);
+    cairo_font_options_t* options = cairo_font_options_create();
+    cairo_font_options_set_antialias(options, CAIRO_ANTIALIAS_GRAY);
+    cairo_font_options_set_hint_style(options, CAIRO_HINT_STYLE_SLIGHT);
+    cairo_set_font_options(cr_, options);
+    cairo_font_options_destroy(options);
+}
+
+EyePanel::~EyePanel() {
+    cairo_destroy(cr_);
+    cairo_surface_destroy(surface_);
+}
+
+void EyePanel::addButton(PanelHit hit, double x, double y, double w, double h, bool usable) {
+    buttons_.push_back({hit, x, y, w, h, usable});
+}
+
+int EyePanel::pointerState(const PanelHit& hit) const {
+    if (pressed_ == hit) return 2;
+    if (hover_ == hit) return 1;
+    return 0;
+}
+
+PanelHit EyePanel::hitTest(double x, double y) const {
+    for (const auto& b : buttons_) {
+        if (!b.usable) continue;
+        if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return b.hit;
+    }
+    return {};
+}
+
+bool EyePanel::pointerMove(double x, double y) {
+    const PanelHit now = hitTest(x, y);
+    if (now == hover_) return false;
+    hover_ = now;
+    return true;
+}
+
+PanelHit EyePanel::pointerDown(double x, double y, double now) {
+    hover_ = hitTest(x, y);
+    pressed_ = hover_;
+    const PanelHit hit = pressed_;
+    // Pressing anything else cancels a pending confirmation
+    if (hit.action != PanelAction::Quit) quitArmed_ = false;
+    if (hit.action != PanelAction::ResetAll) resetArmed_ = false;
+    switch (hit.action) {
+        case PanelAction::Tab:
+            tab_ = static_cast<PanelTab>(hit.arg);
+            return {};
+        case PanelAction::Quit:
+            // A single accidental press never quits
+            if (quitArmed_ && now <= quitArmedUntil_) return hit;
+            quitArmed_ = true;
+            quitArmedUntil_ = now + kConfirmSec;
+            return {};
+        case PanelAction::ResetAll:
+            if (resetArmed_ && now <= resetArmedUntil_) {
+                resetArmed_ = false;
+                return hit;
+            }
+            resetArmed_ = true;
+            resetArmedUntil_ = now + kConfirmSec;
+            return {};
+        case PanelAction::PromptYes:
+        case PanelAction::PromptNo:
+            promptOutput_.clear();
+            return hit;
+        default: return hit;
+    }
+}
+
+bool EyePanel::pointerUp() {
+    if (pressed_.action == PanelAction::None) return false;
+    pressed_ = {};
+    return true;
+}
+
+bool EyePanel::pointerLeave() {
+    const bool changed = hover_.action != PanelAction::None || pressed_.action != PanelAction::None;
+    hover_ = {};
+    pressed_ = {};
+    return changed;
+}
+
+bool EyePanel::tick(double now) {
+    bool changed = false;
+    if (quitArmed_ && now > quitArmedUntil_) {
+        quitArmed_ = false;
+        changed = true;
+    }
+    if (resetArmed_ && now > resetArmedUntil_) {
+        resetArmed_ = false;
+        changed = true;
+    }
+    return changed;
+}
+
+void EyePanel::showPrompt(const std::string& output) {
+    promptOutput_ = output;
+    hover_ = {};
+    pressed_ = {};
+}
+
+void EyePanel::armQuitForPreview() {
+    quitArmed_ = true;
+    quitArmedUntil_ = 1e300;
+}
+
+void EyePanel::armResetForPreview() {
+    resetArmed_ = true;
+    resetArmedUntil_ = 1e300;
+}
+
+void EyePanel::drawRowLabel(const Pen& pen, const UiText& t, double y, double h, const std::string& title,
+                            const std::string& hint, bool locked) {
+    const double titleSize = fitSize(pen, title, 20, 14, kLabelW, true);
+    if (hint.empty() && !locked) {
+        pen.text(kInnerX, centerBaseline(y, h, titleSize), title, titleSize, kText, true);
+        return;
+    }
+    pen.text(kInnerX, y + h / 2 - 3, title, titleSize, kText, true);
+    const double hintY = y + h / 2 + 19;
+    if (locked) {
+        drawLock(pen, kInnerX, hintY, 16, kTextMuted);
+        const double x = kInnerX + 20;
+        pen.text(x, hintY, t.locked, fitSize(pen, t.locked, 15, 11, kLabelW - 20, false), kTextMuted);
+        return;
+    }
+    pen.text(kInnerX, hintY, hint, fitSize(pen, hint, 15, 11, kLabelW, false), kTextMuted);
+}
+
+void EyePanel::drawSegmented(const Pen& pen, double x, double y, double w, double h,
+                             const std::vector<Option>& options, int selected, double size, bool locked) {
+    cairo_t* cr = pen.cr;
+    const double r = h / 2;
+    fillRounded(pen, x, y, w, h, r, kControl);
+    bool anyUsable = false;
+    for (const Option& option : options) anyUsable |= option.usable;
+    if (anyUsable && !locked) strokeRounded(pen, x, y, w, h, r, kBorder, 2);
+
+    const double inset = 5;
+    const double segW = (w - inset * 2) / options.size();
+    for (size_t i = 0; i < options.size(); ++i) {
+        const Option& option = options[i];
+        const double sx = x + inset + segW * i;
+        const double sy = y + inset;
+        const double sh = h - inset * 2;
+        const bool usable = option.usable && !locked;
+        const int pointer = usable ? pointerState(option.hit) : 0;
+        const bool isSelected = static_cast<int>(i) == selected;
+        Color textColor = usable ? kText : kTextDisabled;
+        Color checkColor = kOnAccent;
+        if (isSelected && locked) {
+            // Locked: an outline instead of the fill, the value is still readable
+            strokeRounded(pen, sx, sy, segW, sh, sh / 2, kBorder, 2);
+            textColor = kTextMuted;
+            checkColor = kTextMuted;
+        } else if (isSelected) {
+            fillRounded(pen, sx, sy, segW, sh, sh / 2, pointer == 2 ? kAccentPressed : kAccent);
+            textColor = kOnAccent;
+        } else if (pointer > 0) {
+            fillRounded(pen, sx, sy, segW, sh, sh / 2, kControlHover);
+        }
+        const double checkW = isSelected ? size * 0.9 : 0;
+        const double labelSize = fitSize(pen, option.label, size, size * 0.65, segW - 20 - checkW, isSelected);
+        const double textW = pen.measure(option.label, labelSize, isSelected) + checkW;
+        const double tx = sx + (segW - textW) / 2;
+        if (isSelected) drawCheck(cr, tx + checkW * 0.4, sy + sh / 2, size * 0.72, checkColor);
+        pen.text(tx + checkW, centerBaseline(sy, sh, labelSize), option.label, labelSize, textColor, isSelected);
+        addButton(option.hit, sx, y, segW, h, usable);
+    }
+}
+
+void EyePanel::drawStepper(const Pen& pen, double x, double y, double w, double h, const char* name, double value,
+                           const std::string& text, bool usable, bool locked, double low, double high) {
+    const SettingSpec* spec = findSetting(name);
+    const bool active = usable && !locked;
+    const double lower = spec != nullptr ? std::max(spec->min, low) : low;
+    const double upper = spec != nullptr ? std::min(spec->max, high) : high;
+    const bool canMinus = active && (!std::isfinite(value) || value > lower + 1e-9);
+    const bool canPlus = active && (!std::isfinite(value) || value < upper - 1e-9);
+    const double r = h / 2;
+    fillRounded(pen, x, y, w, h, r, kControl);
+    if (active) strokeRounded(pen, x, y, w, h, r, kBorder, 2);
+    const double buttonW = std::min(h, std::max(40.0, w * 0.28));
+    const PanelHit minus {PanelAction::Step, name, -1};
+    const PanelHit plus {PanelAction::Step, name, 1};
+    for (int side = 0; side < 2; ++side) {
+        const PanelHit& hit = side == 0 ? minus : plus;
+        const bool can = side == 0 ? canMinus : canPlus;
+        const double bx = side == 0 ? x : x + w - buttonW;
+        const int pointer = can ? pointerState(hit) : 0;
+        if (pointer > 0) {
+            fillRounded(pen, bx + 4, y + 4, buttonW - 8, h - 8, (h - 8) / 2, pointer == 2 ? kAccentPressed : kControlHover);
+        }
+        const Color sign = pointer == 2 ? kOnAccent : (can ? kText : kTextDisabled);
+        drawPlusMinus(pen.cr, bx + buttonW / 2, y + h / 2, 16, side == 1, sign);
+        addButton(hit, bx, y, buttonW, h, can);
+    }
+    // Thin separators between the buttons and the value (decoration only)
+    pen.color(kDivider);
+    cairo_set_line_width(pen.cr, 1);
+    cairo_move_to(pen.cr, x + buttonW + 0.5, y + 10);
+    cairo_line_to(pen.cr, x + buttonW + 0.5, y + h - 10);
+    cairo_move_to(pen.cr, x + w - buttonW - 0.5, y + 10);
+    cairo_line_to(pen.cr, x + w - buttonW - 0.5, y + h - 10);
+    cairo_stroke(pen.cr);
+    const double size = fitSize(pen, text, 20, 12, w - buttonW * 2 - 12, true);
+    const Color color = locked ? kTextMuted : (usable ? kText : kTextDisabled);
+    textCentered(pen, x + w / 2, centerBaseline(y, h, size), text, size, color, true);
+}
+
+void EyePanel::drawCaption(const Pen& pen, double x, double baseline, const std::string& text, int number,
+                           bool locked) {
+    double tx = x;
+    if (number > 0) {
+        drawNumberBadge(pen, x + 10, baseline - 5, number);
+        tx += 26;
+    }
+    tx += pen.text(tx, baseline, text, 15, kText, false);
+    if (locked) drawLock(pen, tx + 8, baseline + 1, 15, kTextMuted);
+}
+
+void EyePanel::drawStatus(const Pen& pen, const UiText& t, const PanelModel& m) {
+    cairo_t* cr = pen.cr;
+    const EyeStatus& s = m.status;
+    drawCard(pen, kStatusX, kStatusY, kStatusW, kStatusH, 20, kCard, kDivider, 1);
+    const double x0 = kStatusX + 20;
+    const double x1 = kStatusX + kStatusW - 20;
+    pen.text(x0, 66, t.title, fitSize(pen, t.title, 26, 18, x1 - x0, true), kText, true);
+
+    // Badge: a symbol and a word, never color alone
+    {
+        enum class Kind { Sending, Waiting, Paused, NotRunning };
+        Kind kind = Kind::NotRunning;
+        if (s.running) kind = !s.sending ? Kind::Paused : (s.tracking ? Kind::Sending : Kind::Waiting);
+        const char* label = kind == Kind::Sending   ? t.badgeSending
+                            : kind == Kind::Waiting ? t.badgeWaiting
+                            : kind == Kind::Paused  ? t.badgePaused
+                                                    : t.badgeNotRunning;
+        const Color fill = kind == Kind::Sending ? kSuccessTint : (kind == Kind::NotRunning ? kDangerTint : kControl);
+        const Color fg = kind == Kind::Sending ? kSuccess : (kind == Kind::NotRunning ? kDanger : kTextMuted);
+        const double y = 84;
+        const double h = 40;
+        const double size = fitSize(pen, label, 18, 13, x1 - x0 - 56, true);
+        const double w = std::min(x1 - x0, pen.measure(label, size, true) + 56);
+        fillRounded(pen, x0, y, w, h, h / 2, fill);
+        const double ix = x0 + 22;
+        const double iy = y + h / 2;
+        switch (kind) {
+            case Kind::Sending: drawDot(cr, ix, iy, 6.5, fg); break;
+            case Kind::Waiting: drawRing(cr, ix, iy, 5.5, 2.5, fg); break;
+            case Kind::Paused:
+                fillRounded(pen, ix - 6, iy - 7, 4, 14, 1, fg);
+                fillRounded(pen, ix + 2, iy - 7, 4, 14, 1, fg);
+                break;
+            case Kind::NotRunning:
+                pen.color(fg);
+                cairo_set_line_width(cr, 3);
+                cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+                cairo_move_to(cr, ix - 5, iy - 5);
+                cairo_line_to(cr, ix + 5, iy + 5);
+                cairo_move_to(cr, ix + 5, iy - 5);
+                cairo_line_to(cr, ix - 5, iy + 5);
+                cairo_stroke(cr);
+                break;
+        }
+        // The "not running" word is light on the red tint (red text there is only 4.35:1); the cross stays red
+        pen.text(x0 + 40, centerBaseline(y, h, size), label, size, kind == Kind::NotRunning ? kText : fg, true);
+    }
+
+    // Destination and rate
+    pen.text(x0, 154, t.destination, 15, kTextMuted, true);
+    if (!s.running) {
+        pen.text(x0, 180, t.notRunningHint1, fitSize(pen, t.notRunningHint1, 16, 12, x1 - x0, false), kText);
+        pen.text(x0, 204, t.notRunningHint2, fitSize(pen, t.notRunningHint2, 16, 12, x1 - x0, false), kText);
+    } else {
+        const std::string destination = std::string(s.output == kOutputEtvr ? t.outputEtvrShort : t.outputVrchatShort) +
+                                        " → " + (s.target.empty() ? std::string(t.searchingPc) : s.target);
+        const double size = fitSize(pen, destination, 19, 13, x1 - x0, true);
+        pen.text(x0, 180, destination, size, kText, true);
+        pen.text(x0, 204, s.targetMode == "fixed" ? t.modeFixed : t.modeAuto, 15, kTextMuted);
+    }
+    pen.text(x0, 236, t.rateLabel, 15, kTextMuted, true);
+    {
+        char rate[64];
+        std::snprintf(rate, sizeof(rate), t.rateFormat, s.rate);
+        pen.text(x1, 236, s.running ? std::string(rate) : std::string("—"), 17, kText, true, true);
+    }
+    pen.color(kDivider);
+    cairo_set_line_width(cr, 1);
+    cairo_move_to(cr, x0, 254.5);
+    cairo_line_to(cr, x1, 254.5);
+    cairo_stroke(cr);
+
+    // Eyelids: a thin gray bar for the raw value, a thick accent bar for the sent value
+    const bool live = s.running && s.tracking;
+    pen.text(x0, 282, t.lidsTitle, 15, kTextMuted, true);
+    {
+        const double sentW = pen.measure(t.legendSent, 14, false);
+        const double rawW = pen.measure(t.legendRaw, 14, false);
+        double lx = x1 - sentW;
+        pen.text(lx, 282, t.legendSent, 14, kText);
+        lx -= 26;
+        fillRounded(pen, lx, 272, 20, 10, 3, kAccent);
+        lx -= 18 + rawW;
+        pen.text(lx, 282, t.legendRaw, 14, kText);
+        lx -= 26;
+        fillRounded(pen, lx, 274, 20, 6, 2, kTextMuted);
+    }
+    for (int eye = 0; eye < 2; ++eye) {
+        const double top = 296 + eye * 48;
+        pen.text(x0, top + 26, eye == 0 ? t.left : t.right, 18, kText, true);
+        const double barX = x0 + 30;
+        const double barW = x1 - 58 - barX;
+        const double raw = live && s.hasRaw ? s.opennessScaled.v[eye] : NAN;
+        const double sent = live && s.hasSent ? s.lids.v[eye] : NAN;
+        // Raw (thin)
+        fillRounded(pen, barX, top + 4, barW, 10, 5, kBg);
+        if (std::isfinite(raw)) fillRounded(pen, barX, top + 4, std::max(10.0, barW * std::clamp(raw, 0.0, 1.0)), 10, 5, kTextMuted);
+        strokeRounded(pen, barX, top + 4, barW, 10, 5, kBorder, 1);
+        // Sent (thick)
+        fillRounded(pen, barX, top + 20, barW, 16, 8, kBg);
+        if (std::isfinite(sent)) fillRounded(pen, barX, top + 20, std::max(16.0, barW * std::clamp(sent, 0.0, 1.0)), 16, 8, kAccent);
+        strokeRounded(pen, barX, top + 20, barW, 16, 8, kBorder, 1);
+        pen.text(x1, top + 14, twoDecimals(raw), 14, kTextMuted, false, true);
+        pen.text(x1, top + 36, twoDecimals(sent), 16, kText, true, true);
+    }
+    pen.color(kDivider);
+    cairo_move_to(cr, x0, 402.5);
+    cairo_line_to(cr, x1, 402.5);
+    cairo_stroke(cr);
+
+    // Gaze: raw = ring, sent = filled dot
+    pen.text(x0, 430, t.gazeTitle, 15, kTextMuted, true);
+    {
+        const double box = 164;
+        const double bx = x0;
+        const double by = 444;
+        const double cx = bx + box / 2;
+        const double cy = by + box / 2;
+        const bool hasRaw = live && s.hasRaw && s.gaze.valid();
+        const bool hasSent = live && s.hasSent && s.sentGaze.valid();
+        fillRounded(pen, bx, by, box, box, 12, kBg);
+        pen.color(kDivider, hasRaw || hasSent ? 1.0 : 0.0);
+        cairo_set_line_width(cr, 1);
+        cairo_move_to(cr, cx + 0.5, by + 8);
+        cairo_line_to(cr, cx + 0.5, by + box - 8);
+        cairo_move_to(cr, bx + 8, cy + 0.5);
+        cairo_line_to(cr, bx + box - 8, cy + 0.5);
+        cairo_stroke(cr);
+        cairo_new_sub_path(cr);
+        cairo_arc(cr, cx, cy, box / 4, 0, 2 * M_PI);
+        cairo_stroke(cr);
+        strokeRounded(pen, bx, by, box, box, 12, kBorder, 1.5);
+        const double half = box / 2 - 12;
+        /**
+         * Map gaze (-1..1, up positive) into the box.
+         */
+        const auto point = [&](const Pair& p, double& px, double& py) {
+            px = cx + std::clamp(p.v[0], -1.0, 1.0) * half;
+            py = cy - std::clamp(p.v[1], -1.0, 1.0) * half;
+        };
+        double px = 0;
+        double py = 0;
+        if (hasSent) {
+            point(s.sentGaze, px, py);
+            drawDot(cr, px, py, 8, kAccent);
+        }
+        if (hasRaw) {
+            point(s.gaze, px, py);
+            drawRing(cr, px, py, 11, 2.5, kText);
+        }
+        if (!hasRaw && !hasSent) {
+            const double size = fitSize(pen, t.noEyeData, 14, 10, box - 16, false);
+            textCentered(pen, cx, cy + 5, t.noEyeData, size, kTextMuted, false);
+        }
+        const double lx = bx + box + 18;
+        drawRing(cr, lx + 9, 470, 8, 2.5, kText);
+        pen.text(lx + 26, 476, t.legendRaw, 15, kText);
+        pen.text(lx, 502, hasRaw ? xyText(s.gaze) : "—", fitSize(pen, xyText(s.gaze), 15, 11, x1 - lx, false),
+                 kTextMuted);
+        drawDot(cr, lx + 9, 540, 7, kAccent);
+        pen.text(lx + 26, 546, t.legendSent, 15, kText);
+        pen.text(lx, 572, hasSent ? xyText(s.sentGaze) : "—", fitSize(pen, xyText(s.sentGaze), 15, 11, x1 - lx, false),
+                 kTextMuted);
+    }
+
+    // One red message at the bottom: the panel's own failure first, then frameeyeosc's config error
+    std::string message;
+    if (m.panelErrorBroken) {
+        message = t.errConfigBroken;
+    } else if (!m.panelError.empty()) {
+        message = std::string(t.errWrite) + m.panelError;
+    } else if (!m.config.error.empty()) {
+        message = t.errConfigBroken;
+    } else if (m.autostart.writeFailed) {
+        message = t.errAutostart;
+    } else if (s.running && !s.configError.empty()) {
+        message = std::string(t.errorPrefix) + s.configError;
+    }
+    if (!message.empty()) {
+        const std::vector<std::string> lines = wrapText(pen, message, 15, true, x1 - x0, 2);
+        for (size_t i = 0; i < lines.size(); ++i) pen.text(x0, 636 + i * 22, lines[i], 15, kDanger, true);
+    }
+}
+
+void EyePanel::drawTabs(const Pen& pen, const UiText& t) {
+    const char* labels[4] = {t.tabBasic, t.tabGaze, t.tabLids, t.tabAdvanced};
+    const double gap = 10;
+    const double w = (kRight - kRightX - gap * 3) / 4;
+    for (int i = 0; i < 4; ++i) {
+        const double x = kRightX + i * (w + gap);
+        const PanelHit hit {PanelAction::Tab, nullptr, i};
+        const bool selected = static_cast<int>(tab_) == i;
+        const int pointer = pointerState(hit);
+        const double size = fitSize(pen, labels[i], 21, 14, w - 24, selected);
+        if (selected) {
+            // The chosen tab: accent fill, bold text and a notch pointing at the content
+            fillRounded(pen, x, kTabY, w, kTabH, kTabH / 2, kAccent);
+            pen.color(kAccent);
+            cairo_move_to(pen.cr, x + w / 2 - 11, kTabY + kTabH - 1);
+            cairo_line_to(pen.cr, x + w / 2 + 11, kTabY + kTabH - 1);
+            cairo_line_to(pen.cr, x + w / 2, kTabY + kTabH + 11);
+            cairo_close_path(pen.cr);
+            cairo_fill(pen.cr);
+            textCentered(pen, x + w / 2, centerBaseline(kTabY, kTabH, size), labels[i], size, kOnAccent, true);
+        } else {
+            fillRounded(pen, x, kTabY, w, kTabH, kTabH / 2, pointer > 0 ? kControlHover : kControl);
+            strokeRounded(pen, x, kTabY, w, kTabH, kTabH / 2, kBorder, 2);
+            textCentered(pen, x + w / 2, centerBaseline(kTabY, kTabH, size), labels[i], size, kText, false);
+        }
+        addButton(hit, x, kTabY, w, kTabH, !selected);
+    }
+}
+
+void EyePanel::drawBasic(const Pen& pen, const UiText& t, const PanelModel& m, const SettingsView& v) {
+    const EyeStatus& s = m.status;
+    double y = kRowTop;
+    const double cy = (kRowH - kControlH) / 2;
+
+    // Sending
+    {
+        const bool locked = v.locked(key::kSending);
+        drawRowLabel(pen, t, y, kRowH, t.rowSending, t.hintSending, locked);
+        drawSegmented(pen, kControlX, y + cy, 300, kControlH,
+                      {{t.send, {PanelAction::SetBool, key::kSending, 1}}, {t.stop, {PanelAction::SetBool, key::kSending, 0}}},
+                      v.flag(key::kSending) ? 0 : 1, 20, locked);
+    }
+    y += kRowH + kRowGap;
+    // Output type
+    {
+        const bool locked = v.locked(key::kOutput);
+        const std::string output = v.text(key::kOutput);
+        drawRowLabel(pen, t, y, kRowH, t.rowOutput, t.hintOutput, locked);
+        drawSegmented(pen, kControlX, y + cy, kControlW, kControlH,
+                      {{t.outputVrchat, {PanelAction::SetOutput, key::kOutput, 0}},
+                       {t.outputEtvr, {PanelAction::SetOutput, key::kOutput, 1}}},
+                      output == kOutputEtvr ? 1 : (output == kOutputVrchat ? 0 : -1), 19, locked);
+    }
+    y += kRowH + kRowGap;
+    // Target PC: automatic, or fixed to the PC frameeyeosc sends to now (no typing an IP in VR)
+    {
+        const bool locked = v.locked(key::kHost);
+        const std::string host = v.text(key::kHost);
+        const bool isAuto = host.empty() || host == "auto";
+        const bool canFix = s.running && !hostOfTarget(s.target).empty();
+        drawRowLabel(pen, t, y, kRowH, t.rowTarget, t.hintTarget, locked);
+        drawSegmented(pen, kControlX, y + cy, kControlW, kControlH,
+                      {{t.targetAuto, {PanelAction::HostAuto, key::kHost, 0}},
+                       {isAuto ? std::string(t.targetFixNow) : formatText(t.targetFixedFormat, host),
+                        {PanelAction::FixHost, key::kHost, 0}, canFix}},
+                      isAuto ? 0 : 1, 19, locked);
+    }
+    y += kRowH + kRowGap;
+    // Port
+    {
+        const bool locked = v.locked(key::kPort);
+        const bool isDefault = v.portIsDefault();
+        drawRowLabel(pen, t, y, kRowH, t.rowPort, isDefault ? t.portDefaultHint : "", locked);
+        drawStepper(pen, kControlX, y + cy, 220, kControlH, key::kPort, v.port(), std::to_string(v.port()), true,
+                    locked);
+        if (!isDefault && !locked) {
+            const PanelHit hit {PanelAction::PortDefault, key::kPort, 0};
+            const double bx = kControlX + 232;
+            const double bw = 170;
+            const int pointer = pointerState(hit);
+            fillRounded(pen, bx, y + cy, bw, kControlH, kControlH / 2, pointer > 0 ? kControlHover : kControl);
+            strokeRounded(pen, bx, y + cy, bw, kControlH, kControlH / 2, kBorder, 2);
+            const double size = fitSize(pen, t.portReset, 18, 12, bw - 24, false);
+            textCentered(pen, bx + bw / 2, centerBaseline(y + cy, kControlH, size), t.portReset, size, kText, false);
+            addButton(hit, bx, y + cy, bw, kControlH);
+        }
+    }
+    y += kRowH + kRowGap;
+    // Language (each name in its own language)
+    {
+        drawRowLabel(pen, t, y, kRowH, t.rowLanguage, "", false);
+        drawSegmented(pen, kControlX, y + cy, 300, kControlH,
+                      {{"日本語", {PanelAction::Language, key::kLanguage, 0}},
+                       {"English", {PanelAction::Language, key::kLanguage, 1}}},
+                      m.language == Language::Ja ? 0 : 1, 20);
+    }
+    y += kRowH + kRowGap;
+    // Start with SteamVR
+    {
+        const Autostart a = m.autostart.autostart;
+        const bool usable = a == Autostart::Enabled || a == Autostart::Disabled;
+        const char* hint = a == Autostart::Missing ? t.autostartMissing
+                           : a == Autostart::Unknown ? t.autostartUnknown
+                                                     : t.hintAutostart;
+        drawRowLabel(pen, t, y, kRowH, t.rowAutostart, hint, false);
+        drawSegmented(pen, kControlX, y + cy, 300, kControlH,
+                      {{t.on, {PanelAction::AutostartOn, nullptr, 0}, usable},
+                       {t.off, {PanelAction::AutostartOff, nullptr, 0}, usable}},
+                      a == Autostart::Enabled ? 0 : (a == Autostart::Disabled ? 1 : -1), 20);
+    }
+    y += kRowH + kRowGap + 8;
+    // Reset all / quit (both ask for a second press)
+    for (int i = 0; i < 2; ++i) {
+        const bool isQuit = i == 1;
+        const PanelHit hit {isQuit ? PanelAction::Quit : PanelAction::ResetAll, nullptr, 0};
+        const bool armed = isQuit ? quitArmed_ : resetArmed_;
+        const double w = 250;
+        const double x = isQuit ? kInnerRight - w : kInnerX;
+        const int pointer = pointerState(hit);
+        const std::string label = isQuit ? (armed ? t.quitConfirm : t.quit) : (armed ? t.resetConfirm : t.resetAll);
+        fillRounded(pen, x, y, w, kControlH, kControlH / 2, armed ? kDanger : (pointer > 0 ? kControlHover : kQuitFill));
+        strokeRounded(pen, x, y, w, kControlH, kControlH / 2, kDanger, 2);
+        const double size = fitSize(pen, label, 19, 12, w - 24, true);
+        textCentered(pen, x + w / 2, centerBaseline(y, kControlH, size), label, size, armed ? kOnAccent : kText, true);
+        addButton(hit, x, y, w, kControlH);
+    }
+    y += kControlH + 34;
+    const std::vector<std::string> lines = wrapText(pen, t.footer, 15, false, kInnerRight - kInnerX, 2);
+    for (size_t i = 0; i < lines.size(); ++i) pen.text(kInnerX, y + i * 22, lines[i], 15, kTextMuted);
+}
+
+void EyePanel::drawGaze(const Pen& pen, const UiText& t, const SettingsView& v) {
+    double y = kRowTop;
+    const double cy = (kRowH - kControlH) / 2;
+    const bool raw = v.flag(key::kRaw);
+
+    // Smoothing on / off (on = raw false)
+    {
+        const bool locked = v.locked(key::kRaw);
+        drawRowLabel(pen, t, y, kRowH, t.rowSmoothing, t.hintSmoothing, locked);
+        drawSegmented(pen, kControlX, y + cy, 300, kControlH,
+                      {{t.on, {PanelAction::SetBool, key::kRaw, 0}}, {t.off, {PanelAction::SetBool, key::kRaw, 1}}},
+                      raw ? 1 : 0, 20, locked);
+    }
+    y += kRowH + kRowGap;
+    // Presets
+    {
+        const bool locked = v.locked(key::kGazeMinCutoff) || v.locked(key::kGazeBeta) || v.locked(key::kGazeDCutoff);
+        const int preset = matchingGazePreset(v);
+        const std::string hint = raw ? t.rawOnNote : (preset < 0 ? t.custom : "");
+        drawRowLabel(pen, t, y, kRowH, t.rowStrength, hint, locked);
+        drawSegmented(pen, kControlX, y + cy, 390, kControlH,
+                      {{t.strengthLight, {PanelAction::Preset, nullptr, 0}},
+                       {t.strengthMedium, {PanelAction::Preset, nullptr, 1}},
+                       {t.strengthStrong, {PanelAction::Preset, nullptr, 2}}},
+                      preset, 20, locked);
+    }
+    y += kRowH + kRowGap;
+    // The three One Euro values
+    {
+        drawRowLabel(pen, t, y, kCaptionRowH, t.rowFine, t.lowerSmoother, false);
+        const char* keys[3] = {key::kGazeMinCutoff, key::kGazeBeta, key::kGazeDCutoff};
+        const char* captions[3] = {t.capStill, t.capFast, t.capChange};
+        const double gap = 11;
+        const double w = (kControlW - gap * 2) / 3;
+        for (int i = 0; i < 3; ++i) {
+            const double x = kControlX + i * (w + gap);
+            drawCaption(pen, x + 4, y + 17, captions[i], 0, v.locked(keys[i]));
+            const double value = v.number(keys[i]);
+            drawStepper(pen, x, y + 28, w, kControlH, keys[i], value, formatSetting(keys[i], value), true,
+                        v.locked(keys[i]));
+        }
+    }
+    y += kCaptionRowH + kRowGap;
+    // Deadzone (also in degrees: 1.0 = 45°)
+    {
+        const bool locked = v.locked(key::kGazeDeadzone);
+        const double value = v.number(key::kGazeDeadzone);
+        char text[64];
+        std::snprintf(text, sizeof(text), "%.3f (%.1f°)", value, value * 45.0);
+        drawRowLabel(pen, t, y, kRowH, t.rowDeadzone, t.hintDeadzone, locked);
+        drawStepper(pen, kControlX, y + cy, 260, kControlH, key::kGazeDeadzone, value, text, true, locked);
+    }
+    y += kRowH + kRowGap;
+    // Hold gaze while blinking (0 = off) and its threshold
+    {
+        const bool locked = v.locked(key::kGazeHoldBelow);
+        const double value = v.number(key::kGazeHoldBelow);
+        const bool on = value > 0;
+        drawRowLabel(pen, t, y, kRowH, t.rowHold, t.hintHold, locked);
+        drawSegmented(pen, kControlX, y + cy, 200, kControlH,
+                      {{t.on, {PanelAction::HoldOn, key::kGazeHoldBelow, 0}},
+                       {t.off, {PanelAction::HoldOff, key::kGazeHoldBelow, 0}}},
+                      on ? 0 : 1, 20, locked);
+        drawStepper(pen, kControlX + 212, y + cy, 220, kControlH, key::kGazeHoldBelow, value,
+                    on ? formatSetting(key::kGazeHoldBelow, value) : std::string("—"), on, locked);
+    }
+    y += kRowH + kRowGap;
+    // Independent eyes
+    {
+        const bool locked = v.locked(key::kIndependentEyes);
+        drawRowLabel(pen, t, y, kRowH, t.rowIndependent, t.hintIndependent, locked);
+        drawSegmented(pen, kControlX, y + cy, 300, kControlH,
+                      {{t.on, {PanelAction::SetBool, key::kIndependentEyes, 1}},
+                       {t.off, {PanelAction::SetBool, key::kIndependentEyes, 0}}},
+                      v.flag(key::kIndependentEyes) ? 0 : 1, 20, locked);
+    }
+}
+
+void EyePanel::drawLids(const Pen& pen, const UiText& t, const PanelModel& m, const SettingsView& v) {
+    const EyeStatus& s = m.status;
+    cairo_t* cr = pen.cr;
+    double y = kRowTop;
+    const double cy = (kRowH - kControlH) / 2;
+
+    // Auto calibration: on / off, what it learned, reset
+    {
+        const bool locked = v.locked(key::kLidCalibration);
+        const bool on = v.flag(key::kLidCalibration);
+        std::string learned;
+        if (s.running && (std::isfinite(s.relaxed.v[0]) || std::isfinite(s.relaxed.v[1]))) {
+            char text[128];
+            std::snprintf(text, sizeof(text), t.learnedFormat, twoDecimals(s.relaxed.v[0]).c_str(),
+                          twoDecimals(s.relaxed.v[1]).c_str());
+            learned = text;
+        } else if (s.running && on) {
+            learned = t.notLearned;
+        }
+        drawRowLabel(pen, t, y, kRowH, t.rowCalibration, learned, locked);
+        drawSegmented(pen, kControlX, y + cy, 180, kControlH,
+                      {{t.on, {PanelAction::SetBool, key::kLidCalibration, 1}},
+                       {t.off, {PanelAction::SetBool, key::kLidCalibration, 0}}},
+                      on ? 0 : 1, 20, locked);
+        if (s.running && s.learning) {
+            const double lx = kControlX + 194;
+            drawDot(cr, lx + 6, y + kRowH / 2, 5, kAccent);
+            pen.text(lx + 18, centerBaseline(y, kRowH, 16), t.learning,
+                     fitSize(pen, t.learning, 16, 11, kInnerRight - 158 - lx - 18, false), kText);
+        }
+        const PanelHit hit {PanelAction::CalibrationReset, key::kCalibrationReset, 0};
+        const double bw = 150;
+        const double bx = kInnerRight - bw;
+        const int pointer = on ? pointerState(hit) : 0;
+        fillRounded(pen, bx, y + cy, bw, kControlH, kControlH / 2, pointer > 0 ? kControlHover : kControl);
+        if (on) strokeRounded(pen, bx, y + cy, bw, kControlH, kControlH / 2, kBorder, 2);
+        const double size = fitSize(pen, t.calibrationReset, 19, 12, bw - 24, true);
+        textCentered(pen, bx + bw / 2, centerBaseline(y + cy, kControlH, size), t.calibrationReset, size,
+                     on ? kText : kTextDisabled, true);
+        addButton(hit, bx, y + cy, bw, kControlH, on);
+    }
+    y += kRowH + kRowGap;
+    // Per-eye scales: automatic (from calibration) or fixed
+    {
+        const bool lockedL = v.locked(key::kLidScaleLeft);
+        const bool lockedR = v.locked(key::kLidScaleRight);
+        const double left = v.number(key::kLidScaleLeft);
+        const double right = v.number(key::kLidScaleRight);
+        const bool fixedL = std::isfinite(left);
+        const bool fixedR = std::isfinite(right);
+        const int selected = !fixedL && !fixedR ? 0 : (fixedL && fixedR ? 1 : -1);
+        drawRowLabel(pen, t, y, kRowH, t.rowScale, selected == 0 ? t.hintScaleAuto : t.hintScaleFixed,
+                     lockedL || lockedR);
+        drawSegmented(pen, kControlX, y + cy, 170, kControlH,
+                      {{t.scaleAuto, {PanelAction::ScaleAuto, nullptr, 0}},
+                       {t.scaleFixed, {PanelAction::ScaleFixed, nullptr, 0}}},
+                      selected, 19, lockedL || lockedR);
+        const double stepperW = (kControlW - 170 - 10 - 44 - 8) / 2;
+        for (int eye = 0; eye < 2; ++eye) {
+            const char* name = eye == 0 ? key::kLidScaleLeft : key::kLidScaleRight;
+            const bool fixed = eye == 0 ? fixedL : fixedR;
+            const double value = fixed ? (eye == 0 ? left : right) : (s.running ? s.scales.v[eye] : NAN);
+            const double lx = kControlX + 180 + eye * (22 + stepperW + 8);
+            pen.text(lx, centerBaseline(y, kRowH, 18), eye == 0 ? t.left : t.right, 18, kText, true);
+            drawStepper(pen, lx + 22, y + cy, stepperW, kControlH, name, value, twoDecimals(value), fixed,
+                        eye == 0 ? lockedL : lockedR);
+        }
+    }
+    y += kRowH + kRowGap;
+    // The raw openness of each eye with the four marks laid over it
+    {
+        const double top = y;
+        pen.text(kInnerX, top + 16, t.marksTitle, fitSize(pen, t.marksTitle, 15, 11, kInnerRight - kInnerX, false),
+                 kTextMuted);
+        const double barX = kInnerX + 34;
+        const double barW = kInnerRight - barX;
+        /**
+         * x of an openness value on the bars.
+         */
+        const auto xOf = [&](double value) { return barX + std::clamp(value / kLidScaleMax, 0.0, 1.0) * barW; };
+        const char* marks[4] = {key::kLidClosed, key::kLidOpen, key::kLidWidenStart, key::kLidWide};
+        const bool live = s.running && s.tracking && s.hasRaw;
+        for (int eye = 0; eye < 2; ++eye) {
+            const double by = top + 50 + eye * 28;
+            const double bh = 20;
+            pen.text(kInnerX, centerBaseline(by, bh, 17), eye == 0 ? t.left : t.right, 17, kText, true);
+            fillRounded(pen, barX, by, barW, bh, 6, kBg);
+            const double value = live ? s.opennessScaled.v[eye] : NAN;
+            if (std::isfinite(value)) fillRounded(pen, barX, by, std::max(12.0, xOf(value) - barX), bh, 6, kAccent);
+            strokeRounded(pen, barX, by, barW, bh, 6, kBorder, 1.5);
+        }
+        if (!live) {
+            textCentered(pen, barX + barW / 2, centerBaseline(top + 50, 20, 14), t.noEyeData, 14, kTextMuted, false);
+        }
+        // Mark lines: a light line with dark edges, visible on the accent fill and on the dark track
+        for (int i = 0; i < 4; ++i) {
+            const double x = std::round(xOf(v.number(marks[i])));
+            pen.color(kBg);
+            cairo_set_line_width(cr, 6);
+            cairo_move_to(cr, x, top + 44);
+            cairo_line_to(cr, x, top + 104);
+            cairo_stroke(cr);
+            pen.color(kText);
+            cairo_set_line_width(cr, 2);
+            cairo_move_to(cr, x, top + 44);
+            cairo_line_to(cr, x, top + 104);
+            cairo_stroke(cr);
+            drawNumberBadge(pen, x, top + 34, i + 1);
+        }
+    }
+    y += 110;
+    // The four marks
+    {
+        const char* marks[4] = {key::kLidClosed, key::kLidOpen, key::kLidWidenStart, key::kLidWide};
+        const char* captions[4] = {t.markClosed, t.markOpen, t.markWidenStart, t.markWide};
+        const double gap = 12;
+        const double w = (kInnerRight - kInnerX - gap * 3) / 4;
+        for (int i = 0; i < 4; ++i) {
+            const double x = kInnerX + i * (w + gap);
+            drawCaption(pen, x + 2, y + 18, captions[i], i + 1, v.locked(marks[i]));
+            double low = 0;
+            double high = 0;
+            lidMarkBounds(marks[i], v, low, high);
+            const double value = v.number(marks[i]);
+            drawStepper(pen, x, y + 28, w, kControlH, marks[i], value, formatSetting(marks[i], value), true,
+                        v.locked(marks[i]), low, high);
+        }
+    }
+    y += kCaptionRowH + kRowGap;
+    // Sync both lids
+    {
+        const bool locked = v.locked(key::kLidSync);
+        const double value = v.number(key::kLidSync);
+        drawRowLabel(pen, t, y, kRowH, t.rowSync, t.hintSync, locked);
+        drawStepper(pen, kControlX, y + cy, 220, kControlH, key::kLidSync, value, formatSetting(key::kLidSync, value),
+                    true, locked);
+    }
+    y += kRowH + kRowGap;
+    // Eyelid smoothing (two One Euro values)
+    {
+        drawRowLabel(pen, t, y, kCaptionRowH, t.rowLidSmooth, t.lowerSmoother, false);
+        const char* keys[2] = {key::kLidMinCutoff, key::kLidBeta};
+        const char* captions[2] = {t.capStill, t.capFast};
+        for (int i = 0; i < 2; ++i) {
+            const double x = kControlX + i * 232;
+            drawCaption(pen, x + 4, y + 17, captions[i], 0, v.locked(keys[i]));
+            const double value = v.number(keys[i]);
+            drawStepper(pen, x, y + 28, 220, kControlH, keys[i], value, formatSetting(keys[i], value), true,
+                        v.locked(keys[i]));
+        }
+    }
+}
+
+void EyePanel::drawAdvanced(const Pen& pen, const UiText& t, const PanelModel& m, const SettingsView& v) {
+    const EyeStatus& s = m.status;
+    double y = kRowTop;
+    const double cy = (kRowH - kControlH) / 2;
+
+    // Parameter prefix
+    {
+        const bool locked = v.locked(key::kPrefix);
+        const std::string prefix = v.text(key::kPrefix);
+        const bool none = prefix.empty() || prefix == "/";
+        const int selected = prefix == "/FT" ? 0 : (none ? 1 : -1);
+        const std::string hint = selected < 0 ? formatText(t.prefixOther, prefix) : "";
+        drawRowLabel(pen, t, y, kRowH, t.rowPrefix, hint, locked);
+        drawSegmented(pen, kControlX, y + cy, 300, kControlH,
+                      {{"/FT", {PanelAction::PrefixFt, key::kPrefix, 0}},
+                       {t.prefixNone, {PanelAction::PrefixNone, key::kPrefix, 0}}},
+                      selected, 20, locked);
+        std::string path = prefix;
+        while (!path.empty() && path.back() == '/') path.pop_back();
+        const std::string example = std::string(t.prefixExample) + "/avatar/parameters" + path + "/v2/EyeLeftX";
+        pen.text(kControlX + 4, y + kRowH + 18, example, fitSize(pen, example, 15, 11, kControlW, false), kTextMuted);
+    }
+    y += kRowH + 30;
+    /**
+     * A read-only row: title on the left, text on the right.
+     */
+    const auto infoRow = [&](const std::string& title, const std::string& hint, const std::string& value,
+                             bool keepEnd) {
+        drawRowLabel(pen, t, y, 56, title, hint, false);
+        pen.text(kControlX, centerBaseline(y, 56, 16), ellipsize(pen, value, 16, false, kControlW, keepEnd), 16,
+                 kText);
+    };
+    // File locations
+    infoRow(t.rowConfigPath, "", m.configPath, true);
+    if (s.running && !s.configPath.empty() && s.configPath != m.configPath) {
+        const std::string warning = t.configPathMismatch + s.configPath;
+        pen.text(kControlX, y + 54, ellipsize(pen, warning, 14, true, kControlW, true), 14, kDanger, true);
+    }
+    y += 64;
+    infoRow(t.rowCalibrationPath, "", s.running && !s.calibrationPath.empty() ? s.calibrationPath : "—", true);
+    y += 64;
+    infoRow(t.rowStatusPath, "", m.statusPath, true);
+    y += 64;
+    // frameeyeosc process
+    {
+        std::string text = t.notRunning;
+        if (s.running) {
+            const int minutes = static_cast<int>(std::max(0.0, s.time - s.started) / 60);
+            char uptime[64];
+            if (minutes >= 60) {
+                std::snprintf(uptime, sizeof(uptime), t.hoursMinutesFormat, minutes / 60, minutes % 60);
+            } else {
+                std::snprintf(uptime, sizeof(uptime), t.minutesFormat, minutes);
+            }
+            char line[128];
+            std::snprintf(line, sizeof(line), t.coreFormat, s.pid, uptime);
+            text = line;
+        }
+        infoRow(t.rowCore, "", text, false);
+    }
+    y += 64;
+    // Locked by the command line, with the values in effect
+    {
+        std::vector<std::string> items;
+        if (s.running) {
+            for (const std::string& name : s.locked) {
+                std::string value = "?";
+                if (const JsonValue* effective = s.effective.get(name)) {
+                    if (effective->isBool()) value = effective->boolean ? "true" : "false";
+                    if (effective->isNumber()) {
+                        value = effective->integer ? std::to_string(static_cast<long long>(effective->number))
+                                                   : formatSetting(name, effective->number);
+                    }
+                    if (effective->isString()) value = "\"" + effective->text + "\"";
+                    if (effective->isNull()) value = "null";
+                }
+                items.push_back(name + " = " + value);
+            }
+        }
+        if (items.empty()) items.push_back(s.running ? t.noneLocked : "—");
+        drawRowLabel(pen, t, y, 56, t.rowLockedList, t.hintLockedList, false);
+        std::vector<std::string> lines;
+        for (const std::string& item : items) {
+            if (!lines.empty() && pen.measure(lines.back() + ",  " + item, 16, false) <= kControlW) {
+                lines.back() += ",  " + item;
+            } else {
+                lines.push_back(ellipsize(pen, item, 16, false, kControlW, false));
+            }
+        }
+        if (lines.size() > 4) lines.resize(4);
+        for (size_t i = 0; i < lines.size(); ++i) pen.text(kControlX, y + 34 + i * 24, lines[i], 16, kText);
+    }
+}
+
+void EyePanel::drawPrompt(const Pen& pen, const UiText& t) {
+    // Only the prompt's buttons stay usable
+    buttons_.clear();
+    cairo_set_source_rgba(pen.cr, 0, 0, 0, 0.62);
+    pen.roundedRect(0, 0, kWidth, kHeight, 24);
+    cairo_fill(pen.cr);
+    const bool etvr = promptOutput_ == kOutputEtvr;
+    const double w = 760;
+    const double h = 270;
+    const double x = (kWidth - w) / 2;
+    const double y = (kHeight - h) / 2;
+    drawCard(pen, x, y, w, h, 24, kCard, kAccent, 2);
+    const std::string title = etvr ? t.promptEtvr : t.promptVrchat;
+    const double titleSize = fitSize(pen, title, 24, 16, w - 60, true);
+    textCentered(pen, x + w / 2, y + 62, title, titleSize, kText, true);
+    const std::string detail1 = etvr ? t.promptEtvrDetail1 : t.promptVrchatDetail1;
+    const std::string detail2 = etvr ? t.promptEtvrDetail2 : t.promptVrchatDetail2;
+    textCentered(pen, x + w / 2, y + 108, detail1, fitSize(pen, detail1, 17, 12, w - 60, false), kTextMuted, false);
+    if (!detail2.empty()) {
+        textCentered(pen, x + w / 2, y + 136, detail2, fitSize(pen, detail2, 17, 12, w - 60, false), kTextMuted,
+                     false);
+    }
+    const int arg = etvr ? 1 : 0;
+    const double bw = 240;
+    const double by = y + h - 32 - kControlH - 4;
+    for (int i = 0; i < 2; ++i) {
+        const bool yes = i == 0;
+        const PanelHit hit {yes ? PanelAction::PromptYes : PanelAction::PromptNo, nullptr, arg};
+        const double bx = yes ? x + w / 2 - bw - 12 : x + w / 2 + 12;
+        const int pointer = pointerState(hit);
+        const std::string label = yes ? t.promptYes : t.promptNo;
+        if (yes) {
+            fillRounded(pen, bx, by, bw, kControlH + 4, (kControlH + 4) / 2, pointer == 2 ? kAccentPressed : kAccent);
+        } else {
+            fillRounded(pen, bx, by, bw, kControlH + 4, (kControlH + 4) / 2, pointer > 0 ? kControlHover : kControl);
+            strokeRounded(pen, bx, by, bw, kControlH + 4, (kControlH + 4) / 2, kBorder, 2);
+        }
+        const double size = fitSize(pen, label, 21, 14, bw - 24, true);
+        textCentered(pen, bx + bw / 2, centerBaseline(by, kControlH + 4, size), label, size, yes ? kOnAccent : kText,
+                     true);
+        addButton(hit, bx, by, bw, kControlH + 4);
+    }
+}
+
+void EyePanel::render(const PanelModel& model) {
+    const Pen pen {cr_, &fonts_};
+    const UiText& t = uiText(model.language);
+    const SettingsView view(model);
+    buttons_.clear();
+
+    // Opaque background (the contrast ratios assume it)
+    cairo_save(cr_);
+    cairo_set_operator(cr_, CAIRO_OPERATOR_CLEAR);
+    cairo_paint(cr_);
+    cairo_restore(cr_);
+    fillRounded(pen, 0, 0, kWidth, kHeight, 24, kBg);
+
+    drawStatus(pen, t, model);
+    drawTabs(pen, t);
+    drawCard(pen, kRightX, kContentY, kRight - kRightX, kContentH, 20, kCard, kDivider, 1);
+    switch (tab_) {
+        case PanelTab::Basic: drawBasic(pen, t, model, view); break;
+        case PanelTab::Gaze: drawGaze(pen, t, view); break;
+        case PanelTab::Lids: drawLids(pen, t, model, view); break;
+        case PanelTab::Advanced: drawAdvanced(pen, t, model, view); break;
+    }
+    if (!promptOutput_.empty()) drawPrompt(pen, t);
+
+    // Forget hover on a button that is gone or can no longer be pressed
+    bool hoverFound = false;
+    for (const auto& b : buttons_) hoverFound |= b.usable && b.hit == hover_;
+    if (!hoverFound) hover_ = {};
+    cairo_surface_flush(surface_);
+}
+
+const std::vector<uint8_t>& EyePanel::toRgba() {
+    surfaceToRgba(surface_, rgba_);
+    return rgba_;
+}
+
+bool EyePanel::writePng(const std::string& path) const {
+    return cairo_surface_write_to_png(surface_, path.c_str()) == CAIRO_STATUS_SUCCESS;
+}
+
+int EyePanel::width() const {
+    return kWidth;
+}
+
+int EyePanel::height() const {
+    return kHeight;
+}
+
+void renderThumbnail(const FontSet& fonts, int size, std::vector<uint8_t>& rgba, const std::string& pngPath) {
+    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, size, size);
+    cairo_t* cr = cairo_create(surface);
+    const Pen pen {cr, &fonts};
+    const double s = size / 256.0;
+
+    fillRounded(pen, 8 * s, 8 * s, 240 * s, 240 * s, 48 * s, kBg);
+    cairo_set_source_rgba(cr, 1, 1, 1, 0.08);
+    cairo_set_line_width(cr, 2 * s);
+    pen.roundedRect(9 * s, 9 * s, 238 * s, 238 * s, 47 * s);
+    cairo_stroke(cr);
+
+    // The eye: an almond outline, an accent iris with a soft glow, a dark pupil and a highlight
+    const double cx = 128 * s;
+    const double cy = 104 * s;
+    /**
+     * The almond shape of the eye.
+     */
+    const auto almond = [&]() {
+        cairo_new_path(cr);
+        cairo_move_to(cr, 30 * s, cy);
+        cairo_curve_to(cr, 80 * s, 38 * s, 176 * s, 38 * s, 226 * s, cy);
+        cairo_curve_to(cr, 176 * s, 170 * s, 80 * s, 170 * s, 30 * s, cy);
+        cairo_close_path(cr);
+    };
+    almond();
+    pen.color(kCard);
+    cairo_fill_preserve(cr);
+    cairo_save(cr);
+    cairo_clip(cr);
+    for (int i = 3; i >= 1; --i) {
+        pen.color(kAccent, 0.10);
+        cairo_new_sub_path(cr);
+        cairo_arc(cr, cx, cy, (40 + i * 6) * s, 0, 2 * M_PI);
+        cairo_fill(cr);
+    }
+    drawDot(cr, cx, cy, 40 * s, kAccent);
+    drawDot(cr, cx, cy, 17 * s, kBg);
+    drawDot(cr, cx + 14 * s, cy - 14 * s, 7 * s, kText);
+    cairo_restore(cr);
+    almond();
+    pen.color(kText);
+    cairo_set_line_width(cr, 9 * s);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+    cairo_stroke(cr);
+
+    const double w = pen.measure("Eye", 56 * s, true);
+    pen.text((size - w) / 2, 228 * s, "Eye", 56 * s, kText, true);
+
+    cairo_surface_flush(surface);
+    surfaceToRgba(surface, rgba);
+    if (!pngPath.empty()) cairo_surface_write_to_png(surface, pngPath.c_str());
+    cairo_destroy(cr);
+    cairo_surface_destroy(surface);
+}

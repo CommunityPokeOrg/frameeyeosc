@@ -1,0 +1,335 @@
+// The dashboard panel (drawing and hit testing) and its thumbnail. Every color comes from theme.h, so that
+// --contrast-report checks what is drawn.
+#pragma once
+
+#include "model.h"
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+class FontSet;
+struct Pen;
+typedef struct _cairo cairo_t;
+typedef struct _cairo_surface cairo_surface_t;
+
+/** What a button does. */
+enum class PanelAction {
+    None,
+    Tab,               ///< switch tab (handled inside the panel; arg = tab)
+    SetBool,           ///< key = arg != 0
+    Step,              ///< key += arg * step
+    HostAuto,          ///< host = "auto"
+    FixHost,           ///< host = the IP frameeyeosc sends to now
+    PortDefault,       ///< port = null
+    SetOutput,         ///< output = arg (0 vrchat, 1 etvr), port = null, then ask about the recommendation
+    Preset,            ///< gaze smoothing preset arg (0 light, 1 medium, 2 strong)
+    HoldOn,            ///< gaze_hold_below = its default
+    HoldOff,           ///< gaze_hold_below = 0
+    CalibrationReset,  ///< calibration_reset + 1
+    ScaleAuto,         ///< lid_scale_left/right = null
+    ScaleFixed,        ///< lid_scale_left/right = the scales in use
+    PrefixFt,          ///< prefix = "/FT"
+    PrefixNone,        ///< prefix = ""
+    Language,          ///< language = arg (0 ja, 1 en)
+    AutostartOn,
+    AutostartOff,
+    PromptYes,         ///< apply the recommendation for output arg (the prompt closes itself)
+    PromptNo,
+    ResetAll,          ///< only returned on the confirming second press
+    Quit,              ///< only returned on the confirming second press
+};
+
+/** A button: its action, the config key it changes and an argument. */
+struct PanelHit {
+    PanelAction action = PanelAction::None;
+    const char* key = nullptr;
+    int arg = 0;
+
+    /** @return true if it is the same button */
+    bool operator==(const PanelHit& other) const;
+    /** @return true if it is another button */
+    bool operator!=(const PanelHit& other) const { return !(*this == other); }
+};
+
+/** The tabs. */
+enum class PanelTab { Basic, Gaze, Lids, Advanced };
+
+/**
+ * Draws the panel image and finds the button under the laser pointer.
+ */
+class EyePanel {
+public:
+    /** Seconds the quit / reset buttons wait for the confirming second press. */
+    static constexpr double kConfirmSec = 3.0;
+
+    /**
+     * @param fonts the fonts (must outlive the panel)
+     */
+    explicit EyePanel(const FontSet& fonts);
+    ~EyePanel();
+    EyePanel(const EyePanel&) = delete;
+    EyePanel& operator=(const EyePanel&) = delete;
+
+    /**
+     * Draw the panel from the model and the pointer state. Button positions are rebuilt here.
+     * @param model what to show
+     */
+    void render(const PanelModel& model);
+
+    /**
+     * The pointer moved.
+     * @param x px from the left
+     * @param y px from the top
+     * @return true if the button under it changed (redraw needed)
+     */
+    bool pointerMove(double x, double y);
+
+    /**
+     * A press. Tabs switch here. Quit and reset only return on a second press within kConfirmSec.
+     * While the recommendation prompt is open, only its buttons work.
+     * @param x px from the left
+     * @param y px from the top
+     * @param now monotonic seconds
+     * @return the button for the caller to carry out (None if nothing to do)
+     */
+    PanelHit pointerDown(double x, double y, double now);
+
+    /**
+     * The button was released.
+     * @return true if a redraw is needed
+     */
+    bool pointerUp();
+
+    /**
+     * The pointer left the panel.
+     * @return true if a redraw is needed
+     */
+    bool pointerLeave();
+
+    /**
+     * Expire the quit / reset confirmation.
+     * @param now monotonic seconds
+     * @return true if a redraw is needed
+     */
+    bool tick(double now);
+
+    /**
+     * Ask once whether to apply the recommended settings of an output type.
+     * @param output kOutputVrchat or kOutputEtvr
+     */
+    void showPrompt(const std::string& output);
+
+    /** @return true while the recommendation prompt is open */
+    bool promptOpen() const { return !promptOutput_.empty(); }
+
+    /**
+     * Choose the tab.
+     * @param tab the tab
+     */
+    void setTab(PanelTab tab) { tab_ = tab; }
+
+    /** @return the tab shown */
+    PanelTab tab() const { return tab_; }
+
+    /**
+     * The image as un-premultiplied RGBA for OpenVR.
+     * @return width() * height() * 4 bytes
+     */
+    const std::vector<uint8_t>& toRgba();
+
+    /**
+     * Save the image as PNG.
+     * @param path where to save it
+     * @return true if saved
+     */
+    bool writePng(const std::string& path) const;
+
+    /** For --dump-png: show "press again to quit". */
+    void armQuitForPreview();
+    /** For --dump-png: show "press again to reset". */
+    void armResetForPreview();
+
+    /** @return the image width (px) */
+    int width() const;
+    /** @return the image height (px) */
+    int height() const;
+
+private:
+    /** Hit area of one button. */
+    struct Button {
+        PanelHit hit;
+        double x, y, w, h;
+        bool usable;
+    };
+
+    /** One choice of a segmented control. */
+    struct Option {
+        std::string label;
+        PanelHit hit;
+        bool usable = true;
+    };
+
+    const FontSet& fonts_;
+    cairo_surface_t* surface_ = nullptr;
+    cairo_t* cr_ = nullptr;
+    std::vector<uint8_t> rgba_;
+    std::vector<Button> buttons_;
+    PanelHit hover_;
+    PanelHit pressed_;
+    PanelTab tab_ = PanelTab::Basic;
+    bool quitArmed_ = false;
+    double quitArmedUntil_ = 0.0;
+    bool resetArmed_ = false;
+    double resetArmedUntil_ = 0.0;
+    std::string promptOutput_;  ///< the output type the prompt asks about; empty = no prompt
+
+    /**
+     * Find the usable button at a point.
+     * @param x px from the left
+     * @param y px from the top
+     * @return the button, or action None
+     */
+    PanelHit hitTest(double x, double y) const;
+
+    /**
+     * Register a button's hit area.
+     * @param hit the button
+     * @param x left
+     * @param y top
+     * @param w width
+     * @param h height
+     * @param usable whether it can be pressed
+     */
+    void addButton(PanelHit hit, double x, double y, double w, double h, bool usable = true);
+
+    /**
+     * The pointer state of a button.
+     * @param hit the button
+     * @return 0 = idle, 1 = hovered, 2 = pressed
+     */
+    int pointerState(const PanelHit& hit) const;
+
+    /**
+     * The always-visible status column (left).
+     * @param pen drawing tools
+     * @param t texts
+     * @param model the model
+     */
+    void drawStatus(const Pen& pen, const UiText& t, const PanelModel& model);
+
+    /**
+     * The tab row.
+     * @param pen drawing tools
+     * @param t texts
+     */
+    void drawTabs(const Pen& pen, const UiText& t);
+
+    /**
+     * The Basic tab.
+     * @param pen drawing tools
+     * @param t texts
+     * @param model the model
+     * @param view the settings shown
+     */
+    void drawBasic(const Pen& pen, const UiText& t, const PanelModel& model, const SettingsView& view);
+
+    /**
+     * The Gaze tab.
+     * @param pen drawing tools
+     * @param t texts
+     * @param view the settings shown
+     */
+    void drawGaze(const Pen& pen, const UiText& t, const SettingsView& view);
+
+    /**
+     * The Eyelids tab.
+     * @param pen drawing tools
+     * @param t texts
+     * @param model the model
+     * @param view the settings shown
+     */
+    void drawLids(const Pen& pen, const UiText& t, const PanelModel& model, const SettingsView& view);
+
+    /**
+     * The Advanced tab.
+     * @param pen drawing tools
+     * @param t texts
+     * @param model the model
+     * @param view the settings shown
+     */
+    void drawAdvanced(const Pen& pen, const UiText& t, const PanelModel& model, const SettingsView& view);
+
+    /**
+     * The recommendation prompt over everything (only its buttons stay usable).
+     * @param pen drawing tools
+     * @param t texts
+     */
+    void drawPrompt(const Pen& pen, const UiText& t);
+
+    /**
+     * A row's title on the left, with a hint or the "locked" note under it.
+     * @param pen drawing tools
+     * @param t texts
+     * @param y row top
+     * @param h row height
+     * @param title the title
+     * @param hint the hint (may be empty)
+     * @param locked show the lock note instead of the hint
+     */
+    void drawRowLabel(const Pen& pen, const UiText& t, double y, double h, const std::string& title,
+                      const std::string& hint, bool locked);
+
+    /**
+     * A pill with 2 or more choices; the chosen one gets the accent fill, a check mark and bold text.
+     * @param pen drawing tools
+     * @param x left
+     * @param y top
+     * @param w width
+     * @param h height
+     * @param options the choices
+     * @param selected the chosen index, -1 if none
+     * @param size text size
+     * @param locked locked by the command line (gray, shows the value, can't be pressed)
+     */
+    void drawSegmented(const Pen& pen, double x, double y, double w, double h, const std::vector<Option>& options,
+                       int selected, double size, bool locked = false);
+
+    /**
+     * A − value ＋ control for one config key.
+     * @param pen drawing tools
+     * @param x left
+     * @param y top
+     * @param w width
+     * @param h height
+     * @param name the key (its step and range come from the key table)
+     * @param value the value now
+     * @param text the value as shown
+     * @param usable whether it can be changed now
+     * @param locked locked by the command line
+     * @param low extra lower bound
+     * @param high extra upper bound
+     */
+    void drawStepper(const Pen& pen, double x, double y, double w, double h, const char* name, double value,
+                     const std::string& text, bool usable, bool locked, double low = -1e9, double high = 1e9);
+
+    /**
+     * A caption above a stepper, optionally led by a numbered circle (the lid marks).
+     * @param pen drawing tools
+     * @param x left
+     * @param baseline text baseline
+     * @param text the caption
+     * @param number 1..4 for a numbered circle, 0 for none
+     * @param locked add a padlock (the value is locked by the command line)
+     */
+    void drawCaption(const Pen& pen, double x, double baseline, const std::string& text, int number, bool locked);
+};
+
+/**
+ * Draw the dashboard thumbnail (an eye and "Eye"). The launcher icons in contrib/icons are the same picture.
+ * @param fonts the fonts
+ * @param size edge length in px
+ * @param rgba where to write un-premultiplied RGBA
+ * @param pngPath also save a PNG here if not empty
+ */
+void renderThumbnail(const FontSet& fonts, int size, std::vector<uint8_t>& rgba, const std::string& pngPath = "");
