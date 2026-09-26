@@ -4,16 +4,16 @@ Sends the Steam Frame's eye tracking (gaze and eye openness) to VRChat over OSC,
 
 [日本語版はこちら](README.ja.md)
 
-This is a fork of [konsti219/frameeyeosc](https://github.com/konsti219/frameeyeosc), which found that the Steam Frame tracks eye openness as well as gaze, and exposes it only through an internal shared-memory object (`/dev/shm/eye-server.mmap`), not through any public API.
+This is a fork of [konsti219/frameeyeosc](https://github.com/konsti219/frameeyeosc). The Frame's public APIs only give you a combined gaze direction. konsti219 found that the eye tracker also measures how open each eye is and keeps it in an internal shared-memory object (`/dev/shm/eye-server.mmap`), and that is where this tool reads it from.
 
 ## What this fork adds
 
-- **Finds your PC by itself**: sends to the PC that Steam Link is streaming from. With the bundled wireless adapter this is the direct link, so your home network doesn't matter.
-- **Smoothing**: One Euro filters, a small deadzone that keeps the eyes still while you fixate, and the gaze is held while your eyes are shut (the Frame's gaze jumps as the eyes reopen).
-- **Both eyes share one gaze**: each eye's own gaze wobbles independently on the Frame, which looks like twitching eyes on an avatar. `--independent-eyes` restores per-eye gaze.
-- **Eyelids on the VRCFT scale**: VRCFT expects 0 = closed, 0.75 = relaxed, 1 = widened. A held-shut eye reads about 0.2 on the Frame rather than 0, and a relaxed eye wanders between about 0.75 and 0.9; both are accounted for.
-- **Eyelid auto-calibration**: learns how far each of your eyes opens when relaxed, so a face (or headset fit) that opens one eye more than the other still looks even. Winks are kept.
-- **Runs as a service**: starts with SteamVR and restarts if it stops.
+- It finds your PC on its own by sending to whichever PC Steam Link is streaming from. With the bundled wireless adapter that's the adapter's direct link, so your home network doesn't matter.
+- Gaze and eyelids are smoothed with One Euro filters. A small deadzone keeps the eyes still while you fixate, and the gaze is held while your eyes are shut, because the Frame's gaze jumps as the eyes reopen.
+- Both eyes share one gaze. On the Frame each eye's gaze wobbles on its own, which makes an avatar's eyes twitch. `--independent-eyes` switches back to per-eye gaze.
+- Eyelid values are mapped onto the VRCFT scale (0 closed, 0.75 relaxed, 1 widened). A held-shut eye reads about 0.2 on the Frame, and a relaxed eye wanders between about 0.75 and 0.9.
+- Eyelids calibrate themselves. It learns how far each of your eyes opens when relaxed, so if your face or the headset fit makes one eye look more open, the avatar still looks even. Winks still come through.
+- It runs as a service that starts with SteamVR and restarts if it stops.
 
 ## Requirements
 
@@ -39,7 +39,7 @@ cd frameeyeosc
 
 No sudo is needed. Everything goes into your home directory (`~/.local/bin`, `~/.config`), so SteamOS updates don't remove it. Run the same command again to update.
 
-**Then, on your PC, turn off Steam Link's own OSC output** (SteamVR settings > Steam Link > OSC). Steam Link sends its own, unsmoothed eye data to VRChat, and with both running the avatar's eyes get driven twice.
+After that, turn off Steam Link's own OSC output on your PC (SteamVR settings > Steam Link > OSC). Steam Link sends its own unsmoothed eye data to VRChat, and with both running, two sources fight over the avatar's eyes.
 
 To remove it: `./install.sh --uninstall` (add `--purge` to also delete settings and calibration).
 
@@ -96,9 +96,9 @@ Eyelid calibration is automatic. For the first 20 seconds after you put the head
 ## Disclaimer
 
 - Use at your own risk. The software comes with no warranty (see [LICENSE](LICENSE)).
-- This reads a **private, undocumented** shared-memory layout (version 4) of the headset's eye tracker. A SteamOS update can change it; the program then refuses to start with an "unsupported eye shared-memory version" error until it is updated.
-- It doesn't modify SteamOS or any system files, and needs no root. It only accesses the eye tracker's shared memory the way a client of it does (taking its lock and asking for the next sample).
-- This is an unofficial project, not affiliated with or endorsed by Valve Corporation or VRChat Inc. Steam, Steam Frame, SteamVR and Steam Link are trademarks of Valve Corporation; VRChat is a trademark of VRChat Inc. The names are used only to say what this works with.
+- It reads the eye tracker's private, undocumented shared-memory layout (version 4). A SteamOS update can change that layout. If it does, the program stops with an "unsupported eye shared-memory version" error until frameeyeosc is updated.
+- It needs no root and leaves SteamOS and its files alone. It uses the eye tracker's shared memory the same way the tracker's own clients do, taking its lock and asking for the next sample.
+- This is an unofficial project with no affiliation with or endorsement from Valve Corporation or VRChat Inc. Steam, Steam Frame, SteamVR and Steam Link are trademarks of Valve Corporation, and VRChat is a trademark of VRChat Inc. The names are used here only to say what this works with.
 
 ## Development
 
