@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 (unreleased)
+## 0.3.0 (2026-09-27)
 
 - Settings can now live in `~/.config/frameeyeosc/config.json`. It is checked once a second and changes apply without a restart. If the file is broken, the previous settings stay in use. Options in `env` still win over the file.
 - New settings panel for the SteamVR dashboard, `frameeyeosc-panel`. It changes every setting from inside the headset, in Japanese or English. Install it with `./install.sh --with-panel`. frameeyeosc keeps sending without it.
