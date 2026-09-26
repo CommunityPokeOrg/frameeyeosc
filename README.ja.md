@@ -45,6 +45,12 @@ sudo は要りません。全部ホームフォルダ（`~/.local/bin`、`~/.con
 
 インストールしたら、PC 側で Steam Link の OSC 送信を OFF にしてください（SteamVR の設定 → Steam Link → OSC）。Steam Link もスムージングなしの目のデータを VRChat に送っているので、両方が動いているとアバターの目を2つのデータが取り合ってしまいます。ETVR モードでも同じです（アバターの目を動かすのが VRCFaceTracking になるだけです）。
 
+### 0.2.0 から更新するとき
+
+新しい tar.gz を上と同じ手順でコピーして広げ、`./install.sh --with-panel`（パネルがいらなければ `./install.sh`）を実行するだけです。`~/.config/frameeyeosc/env` と学習したまぶたの値はそのまま使われ、サービスも新しい版で起動し直します。
+
+`env` の `FRAMEEYEOSC_ARGS` に書いたオプションは、今までどおり効きます。ただし、そこに書いた項目はパネルでは「コマンドで固定中」になって変えられません。パネルで変えたい項目は `env` から消して、`systemctl --user restart frameeyeosc` してください（値はパネルで設定し直します）。
+
 削除は `./install.sh --uninstall`（パネルも消えます。設定と学習値も消すなら `--purge` を付ける）。
 
 ## パネル

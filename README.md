@@ -45,6 +45,12 @@ No sudo is needed. Everything goes into your home directory (`~/.local/bin`, `~/
 
 After that, turn off Steam Link's own OSC output on your PC (SteamVR settings > Steam Link > OSC). Steam Link sends its own unsmoothed eye data to VRChat, and with both running, two sources fight over the avatar's eyes. This is needed in the ETVR mode too, where VRCFaceTracking drives the avatar's eyes.
 
+### Updating from 0.2.0
+
+Copy and unpack the new tarball as above and run `./install.sh --with-panel` (or `./install.sh` without the panel). Your `~/.config/frameeyeosc/env` and the learned eyelid calibration are kept, and the service restarts on the new version.
+
+Options in `FRAMEEYEOSC_ARGS` in `env` still work as before. But anything set there is locked in the panel ("Locked by command line"). To change it from the panel, remove it from `env`, run `systemctl --user restart frameeyeosc`, and set the value again in the panel.
+
 To remove it: `./install.sh --uninstall` (removes the panel too; add `--purge` to also delete settings and calibration).
 
 ## Panel

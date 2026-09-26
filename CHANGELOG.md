@@ -7,6 +7,7 @@
 - `--output etvr` sends in the format VRCFaceTracking's ETVR Tracking Module reads (UDP 8889), so the eyes can go through VRCFaceTracking together with other trackers. Widened eyes don't come through in this mode.
 - Sending can be paused, the learned eyelid calibration can be reset, and the parameter prefix can be turned off (`--prefix ""`).
 - frameeyeosc writes what it is doing to `$XDG_RUNTIME_DIR/frameeyeosc/status.json` ten times a second. The panel reads it.
+- Small changes from 0.2.0: a `--target` host name that doesn't resolve is retried every 5 seconds instead of stopping the program, and errors about bad options use the setting names (`lid_closed must be below lid_open`).
 
 ## 0.2.0 (2026-09-26)
 
