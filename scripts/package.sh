@@ -17,7 +17,7 @@ stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 mkdir "$stage/frameeyeosc"
 cp target/release/frameeyeosc install.sh contrib/frameeyeosc.service contrib/frameeyeosc.env.example \
-    LICENSE README.md README.ja.md "$stage/frameeyeosc/"
+    LICENSE THIRD_PARTY_LICENSES.md README.md README.ja.md CHANGELOG.md "$stage/frameeyeosc/"
 mkdir -p dist
 tar -C "$stage" -czf "dist/$name.tar.gz" frameeyeosc
 echo "dist/$name.tar.gz"

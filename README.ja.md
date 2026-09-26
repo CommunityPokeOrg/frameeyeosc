@@ -17,13 +17,19 @@ Steam Frame のアイトラッキング（視線とまぶたの開き具合）�
 
 ## 必要なもの
 
-- 開発者モードを有効にして SSH で入れる Steam Frame（設定 → システム → 開発者モードを有効化、開発者の項目でパスワードを設定）
+- 開発者モードを有効にして SSH で入れる Steam Frame（設定 → システム → 開発者モードを有効化、開発者の項目でパスワードを設定）。SSH を有効にすると、同じネットワークにいてパスワードを知っている人は誰でもヘッドセットに入れるので、推測されにくいパスワードにしてください
 - Steam Link でストリーミングしている PC 版 VRChat（Action Menu → Options → OSC → Enabled）
 - VRCFaceTracking の目のパラメータ（`FT/v2/EyeLeftX`、`EyeLidLeft` など）を float で持つアバター。パラメータをビットに詰める「バイナリパラメータ」のアバターにはまだ対応していません
 
 ## インストール
 
-リリースの tar.gz をヘッドセットにコピーして、ヘッドセット上で:
+リリースページから tar.gz をダウンロードして、ヘッドセットにコピーします。PC からなら例えば:
+
+```sh
+scp frameeyeosc-*-steamframe-aarch64.tar.gz steamos@<ヘッドセットのIP>:
+```
+
+そのあとヘッドセット上で（`ssh steamos@<ヘッドセットのIP>`）:
 
 ```sh
 tar xzf frameeyeosc-*-steamframe-aarch64.tar.gz
@@ -69,13 +75,27 @@ FRAMEEYEOSC_ARGS="--gaze-min-cutoff 0.3 --lid-sync 0.6"
 
 - ログ: `journalctl --user -u frameeyeosc -f`
 - `No Steam Link connection found; waiting for one`: Steam Link がまだつながっていません。または `--target` で PC のアドレスを指定してください
+- ログに `Sending OSC to ...` と出ているのにアバターが反応しない: VRChat の OSC が有効か、Windows のファイアウォールでその通信が届くネットワーク上の VRChat の受信が許可されているかを確認してください。付属の無線アダプタは Windows では別のネットワークとして見え、たいてい「パブリック」になっています
+- ヘッドセットの起動直後に `Error: ... No such file or directory` と出る: 問題ありません。アイトラッキングがまだ起動していないだけで、数秒後に自動で再試行します
 - ヘッドセットを外していると何も動かない: 正常です。Frame は被っている間しか目を追いません
 
-## 注意
+## 既知の問題
 
-- Valve の**非公開・非公式**の共有メモリの形式（バージョン4）を読んでいます。SteamOS の更新で変わる可能性があり、その場合は「unsupported eye shared-memory version」のエラーで起動しなくなります（対応版が出るまで使えません）
-- Valve とは関係ありません
-- 目のデータは暗号化せずにローカルネットワークで PC に送ります
+- Steam Link が付属の無線アダプタではなく家の Wi-Fi 経由でつながったとき、アイトラッキングが VRChat に届かないことがあります。調査中です。それまでは `--target <PC の LAN のアドレス>:9000` を試してみてください
+- パラメータをビットに詰める「バイナリパラメータ」の VRCFT アバターにはまだ対応していません
+
+## プライバシー
+
+- 視線とまぶたの値は上の送り先（あなたの PC）にだけ送ります。テレメトリはなく、インターネットにも接続しません
+- 保存するのは、左右それぞれの目の「普段の開き具合」の学習値2つだけです（`~/.config/frameeyeosc/calibration`）。目のデータそのものはディスクに書きません
+- OSC は暗号化されないので、同じネットワーク上の他の機器から読める可能性があります
+
+## 免責事項
+
+- 自己責任でお使いください。本ソフトウェアは無保証です（[LICENSE](LICENSE) を参照）
+- ヘッドセットのアイトラッキングの**非公開・非公式**の共有メモリの形式（バージョン4）を読んでいます。SteamOS の更新で変わる可能性があり、その場合は「unsupported eye shared-memory version」のエラーで起動しなくなります（対応版が出るまで使えません）
+- SteamOS やシステムのファイルは一切変更せず、root 権限も使いません。アイトラッキングの共有メモリに、本来の利用側と同じやり方（ロックを取って次のサンプルを要求する）でアクセスするだけです
+- 非公式のプロジェクトで、Valve Corporation および VRChat Inc. とは関係なく、承認も受けていません。Steam、Steam Frame、SteamVR、Steam Link は Valve Corporation の商標、VRChat は VRChat Inc. の商標です。対応製品を示す目的でのみ名前を使っています
 
 ## 開発
 
@@ -90,4 +110,4 @@ scripts/package.sh   # dist/frameeyeosc-<version>-steamframe-aarch64.tar.gz を�
 
 ## ライセンス
 
-MIT。[LICENSE](LICENSE) を参照してください。元の作品は konsti219 によるものです。
+MIT。[LICENSE](LICENSE) を参照してください。元の作品は konsti219 によるものです。同梱している Rust のライブラリのライセンスは [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) に、変更履歴は [CHANGELOG.md](CHANGELOG.md) にあります。

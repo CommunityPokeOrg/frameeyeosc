@@ -17,13 +17,19 @@ This is a fork of [konsti219/frameeyeosc](https://github.com/konsti219/frameeyeo
 
 ## Requirements
 
-- A Steam Frame with Developer Mode on and SSH access (Settings > System > Developer Mode, then set a password under Developer).
+- A Steam Frame with Developer Mode on and SSH access (Settings > System > Developer Mode, then set a password under Developer). Choose a strong password: with SSH on, anyone on your network who knows it can log in to the headset.
 - PC VRChat streamed with Steam Link, OSC enabled in VRChat (Action Menu > Options > OSC > Enabled).
 - An avatar with VRCFaceTracking eye parameters (`FT/v2/EyeLeftX`, `EyeLidLeft`, ...) as floats. Avatars that pack parameters into binary bits are not supported yet.
 
 ## Install
 
-Copy the release tarball to the headset, then on the headset:
+Download the tarball from the releases page and copy it to the headset, for example from your PC:
+
+```sh
+scp frameeyeosc-*-steamframe-aarch64.tar.gz steamos@<headset-ip>:
+```
+
+Then on the headset (`ssh steamos@<headset-ip>`):
 
 ```sh
 tar xzf frameeyeosc-*-steamframe-aarch64.tar.gz
@@ -69,13 +75,27 @@ Eyelid calibration is automatic. For the first 20 seconds after you put the head
 
 - Logs: `journalctl --user -u frameeyeosc -f`
 - `No Steam Link connection found; waiting for one`: Steam Link isn't streaming yet, or use `--target` with your PC's address.
+- The log says `Sending OSC to ...` but the avatar doesn't react: check that OSC is enabled in VRChat and that Windows Firewall lets VRChat receive on the network it arrives on. The bundled wireless adapter shows up in Windows as its own network, usually with the "Public" profile.
+- `Error: ... No such file or directory` right after the headset boots: harmless. The eye tracker isn't up yet, and the service retries a few seconds later.
 - Nothing moves while the headset is off your face: expected, the Frame only tracks while worn.
 
-## Caveats
+## Known issues
 
-- This reads a **private, undocumented** shared-memory layout (version 4). A SteamOS update can change it; the program then refuses to start with an "unsupported eye shared-memory version" error until it is updated.
-- Not affiliated with or endorsed by Valve.
-- Eye data is sent unencrypted over your local network to your PC.
+- When Steam Link streams over your home Wi-Fi instead of the bundled wireless adapter, eye tracking may not reach VRChat. This is being investigated; `--target <your PC's LAN address>:9000` is worth trying meanwhile.
+- Avatars that use binary (bit-packed) VRCFT parameters are not supported yet.
+
+## Privacy
+
+- frameeyeosc sends gaze and eyelid values only to the destination above (your PC). It has no telemetry and doesn't talk to the internet.
+- The only thing it stores is two numbers, each eye's learned relaxed openness, in `~/.config/frameeyeosc/calibration`. Eye data itself is never written to disk.
+- The OSC messages are unencrypted, so other devices on the same network could read them.
+
+## Disclaimer
+
+- Use at your own risk. The software comes with no warranty (see [LICENSE](LICENSE)).
+- This reads a **private, undocumented** shared-memory layout (version 4) of the headset's eye tracker. A SteamOS update can change it; the program then refuses to start with an "unsupported eye shared-memory version" error until it is updated.
+- It doesn't modify SteamOS or any system files, and needs no root. It only accesses the eye tracker's shared memory the way a client of it does (taking its lock and asking for the next sample).
+- This is an unofficial project, not affiliated with or endorsed by Valve Corporation or VRChat Inc. Steam, Steam Frame, SteamVR and Steam Link are trademarks of Valve Corporation; VRChat is a trademark of VRChat Inc. The names are used only to say what this works with.
 
 ## Development
 
@@ -90,4 +110,4 @@ The changes in this fork were written with an AI assistant (Claude) and checked 
 
 ## License
 
-MIT. See [LICENSE](LICENSE); the original work is by konsti219.
+MIT. See [LICENSE](LICENSE); the original work is by konsti219. Licenses of the bundled Rust crates are in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
