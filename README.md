@@ -75,13 +75,16 @@ Eyelid calibration is automatic. For the first 20 seconds after you put the head
 
 - Logs: `journalctl --user -u frameeyeosc -f`
 - `No Steam Link connection found; waiting for one`: Steam Link isn't streaming yet, or use `--target` with your PC's address.
-- The log says `Sending OSC to ...` but the avatar doesn't react: check that OSC is enabled in VRChat and that Windows Firewall lets VRChat receive on the network it arrives on. The bundled wireless adapter shows up in Windows as its own network, usually with the "Public" profile.
+- The log says `Sending OSC to ...` but the avatar doesn't react: check that OSC is enabled in VRChat, then check Windows Firewall. VRChat's own inbound rule is often allowed for the "Public" profile only, so OSC from a "Private" home network gets dropped. Note the rule must be for `VRChat.exe`, not `launch.exe`. A narrow rule that fixes it (PowerShell as administrator):
+  ```powershell
+  New-NetFirewallRule -DisplayName "VRChat OSC (LAN UDP 9000)" -Direction Inbound -Action Allow -Protocol UDP -LocalPort 9000 -RemoteAddress LocalSubnet -Program "C:\Program Files (x86)\Steam\steamapps\common\VRChat\VRChat.exe" -Profile Private
+  ```
+  The bundled wireless adapter shows up in Windows as its own network, usually with the "Public" profile.
 - `Error: ... No such file or directory` right after the headset boots: harmless. The eye tracker isn't up yet, and the service retries a few seconds later.
 - Nothing moves while the headset is off your face: expected, the Frame only tracks while worn.
 
 ## Known issues
 
-- When Steam Link streams over your home Wi-Fi instead of the bundled wireless adapter, eye tracking may not reach VRChat. This is being investigated; `--target <your PC's LAN address>:9000` is worth trying meanwhile.
 - Avatars that use binary (bit-packed) VRCFT parameters are not supported yet.
 
 ## Privacy

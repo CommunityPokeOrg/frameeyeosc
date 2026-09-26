@@ -75,13 +75,16 @@ FRAMEEYEOSC_ARGS="--gaze-min-cutoff 0.3 --lid-sync 0.6"
 
 - ログ: `journalctl --user -u frameeyeosc -f`
 - `No Steam Link connection found; waiting for one`: Steam Link がまだつながっていません。または `--target` で PC のアドレスを指定してください
-- ログに `Sending OSC to ...` と出ているのにアバターが反応しない: VRChat の OSC が有効か、Windows のファイアウォールでその通信が届くネットワーク上の VRChat の受信が許可されているかを確認してください。付属の無線アダプタは Windows では別のネットワークとして見え、たいてい「パブリック」になっています
+- ログに `Sending OSC to ...` と出ているのにアバターが反応しない: VRChat の OSC が有効かを確認したうえで、Windows のファイアウォールを確認してください。VRChat の受信許可は「パブリック」だけになっていることが多く、「プライベート」の家のネットワークから届く OSC は止められます。許可の対象が `launch.exe` ではなく `VRChat.exe` になっているかにも注意してください。範囲をしぼって許可するには（管理者の PowerShell で）:
+  ```powershell
+  New-NetFirewallRule -DisplayName "VRChat OSC (LAN UDP 9000)" -Direction Inbound -Action Allow -Protocol UDP -LocalPort 9000 -RemoteAddress LocalSubnet -Program "C:\Program Files (x86)\Steam\steamapps\common\VRChat\VRChat.exe" -Profile Private
+  ```
+  付属の無線アダプタは Windows では別のネットワークとして見え、たいてい「パブリック」になっています
 - ヘッドセットの起動直後に `Error: ... No such file or directory` と出る: 問題ありません。アイトラッキングがまだ起動していないだけで、数秒後に自動で再試行します
 - ヘッドセットを外していると何も動かない: 正常です。Frame は被っている間しか目を追いません
 
 ## 既知の問題
 
-- Steam Link が付属の無線アダプタではなく家の Wi-Fi 経由でつながったとき、アイトラッキングが VRChat に届かないことがあります。調査中です。それまでは `--target <PC の LAN のアドレス>:9000` を試してみてください
 - パラメータをビットに詰める「バイナリパラメータ」の VRCFT アバターにはまだ対応していません
 
 ## プライバシー
