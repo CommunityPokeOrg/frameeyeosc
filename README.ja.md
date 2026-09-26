@@ -4,7 +4,7 @@ Steam Frame のアイトラッキング（視線とまぶたの開き具合）�
 
 [English](README.md)
 
-[konsti219/frameeyeosc](https://github.com/konsti219/frameeyeosc) のフォークです。元のプロジェクトは、Steam Frame が視線だけでなくまぶたの開き具合も取っていて、それが公開 API ではなく内部の共有メモリ（`/dev/shm/eye-server.mmap`）にだけ出ていることを突き止めました。
+[konsti219/frameeyeosc](https://github.com/konsti219/frameeyeosc) をフォークしたものです。Steam Frame のまぶたのデータは公開 API からは取れないのですが、元のプロジェクトが内部の共有メモリ（`/dev/shm/eye-server.mmap`）から読めることを見つけてくれたおかげで、このツールを作ることができました。
 
 ## このフォークで足したもの
 
