@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+- Settings can now live in `~/.config/frameeyeosc/config.json`. It is checked once a second and changes apply without a restart. If the file is broken, the previous settings stay in use. Options in `env` still win over the file.
+- New settings panel for the SteamVR dashboard, `frameeyeosc-panel`. It changes every setting from inside the headset, in Japanese or English. Install it with `./install.sh --with-panel`. frameeyeosc keeps sending without it.
+- `--output etvr` sends in the format VRCFaceTracking's ETVR Tracking Module reads (UDP 8889), so the eyes can go through VRCFaceTracking together with other trackers. Widened eyes don't come through in this mode.
+- Sending can be paused, the learned eyelid calibration can be reset, and the parameter prefix can be turned off (`--prefix ""`).
+- frameeyeosc writes what it is doing to `$XDG_RUNTIME_DIR/frameeyeosc/status.json` ten times a second. The panel reads it.
+
 ## 0.2.0 (2026-09-26)
 
 First release of this fork, based on [konsti219/frameeyeosc](https://github.com/konsti219/frameeyeosc) at `b9f0c01`.
