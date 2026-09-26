@@ -10,6 +10,7 @@ use std::os::unix::fs::MetadataExt;
 use std::io;
 use std::mem::{align_of, offset_of, size_of};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
+use std::path::{Path, PathBuf};
 use std::ptr;
 use std::time::{Duration, Instant};
 
@@ -25,6 +26,17 @@ const MAX_GAP: f64 = 0.25;
 const LID_D_CUTOFF: f32 = 1.0;
 // How often the Steam Link PC is looked up again, to follow reconnects over another network.
 const RESOLVE_INTERVAL: Duration = Duration::from_secs(5);
+// Eyelid auto calibration keeps a decaying histogram of each eye's open readings (0.005 wide bins).
+const CAL_BINS: usize = 300;
+const CAL_BIN_WIDTH: f32 = 0.005;
+// Readings fade with a 10 minute half-life at ~90 Hz, so a short squint barely moves the estimate.
+const CAL_HALF_LIFE_SAMPLES: f32 = 90.0 * 600.0;
+// Only readings above this fraction of the current estimate count as "open".
+const CAL_GATE: f32 = 0.85;
+// Weight (~10 s of open eyes) before the histogram overrides the saved or default estimate.
+const CAL_WARMUP_WEIGHT: f32 = 900.0;
+const CAL_SCALE_RANGE: (f32, f32) = (0.75, 1.33);
+const CAL_SAVE_INTERVAL: Duration = Duration::from_secs(60);
 
 #[repr(C)]
 struct EyeServerMmap {
@@ -125,12 +137,18 @@ struct Args {
     /// Frame openness of a fully widened eye (VRCFT 1.0)
     #[arg(long, default_value_t = 1.00)]
     lid_wide: f32,
-    /// Multiplier on the left eye's Frame openness, to even out faces that open one eye wider
-    #[arg(long, default_value_t = 1.0)]
-    lid_scale_left: f32,
-    /// Multiplier on the right eye's Frame openness
-    #[arg(long, default_value_t = 1.0)]
-    lid_scale_right: f32,
+    /// Fixed multiplier on the left eye's Frame openness; overrides auto calibration for that eye
+    #[arg(long)]
+    lid_scale_left: Option<f32>,
+    /// Fixed multiplier on the right eye's Frame openness; overrides auto calibration for that eye
+    #[arg(long)]
+    lid_scale_right: Option<f32>,
+    /// Turn off learning each eye's relaxed openness (eyes without a fixed scale use 1.0)
+    #[arg(long)]
+    no_lid_calibration: bool,
+    /// Where learned eyelid calibration is kept between runs [default: ~/.config/frameeyeosc/calibration]
+    #[arg(long)]
+    calibration_file: Option<PathBuf>,
     /// Pull both eyelids toward their average when they differ by less than this (VRCFT units);
     /// larger differences such as winks pass through untouched. 0 disables
     #[arg(long, default_value_t = 0.4)]
@@ -261,6 +279,123 @@ impl Smoother {
         self.last_time = None;
         self.last_gaze = None;
     }
+}
+
+/// Learns each eye's relaxed openness while in use, so a face that opens one eye less than the
+/// other still maps both eyes' normal state onto --lid-open.
+struct LidCalibration {
+    histograms: [Vec<f32>; 2],
+    relaxed: [f32; 2],
+    decay: f32,
+    path: Option<PathBuf>,
+    saved: [f32; 2],
+    last_save: Instant,
+}
+
+impl LidCalibration {
+    /// Start from the saved calibration if there is one, else assume both eyes relax at `default`.
+    fn load(path: Option<PathBuf>, default: f32) -> Self {
+        let saved = path
+            .as_deref()
+            .and_then(|path| fs::read_to_string(path).ok())
+            .map_or([default; 2], |text| parse_calibration(&text, default));
+        Self {
+            histograms: [vec![0.0; CAL_BINS], vec![0.0; CAL_BINS]],
+            relaxed: saved,
+            decay: 0.5_f32.powf(1.0 / CAL_HALF_LIFE_SAMPLES),
+            path,
+            saved,
+            last_save: Instant::now(),
+        }
+    }
+
+    fn observe(&mut self, openness: [f32; 2]) {
+        let decay = self.decay;
+        for ((histogram, relaxed), reading) in self
+            .histograms
+            .iter_mut()
+            .zip(&mut self.relaxed)
+            .zip(openness)
+        {
+            histogram.iter_mut().for_each(|weight| *weight *= decay);
+            if reading > CAL_GATE * *relaxed && reading < 1.0 {
+                histogram[((reading / CAL_BIN_WIDTH) as usize).min(CAL_BINS - 1)] += 1.0;
+            }
+            let total: f32 = histogram.iter().sum();
+            if total < CAL_WARMUP_WEIGHT {
+                continue;
+            }
+            let mut cumulative = 0.0;
+            if let Some(bin) = histogram.iter().position(|weight| {
+                cumulative += weight;
+                cumulative >= total / 2.0
+            }) {
+                *relaxed = (bin as f32 + 0.5) * CAL_BIN_WIDTH;
+            }
+        }
+    }
+
+    /// Per-eye multipliers that bring each eye's relaxed openness to `lid_open`.
+    fn scales(&self, lid_open: f32) -> [f32; 2] {
+        self.relaxed
+            .map(|relaxed| (lid_open / relaxed).clamp(CAL_SCALE_RANGE.0, CAL_SCALE_RANGE.1))
+    }
+
+    fn save_if_due(&mut self) {
+        let Some(path) = &self.path else {
+            return;
+        };
+        if self.last_save.elapsed() < CAL_SAVE_INTERVAL {
+            return;
+        }
+        self.last_save = Instant::now();
+        if self
+            .relaxed
+            .iter()
+            .zip(&self.saved)
+            .all(|(now, saved)| (now - saved).abs() < 0.001)
+        {
+            return;
+        }
+        match write_calibration(path, self.relaxed) {
+            Ok(()) => {
+                let [left, right] = self.relaxed;
+                eprintln!("Saved eyelid calibration: left relaxes at {left:.3}, right at {right:.3}");
+                self.saved = self.relaxed;
+            }
+            Err(error) => eprintln!("Could not save {}: {error}", path.display()),
+        }
+    }
+}
+
+fn default_calibration_file() -> Option<PathBuf> {
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+    Some(config.join("frameeyeosc").join("calibration"))
+}
+
+/// Saved as `left_relaxed=0.818` / `right_relaxed=0.777` lines; anything unreadable falls back to `default`.
+fn parse_calibration(text: &str, default: f32) -> [f32; 2] {
+    let value = |key: &str| {
+        text.lines()
+            .find_map(|line| line.strip_prefix(key)?.strip_prefix('=')?.trim().parse::<f32>().ok())
+            .filter(|value| (0.3..=1.2).contains(value))
+            .unwrap_or(default)
+    };
+    [value("left_relaxed"), value("right_relaxed")]
+}
+
+fn write_calibration(path: &Path, [left, right]: [f32; 2]) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let temporary = path.with_extension("tmp");
+    fs::write(
+        &temporary,
+        format!("left_relaxed={left:.4}\nright_relaxed={right:.4}\n"),
+    )?;
+    fs::rename(temporary, path)
 }
 
 /// Blend the two eyelids together in proportion to how close they already are:
@@ -568,6 +703,7 @@ fn send_eye_data(
     output: &Output,
     args: &Args,
     smoother: &mut Smoother,
+    calibration: &LidCalibration,
     data: EyeData,
 ) -> Result<(), Box<dyn Error>> {
     let prefix = format!("/avatar/parameters{}", args.prefix.trim_end_matches('/'));
@@ -583,11 +719,16 @@ fn send_eye_data(
         ([x, y], [x, y])
     };
     let mut gaze = [left[0], left[1], right[0], right[1], x, y];
-    let [left_openness, right_openness] = data.openness;
-    let mut lids = [
-        lid_to_vrcft(left_openness * args.lid_scale_left, args),
-        lid_to_vrcft(right_openness * args.lid_scale_right, args),
+    let learned = if args.no_lid_calibration {
+        [1.0; 2]
+    } else {
+        calibration.scales(args.lid_open)
+    };
+    let scales = [
+        args.lid_scale_left.unwrap_or(learned[0]),
+        args.lid_scale_right.unwrap_or(learned[1]),
     ];
+    let mut lids = [0, 1].map(|eye| lid_to_vrcft(data.openness[eye] * scales[eye], args));
     if !args.raw {
         let hold_gaze = data
             .openness
@@ -650,6 +791,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if ![args.lid_scale_left, args.lid_scale_right]
         .iter()
+        .flatten()
         .all(|scale| scale.is_finite() && *scale > 0.0)
     {
         return Err("--lid-scale-left/right must be positive".into());
@@ -658,6 +800,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("--lid-sync must be non-negative".into());
     }
     let mut smoother = Smoother::new(&args);
+    let mut calibration = LidCalibration::load(
+        (!args.no_lid_calibration)
+            .then(|| args.calibration_file.clone().or_else(default_calibration_file))
+            .flatten(),
+        args.lid_open,
+    );
     let target = if args.target == "auto" {
         Target::SteamLink { port: args.port }
     } else {
@@ -681,7 +829,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                     && data.fixation_point.iter().all(|value| value.is_finite())
                     && data.openness.iter().all(|value| value.is_finite()) =>
             {
-                send_eye_data(&output, &args, &mut smoother, data)?;
+                if !args.no_lid_calibration {
+                    calibration.observe(data.openness);
+                    calibration.save_if_due();
+                }
+                send_eye_data(&output, &args, &mut smoother, &calibration, data)?;
                 active = true;
             }
             _ if active => {
@@ -773,6 +925,44 @@ mod tests {
             Some(IpAddr::V4(Ipv4Addr::new(10, 35, 78, 26)))
         );
         assert_eq!(connected_udp_peer(table, &[111, 222].into()), None);
+    }
+
+    fn wobble(i: usize) -> f32 {
+        [-0.02, 0.0, 0.02][i % 3]
+    }
+
+    #[test]
+    fn lid_calibration_learns_each_eyes_relaxed_openness() {
+        let mut calibration = LidCalibration::load(None, 0.80);
+        for i in 0..90 * 30 {
+            calibration.observe([0.82 + wobble(i), 0.78 + wobble(i)]);
+        }
+        let [left, right] = calibration.relaxed;
+        assert!((left - 0.82).abs() < 0.01 && (right - 0.78).abs() < 0.01, "{left} {right}");
+        let [scale_left, scale_right] = calibration.scales(0.80);
+        assert!((0.82 * scale_left - 0.78 * scale_right).abs() < 0.01);
+    }
+
+    #[test]
+    fn lid_calibration_shrugs_off_a_minute_of_squinting() {
+        let mut calibration = LidCalibration::load(None, 0.80);
+        for i in 0..90 * 120 {
+            calibration.observe([0.82 + wobble(i); 2]);
+        }
+        for _ in 0..90 * 60 {
+            calibration.observe([0.66; 2]);
+        }
+        assert!((calibration.relaxed[0] - 0.82).abs() < 0.01, "{}", calibration.relaxed[0]);
+    }
+
+    #[test]
+    fn lid_calibration_file_round_trips() {
+        let dir = std::env::temp_dir().join(format!("frameeyeosc-test-{}", std::process::id()));
+        let path = dir.join("calibration");
+        write_calibration(&path, [0.818, 0.777]).unwrap();
+        assert_eq!(LidCalibration::load(Some(path), 0.80).relaxed, [0.818, 0.777]);
+        assert_eq!(parse_calibration("left_relaxed=abc\nright_relaxed=5\n", 0.80), [0.80, 0.80]);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
