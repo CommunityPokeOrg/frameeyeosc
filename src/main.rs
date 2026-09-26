@@ -117,6 +117,16 @@ struct Args {
     /// Frame openness of a fully widened eye (VRCFT 1.0)
     #[arg(long, default_value_t = 1.00)]
     lid_wide: f32,
+    /// Multiplier on the left eye's Frame openness, to even out faces that open one eye wider
+    #[arg(long, default_value_t = 1.0)]
+    lid_scale_left: f32,
+    /// Multiplier on the right eye's Frame openness
+    #[arg(long, default_value_t = 1.0)]
+    lid_scale_right: f32,
+    /// Pull both eyelids toward their average when they differ by less than this (VRCFT units);
+    /// larger differences such as winks pass through untouched. 0 disables
+    #[arg(long, default_value_t = 0.4)]
+    lid_sync: f32,
 }
 
 /// One Euro filter: smooths hard while the signal is still and loosens up as it moves fast.
@@ -243,6 +253,17 @@ impl Smoother {
         self.last_time = None;
         self.last_gaze = None;
     }
+}
+
+/// Blend the two eyelids together in proportion to how close they already are:
+/// equal lids stay equal, small asymmetries fade out, and a wink (large difference) is left alone.
+fn sync_lids([left, right]: [f32; 2], threshold: f32) -> [f32; 2] {
+    if threshold <= 0.0 {
+        return [left, right];
+    }
+    let weight = (1.0 - (left - right).abs() / threshold).clamp(0.0, 1.0);
+    let average = (left + right) / 2.0;
+    [left + weight * (average - left), right + weight * (average - right)]
 }
 
 /// Map Frame eye openness onto VRCFT EyeLid, where 0 is closed, 0.75 relaxed open and 1 widened.
@@ -411,7 +432,11 @@ fn send_eye_data(
         ([x, y], [x, y])
     };
     let mut gaze = [left[0], left[1], right[0], right[1], x, y];
-    let mut lids = data.openness.map(|openness| lid_to_vrcft(openness, args));
+    let [left_openness, right_openness] = data.openness;
+    let mut lids = [
+        lid_to_vrcft(left_openness * args.lid_scale_left, args),
+        lid_to_vrcft(right_openness * args.lid_scale_right, args),
+    ];
     if !args.raw {
         let hold_gaze = data
             .openness
@@ -419,6 +444,7 @@ fn send_eye_data(
             .any(|openness| *openness < args.gaze_hold_below);
         smoother.apply(data.sample_time, &mut gaze, &mut lids, hold_gaze);
     }
+    let lids = sync_lids(lids, args.lid_sync);
     let [left_x, left_y, right_x, right_y, x, y] = gaze;
     for (suffix, value) in [
         ("EyeLeftX", left_x),
@@ -472,6 +498,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     if !args.gaze_hold_below.is_finite() {
         return Err("--gaze-hold-below must be a number".into());
+    }
+    if ![args.lid_scale_left, args.lid_scale_right]
+        .iter()
+        .all(|scale| scale.is_finite() && *scale > 0.0)
+    {
+        return Err("--lid-scale-left/right must be positive".into());
+    }
+    if !(args.lid_sync.is_finite() && args.lid_sync >= 0.0) {
+        return Err("--lid-sync must be non-negative".into());
     }
     let mut smoother = Smoother::new(&args);
     let target: SocketAddr = args
@@ -559,6 +594,14 @@ mod tests {
         let mut jumped = [-0.4; 6];
         smoother.apply(NOMINAL_DT as f64, &mut jumped, &mut lids, true);
         assert_eq!(jumped, before);
+    }
+
+    #[test]
+    fn lid_sync_evens_small_differences_but_keeps_winks() {
+        let [left, right] = sync_lids([0.70, 0.75], 0.4);
+        assert!((left - right).abs() < 0.01, "{left} {right}");
+        assert_eq!(sync_lids([0.0, 0.75], 0.4), [0.0, 0.75]);
+        assert_eq!(sync_lids([0.70, 0.75], 0.0), [0.70, 0.75]);
     }
 
     #[test]
