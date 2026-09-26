@@ -95,7 +95,7 @@ FRAMEEYEOSC_ARGS="--gaze-min-cutoff 0.3 --lid-sync 0.6"
 
 ## 免責事項
 
-- 自己責任でお使いください。本ソフトウェアは無保証です（[LICENSE](LICENSE) を参照）
+- 自己責任でお使いください。このフォークでの変更は AI（Claude Opus 5.5）を使って作りました。ユニットテストと自分の Steam Frame で動作は確かめていますが、あなたの環境で何か起きても責任は取れません。使う前にコードを自分の目で確認してください。本ソフトウェアは無保証です（[LICENSE](LICENSE) を参照）
 - ヘッドセットのアイトラッキングが使っている、公開されていない共有メモリの形式（バージョン4）を読んでいます。SteamOS の更新でこの形式が変わると、「unsupported eye shared-memory version」というエラーで起動しなくなり、frameeyeosc が対応するまで使えません
 - root 権限は使わず、SteamOS やそのファイルには手を加えません。共有メモリへのアクセスも、アイトラッキングの本来の利用側と同じ手順（ロックを取って次のサンプルを要求する）です
 - 非公式のプロジェクトで、Valve Corporation および VRChat Inc. とは関係なく、承認も受けていません。Steam、Steam Frame、SteamVR、Steam Link は Valve Corporation の商標、VRChat は VRChat Inc. の商標です。対応製品を示す目的でのみ名前を使っています
@@ -108,8 +108,6 @@ FRAMEEYEOSC_ARGS="--gaze-min-cutoff 0.3 --lid-sync 0.6"
 cargo test --release
 scripts/package.sh   # dist/frameeyeosc-<version>-steamframe-aarch64.tar.gz を作る
 ```
-
-このフォークでの変更は AI アシスタント（Claude）と一緒に書き、ユニットテストと実機の Steam Frame で確認しています。
 
 ## ライセンス
 

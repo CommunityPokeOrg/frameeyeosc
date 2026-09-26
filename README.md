@@ -95,7 +95,7 @@ Eyelid calibration is automatic. For the first 20 seconds after you put the head
 
 ## Disclaimer
 
-- Use at your own risk. The software comes with no warranty (see [LICENSE](LICENSE)).
+- Use at your own risk. The changes in this fork were made with Claude Opus 5.5, an AI model. I've tested them with unit tests and on my own Steam Frame, but I can't take responsibility for what happens on yours, so please read the code and check it yourself before you run it. The software comes with no warranty (see [LICENSE](LICENSE)).
 - It reads the eye tracker's private, undocumented shared-memory layout (version 4). A SteamOS update can change that layout. If it does, the program stops with an "unsupported eye shared-memory version" error until frameeyeosc is updated.
 - It needs no root and leaves SteamOS and its files alone. It uses the eye tracker's shared memory the same way the tracker's own clients do, taking its lock and asking for the next sample.
 - This is an unofficial project with no affiliation with or endorsement from Valve Corporation or VRChat Inc. Steam, Steam Frame, SteamVR and Steam Link are trademarks of Valve Corporation, and VRChat is a trademark of VRChat Inc. The names are used here only to say what this works with.
@@ -108,8 +108,6 @@ Build and test on the headset (the binary must link against the headset's glibc;
 cargo test --release
 scripts/package.sh   # builds dist/frameeyeosc-<version>-steamframe-aarch64.tar.gz
 ```
-
-The changes in this fork were written with an AI assistant (Claude) and checked with unit tests and on a real Steam Frame.
 
 ## License
 
