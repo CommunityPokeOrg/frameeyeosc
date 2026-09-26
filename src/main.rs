@@ -4,7 +4,8 @@ use clap::Parser;
 use memmap2::{MmapMut, MmapOptions};
 use rosc::{OscMessage, OscPacket, OscType, encoder};
 use std::error::Error;
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
+use std::os::unix::fs::MetadataExt;
 use std::io;
 use std::mem::{align_of, offset_of, size_of};
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
@@ -282,6 +283,7 @@ fn lid_to_vrcft(openness: f32, args: &Args) -> f32 {
 
 struct EyeSource {
     map: MmapMut,
+    inode: u64,
 }
 
 struct MutexGuard(*mut libc::pthread_mutex_t);
@@ -302,11 +304,15 @@ struct EyeData {
 impl EyeSource {
     fn open() -> Result<Self, Box<dyn Error>> {
         let file = OpenOptions::new().read(true).write(true).open(SOURCE)?;
-        if file.metadata()?.len() < SHM_SIZE as u64 {
+        let metadata = file.metadata()?;
+        if metadata.len() < SHM_SIZE as u64 {
             return Err(format!("{SOURCE}: shared memory is too small").into());
         }
         let map = unsafe { MmapOptions::new().len(SHM_SIZE).map_mut(&file)? };
-        let source = Self { map };
+        let source = Self {
+            map,
+            inode: metadata.ino(),
+        };
         let layout = source.layout();
         let version = u32::from_le(unsafe { ptr::read_volatile(&raw const (*layout).version) });
         if version != SHM_VERSION {
@@ -319,6 +325,11 @@ impl EyeSource {
             return Err("eye shared memory is not initialized".into());
         }
         Ok(source)
+    }
+
+    /// True when the path now points at a different file (or none) than the one we mapped.
+    fn is_stale(&self) -> bool {
+        fs::metadata(SOURCE).map_or(true, |metadata| metadata.ino() != self.inode)
     }
 
     fn layout(&self) -> *const EyeServerMmap {
@@ -538,6 +549,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 send_inactive(&socket, &args.prefix)?;
                 smoother.reset();
                 active = false;
+            }
+            // Idle: if the eye server recreated its shared memory, our mapping would go silent forever.
+            _ if source.is_stale() => {
+                eprintln!("{SOURCE} was replaced; reopening");
+                source = EyeSource::open()?;
             }
             _ => {}
         }
