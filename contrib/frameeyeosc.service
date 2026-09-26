@@ -7,7 +7,7 @@ PartOf=steamvr.service
 [Service]
 # Per-user settings (OSC target, eyelid calibration). Example: contrib/frameeyeosc.env.example
 EnvironmentFile=%h/.config/frameeyeosc/env
-ExecStart=%h/frameeyeosc/target/release/frameeyeosc $FRAMEEYEOSC_ARGS
+ExecStart=%h/.local/bin/frameeyeosc $FRAMEEYEOSC_ARGS
 # The shared memory may not exist yet right after SteamVR starts; retry until it does.
 Restart=on-failure
 RestartSec=5
