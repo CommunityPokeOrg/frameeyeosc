@@ -112,3 +112,7 @@ scripts/package.sh   # builds dist/frameeyeosc-<version>-steamframe-aarch64.tar.
 ## License
 
 MIT. See [LICENSE](LICENSE); the original work is by konsti219. Licenses of the bundled Rust crates are in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+
+## Thanks
+
+Thanks to konsti219 for frameeyeosc and for finding where the Frame keeps its eyelid data. This fork is built on that work.

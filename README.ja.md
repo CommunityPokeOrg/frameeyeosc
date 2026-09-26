@@ -112,3 +112,7 @@ scripts/package.sh   # dist/frameeyeosc-<version>-steamframe-aarch64.tar.gz を�
 ## ライセンス
 
 MIT。[LICENSE](LICENSE) を参照してください。元の作品は konsti219 によるものです。同梱している Rust のライブラリのライセンスは [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) に、変更履歴は [CHANGELOG.md](CHANGELOG.md) にあります。
+
+## 謝辞
+
+まぶたのデータのありかを見つけて frameeyeosc を公開してくれた konsti219 さんに感謝します。このフォークはその成果の上に作っています。
