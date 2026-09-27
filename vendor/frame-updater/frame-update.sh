@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT — part of frame-updater by sasaken1102r, shipped under the host app's MIT license
 # Checks GitHub for a newer release of a Steam Frame app and installs it with the release's own
 # install.sh. Shared by the apps: the original lives in the frame-updater repository and each app
 # carries a copy (vendor/frame-updater/, see UPSTREAM there). POSIX sh; needs curl, tar, sha256sum
@@ -69,6 +70,20 @@ json_raw() {
 
 now() {
     date +%s
+}
+
+# This boot's ID (empty where the kernel has none). The lock and the state file keep it next to a PID:
+# after a power loss the PID may belong to another process, so a PID from another boot means nothing.
+this_boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null | tr -cd '0-9a-f-')
+
+# True if PID, recorded in boot BOOT (may be empty), is a live process of this user in this boot.
+# kill -0 fails with EPERM for another user's process, which can't be ours either.
+pid_alive() { # pid boot
+    case $1 in '' | *[!0-9]*) return 1 ;; esac
+    if [ -n "$2" ] && [ -n "$this_boot" ] && [ "$2" != "$this_boot" ]; then
+        return 1
+    fi
+    kill -0 "$1" 2>/dev/null
 }
 
 # Log a line to stderr and, during an install, to the log file.
@@ -361,6 +376,9 @@ write_state() { # state step version error message
         if [ "$1" = running ] && [ "$detach" != 1 ]; then
             printf ',"pid":%s' "$$"
         fi
+        if [ "$1" = running ] && [ -n "$this_boot" ]; then
+            printf ',"boot_id":"%s"' "$this_boot"
+        fi
         printf ',"updated_at":%s}\n' "$(now)"
     } >"$_tmp" && mv -f "$_tmp" "$state_file"
 }
@@ -381,24 +399,28 @@ refuse() { # error message
     exit 1
 }
 
-# True if the install lock is held by a live process.
+# True if the install lock is held by a live process of this boot.
 lock_busy() {
     [ -d "$lock_dir" ] || return 1
-    _pid=$(cat "$lock_dir/pid" 2>/dev/null)
-    case $_pid in '' | *[!0-9]*) return 1 ;; esac
-    kill -0 "$_pid" 2>/dev/null
+    pid_alive "$(cat "$lock_dir/pid" 2>/dev/null)" "$(cat "$lock_dir/boot_id" 2>/dev/null)"
+}
+
+# Write our PID and boot into the lock we just made.
+mark_lock() {
+    echo "$this_boot" >"$lock_dir/boot_id"
+    echo "$$" >"$lock_dir/pid"
 }
 
 acquire_lock() {
     if mkdir "$lock_dir" 2>/dev/null; then
-        echo "$$" >"$lock_dir/pid"
+        mark_lock
         return 0
     fi
     lock_busy && return 1
-    # Left behind by an install that was killed
+    # Left behind by an install that was killed, or by one from before a reboot
     rm -rf "$lock_dir"
     mkdir "$lock_dir" 2>/dev/null || return 1
-    echo "$$" >"$lock_dir/pid"
+    mark_lock
 }
 
 on_exit() {
@@ -620,9 +642,13 @@ cmd_status() {
     fi
     if [ "$(json_str "$state_file" state)" = running ]; then
         _pid=$(json_raw "$state_file" pid)
+        _boot=$(json_str "$state_file" boot_id)
         _updated=$(json_raw "$state_file" updated_at)
         _age=$(($(now) - ${_updated:-0}))
-        if { [ -n "$_pid" ] && ! kill -0 "$_pid" 2>/dev/null; } || { [ -z "$_pid" ] && [ "$_age" -gt "$start_grace" ]; }; then
+        # Gone: written in another boot, its PID is not ours and alive, or no PID long after the start
+        if { [ -n "$_boot" ] && [ -n "$this_boot" ] && [ "$_boot" != "$this_boot" ]; } ||
+            { [ -n "$_pid" ] && ! pid_alive "$_pid" "$_boot"; } ||
+            { [ -z "$_pid" ] && [ "$_age" -gt "$start_grace" ]; }; then
             printf '{"state":"failed","version":"%s","error":"interrupted","message":"the update was interrupted","updated_at":%s}\n' \
                 "$(json_str "$state_file" version)" "$(json_raw "$state_file" updated_at)"
             exit 0

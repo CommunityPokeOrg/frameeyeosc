@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT — part of frame-updater by sasaken1102r, shipped under the host app's MIT license
 """Thin asyncio wrapper around frame-update.sh, for Python apps (frame-jp-keyboard's injector).
 
 Copied from the frame-updater repository (see UPSTREAM next to the copy); standard library only.

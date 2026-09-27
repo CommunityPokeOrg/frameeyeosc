@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT — part of frame-updater by sasaken1102r, shipped under the host app's MIT license
 # Checks this copy of frame-updater (vendor/frame-updater/ in an app). Run it from package.sh:
 #   sh vendor/frame-updater/verify.sh
 # 1. Every file still matches MANIFEST.sha256 (nobody edited the copy by hand).

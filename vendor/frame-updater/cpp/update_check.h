@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT — part of frame-updater by sasaken1102r, shipped under the host app's MIT license
 // Checks for and installs app updates by running frame-update.sh, without blocking the caller.
 // Shared by the Steam Frame panels (copied from the frame-updater repository; see UPSTREAM next to
 // the copy). Depends only on the C++17 standard library and POSIX: no drawing, no i18n, no JSON

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT — part of frame-updater by sasaken1102r, shipped under the host app's MIT license
 // Implementation of the update checker (see update_check.h).
 #include "update_check.h"
 
@@ -96,16 +97,37 @@ std::string lastLine(const std::string& out) {
 }
 
 /**
+ * This boot's ID (/proc/sys/kernel/random/boot_id), read once.
+ * @return the ID, or "" if the kernel has none
+ */
+const std::string& currentBootId() {
+    static const std::string id = [] {
+        std::string text;
+        readFile("/proc/sys/kernel/random/boot_id", text);
+        std::string clean;
+        for (const char c : text) {
+            if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || c == '-') clean += c;
+        }
+        return clean;
+    }();
+    return id;
+}
+
+/**
  * Decide whether a "running" state file is stale (its install is gone).
  * @param state the parsed state file
  * @return true if nothing is running any more
  */
 bool runningIsStale(const std::map<std::string, std::string>& state) {
+    // Written before a reboot (a power loss mid-install): its PID may now be any process
+    const std::string boot = get(state, "boot_id");
+    if (!boot.empty() && !currentBootId().empty() && boot != currentBootId()) return true;
     const std::string pidText = get(state, "pid");
     if (!pidText.empty()) {
         const long pid = std::strtol(pidText.c_str(), nullptr, 10);
         if (pid <= 0) return true;
-        return ::kill(static_cast<pid_t>(pid), 0) != 0 && errno == ESRCH;
+        // ESRCH: gone. EPERM: another user's process reusing the PID; the install ran as this user
+        return ::kill(static_cast<pid_t>(pid), 0) != 0;
     }
     // Written by "install --detach" before the unit started
     const long long updated = std::atoll(get(state, "updated_at").c_str());
