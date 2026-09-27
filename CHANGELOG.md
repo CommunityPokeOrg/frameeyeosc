@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 (unreleased)
+## 0.4.0 (2026-09-27)
 
 Steadier eyes and fewer missed blinks. The ideas come from the README of [CyrusOtter/SteamFrameEye](https://github.com/CyrusOtter/SteamFrameEye).
 
