@@ -45,9 +45,9 @@ No sudo is needed. Everything goes into your home directory (`~/.local/bin`, `~/
 
 After that, turn off Steam Link's own OSC output on your PC (SteamVR settings > Steam Link > OSC). Steam Link sends its own unsmoothed eye data to VRChat, and with both running, two sources fight over the avatar's eyes. This is needed in the ETVR mode too, where VRCFaceTracking drives the avatar's eyes.
 
-### Updating from 0.2.0
+### Updating from a version before 0.4.0
 
-Copy and unpack the new tarball as above and run `./install.sh --with-panel` (or `./install.sh` without the panel). Your `~/.config/frameeyeosc/env` and the learned eyelid calibration are kept, and the service restarts on the new version.
+Versions before 0.4.0 have no updater, so update to 0.4.0 once by hand: copy and unpack the new tarball as above and run `./install.sh --with-panel` (or `./install.sh` without the panel). Your `~/.config/frameeyeosc/env` and the learned eyelid calibration are kept, and the service restarts on the new version.
 
 Options in `FRAMEEYEOSC_ARGS` in `env` still work as before. But anything set there is locked in the panel ("Locked by command line"). To change it from the panel, remove it from `env`, run `systemctl --user restart frameeyeosc`, and set the value again in the panel.
 
@@ -55,7 +55,9 @@ To remove it: `./install.sh --uninstall` (removes the panel too; add `--purge` t
 
 ### Updating from the panel (0.4.0 and later)
 
-The panel's Advanced page shows the installed version. At start and then at most once a day, the panel asks GitHub whether a newer release exists; "Check now" asks right away. When one exists, "Update" downloads it, checks it against the release's `SHA256SUMS`, and runs its `install.sh` with the options of your last install (kept in `~/.config/frameeyeosc/install-args`). frameeyeosc and the panel restart on the new version. If anything fails before `install.sh` runs, nothing changes; the log is in `~/.cache/frameeyeosc/update.log`. Turn "Check for updates" off to stop the daily check (the "Check now" button still works). The update itself only runs when you press the button.
+From 0.4.0 on, the panel's "Update" button does the update. The panel's Advanced page shows the installed version. At start and then at most once a day, the panel asks GitHub whether a newer release exists. That holds while checks succeed: after a failed check it tries again an hour later. "Check now" asks right away. When a newer release exists, "Update" downloads it, checks it against the release's `SHA256SUMS`, and runs its `install.sh` with the options of your last install (kept in `~/.config/frameeyeosc/install-args`). frameeyeosc and the panel restart on the new version. If anything fails before `install.sh` runs, nothing changes; the log is in `~/.cache/frameeyeosc/update.log`. Turn "Check for updates" off to stop the daily check (the "Check now" button still works). The update itself only runs when you press the button.
+
+`SHA256SUMS` is a checksum file from the same release, not a signature. It catches a corrupted or incomplete download. It can't catch a release that was replaced on GitHub, because the checksum would be replaced along with it.
 
 ## Panel
 
@@ -67,7 +69,7 @@ The panel's Advanced page shows the installed version. At start and then at most
 - Eyelids: auto calibration and its learned values, per-eye scales, the four openness marks drawn over each eye's live openness (blink and open wide to set them), left/right sync, keeping blinks visible (hold time and closing both eyes), eyelid smoothing.
 - Advanced: parameter prefix, the version with checking for and installing updates, file locations, options locked by the command line.
 
-The panel only writes `config.json` and reads the status file. To pick its default language, it also reads the `language` line of Steam's `~/.steam/registry.vdf` once at startup (read only). For updates it runs `~/.local/share/frameeyeosc/frame-update.sh` (see above). Closing it, quitting it, or not installing it doesn't stop frameeyeosc. Apart from the update check, it reads nothing and draws nothing while it isn't open on the dashboard. Its "Start with SteamVR" switch enables or disables its systemd user unit (`frameeyeosc-panel.service`). Build notes and debugging options are in [panel/README.md](panel/README.md) (Japanese).
+The panel writes `config.json` and reads the status file. To pick its default language, it also reads the `language` line of Steam's `~/.steam/registry.vdf` once at startup (read only). For updates it runs `~/.local/share/frameeyeosc/frame-update.sh` (see above). Closing it, quitting it, or not installing it doesn't stop frameeyeosc. While it isn't open on the dashboard it draws nothing. Besides running the update check, the only thing it reads then is the update state file (`~/.cache/frameeyeosc/update-state.json`), about twice a second. Its "Start with SteamVR" switch enables or disables its systemd user unit (`frameeyeosc-panel.service`). Build notes and debugging options are in [panel/README.md](panel/README.md) (Japanese).
 
 ## Settings
 
@@ -102,7 +104,7 @@ Settings are in `~/.config/frameeyeosc/config.json`. The panel writes it, and yo
 | `blink_sync_below` | `--blink-sync-below` | `0.35` | When one eye is closed and the other is below this (VRCFT scale), both are sent closed. Winks, with the other eye open, pass through. `0` turns it off |
 | `calibration_reset` | | `0` | Increase it to make the eyelid calibration start over |
 | `language` | | Steam's language | Panel language, `"ja"` or `"en"`. Without it, the panel is in Japanese if Steam is set to Japanese and in English otherwise |
-| `update_check` | | `true` | The panel looks for a new release on GitHub at start and once a day. frameeyeosc itself ignores it |
+| `update_check` | | `true` | The panel looks for a new release on GitHub at start and once a day (an hour later after a failed check). frameeyeosc itself ignores it |
 
 Command-line options win over the file. They go in `~/.config/frameeyeosc/env` (then `systemctl --user restart frameeyeosc`):
 
@@ -155,8 +157,13 @@ Eyelid calibration is automatic. For the first 20 seconds after you put the head
 ## Privacy
 
 - frameeyeosc sends gaze and eyelid values only to the destination above (your PC). It has no telemetry and doesn't talk to the internet.
-- The panel asks GitHub (`api.github.com`) for the latest release at start and at most once a day, unless "Check for updates" is off. Like any web request, this shows GitHub your IP address. Nothing else is sent, and downloads only come from GitHub.
-- On disk it stores only two numbers, each eye's learned relaxed openness, in `~/.config/frameeyeosc/calibration`, plus your settings. The latest eye values are in the status file, which is in memory, readable only by you, and overwritten ten times a second; no history is kept.
+- The panel asks GitHub (`api.github.com`) for the latest release at start and at most once a day (an hour after a failed check), unless "Check for updates" is off. Like any web request, this shows GitHub your IP address. Nothing else is sent, and downloads only come from GitHub.
+- On disk it keeps:
+  - your settings (`~/.config/frameeyeosc/config.json`) and two numbers, each eye's learned relaxed openness (`~/.config/frameeyeosc/calibration`)
+  - from `install.sh`: the update script `~/.local/share/frameeyeosc/frame-update.sh` and your install options `~/.config/frameeyeosc/install-args`
+  - from the update check and updates, in `~/.cache/frameeyeosc/`: `update-check.json` (GitHub's last answer), `update-state.json` (progress of the last update), `update.log` (log of the last update), the `update/` work folder (emptied after each run, except for the copy of the update script it keeps), and the `update.lock/` folder while a check or update runs
+
+  No eye data is stored. The latest eye values are in the status file, which is in memory, readable only by you, and overwritten ten times a second; no history is kept.
 - The OSC messages are unencrypted, so other devices on the same network could read them.
 
 ## Disclaimer
@@ -195,7 +202,7 @@ frameeyeosc --replay ~/eyes.csv --blink-hold-ms 120 --replay-out ~/processed.csv
 
 ## License
 
-MIT. See [LICENSE](LICENSE); the original work is by konsti219. Licenses of the bundled Rust crates and of the OpenVR SDK header used by the panel are in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+MIT. See [LICENSE](LICENSE); the original work is by konsti219. `vendor/frame-updater/` is not third-party code: it is sasaken1102r's own update checker, shared by their Steam Frame apps and copied here under this repository's MIT license. Licenses of the bundled Rust crates and of the OpenVR SDK header used by the panel are in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Thanks
 
