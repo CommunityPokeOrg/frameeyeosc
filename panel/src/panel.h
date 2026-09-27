@@ -38,6 +38,11 @@ enum class PanelAction {
     PromptNo,
     ResetAll,          ///< only returned on the confirming second press
     Quit,              ///< only returned on the confirming second press
+    UpdateCheck,       ///< look for a new release now (ignores the 24 h cache)
+    UpdateInstall,     ///< ask whether to install the new release (the caller opens the update prompt)
+    UpdateConfirm,     ///< install it (the prompt closes itself)
+    UpdateCancel,
+    UpdateDismiss,     ///< close the "installed" / "failed" message
 };
 
 /** A button: its action, the config key it changes and an argument. */
@@ -120,8 +125,14 @@ public:
      */
     void showPrompt(const std::string& output);
 
-    /** @return true while the recommendation prompt is open */
-    bool promptOpen() const { return !promptOutput_.empty(); }
+    /**
+     * Ask once whether to install a new release.
+     * @param version the release ("0.4.1")
+     */
+    void showUpdatePrompt(const std::string& version);
+
+    /** @return true while the recommendation or update prompt is open */
+    bool promptOpen() const { return !promptOutput_.empty() || !updatePromptVersion_.empty(); }
 
     /**
      * Choose the tab.
@@ -183,6 +194,7 @@ private:
     bool resetArmed_ = false;
     double resetArmedUntil_ = 0.0;
     std::string promptOutput_;  ///< the output type the prompt asks about; empty = no prompt
+    std::string updatePromptVersion_;  ///< the release the update prompt asks about; empty = no prompt
 
     /**
      * Find the usable button at a point.
@@ -266,6 +278,26 @@ private:
      * @param t texts
      */
     void drawPrompt(const Pen& pen, const UiText& t);
+
+    /**
+     * The version row and its button (Advanced tab): the running version, the check result, install progress.
+     * @param pen drawing tools
+     * @param t texts
+     * @param u the update status
+     * @param y row top
+     */
+    void drawUpdateRow(const Pen& pen, const UiText& t, const frame_updater::UpdateStatus& u, double y);
+
+    /**
+     * A notice at the bottom of the status column while a new release is available, installing or installed.
+     * Pressing it opens the Advanced tab.
+     * @param pen drawing tools
+     * @param t texts
+     * @param u the update status
+     * @param x0 left
+     * @param x1 right
+     */
+    void drawUpdateNotice(const Pen& pen, const UiText& t, const frame_updater::UpdateStatus& u, double x0, double x1);
 
     /**
      * A row's title on the left, with a hint or the "locked" note under it.

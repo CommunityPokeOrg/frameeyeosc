@@ -19,6 +19,10 @@ panel_unit="frameeyeosc-panel.service"
 panel_desktop="$data_home/applications/frameeyeosc-panel.desktop"
 icon_dir="$data_home/icons/hicolor"
 icon_sizes=(48 128 256)
+# The panel's update button runs this script, which reruns install.sh with the options in install-args
+share_dir="$data_home/frameeyeosc"
+cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/frameeyeosc"
+install_args="$config_dir/install-args"
 
 with_panel=false
 uninstall=false
@@ -40,6 +44,8 @@ if $uninstall; then
     systemctl --user disable --now "$panel_unit" 2>/dev/null || true
     rm -f "$unit_dir/$unit" "$bin_dir/frameeyeosc"
     rm -f "$unit_dir/$panel_unit" "$bin_dir/frameeyeosc-panel" "$panel_desktop"
+    rm -rf "$share_dir" "$cache_dir"
+    rm -f "$install_args"
     for size in "${icon_sizes[@]}"; do
         rm -f "$icon_dir/${size}x${size}/apps/frameeyeosc-panel.png"
     done
@@ -77,6 +83,12 @@ install -Dm644 "$here/frameeyeosc.service" "$unit_dir/$unit"
 if [[ ! -f "$config_dir/env" ]]; then
     install -Dm644 "$here/frameeyeosc.env.example" "$config_dir/env"
 fi
+# The updater (the release tarball has it next to install.sh, a repository checkout under vendor/)
+updater="$here/frame-update.sh"
+[[ -f "$updater" ]] || updater="$here/vendor/frame-updater/frame-update.sh"
+if [[ -f "$updater" ]]; then
+    install -Dm755 "$updater" "$share_dir/frame-update.sh"
+fi
 
 if $with_panel; then
     # A running panel keeps its old binary until it restarts; the file is only replaced
@@ -95,6 +107,15 @@ if $with_panel; then
         update-desktop-database "$(dirname "$panel_desktop")" 2>/dev/null || true
     fi
 fi
+
+# Options for the next update from the panel. An installed panel is updated along with frameeyeosc,
+# whether or not this run had --with-panel
+if $with_panel || [[ -x "$bin_dir/frameeyeosc-panel" ]]; then
+    printf -- '--with-panel\n' >"$install_args.tmp"
+else
+    : >"$install_args.tmp"
+fi
+mv "$install_args.tmp" "$install_args"
 
 systemctl --user daemon-reload
 systemctl --user enable "$unit"

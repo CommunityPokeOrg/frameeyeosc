@@ -53,6 +53,10 @@ sudo は要りません。全部ホームフォルダ（`~/.local/bin`、`~/.con
 
 削除は `./install.sh --uninstall`（パネルも消えます。設定と学習値も消すなら `--purge` を付ける）。
 
+### パネルから更新する（0.4.0 から）
+
+パネルの「詳細」に、入っている版が出ます。パネルは起動時と、その後 1 日 1 回まで、GitHub に新しい版がないか確かめます。「確認」を押すとその場で確かめます。新しい版があれば「更新」で、ダウンロードしてリリースの `SHA256SUMS` と照らし合わせ、前回と同じオプション（`~/.config/frameeyeosc/install-args` に残っています）でその `install.sh` を実行します。本体とパネルは新しい版で起動し直します。`install.sh` を実行する前に失敗したときは何も変わりません。ログは `~/.cache/frameeyeosc/update.log` です。毎日の確認は「新しい版の確認」をオフにすると止まります（「確認」ボタンは使えます）。更新そのものは、ボタンを押したときにしか行いません。
+
 ## パネル
 
 `./install.sh --with-panel` で、SteamVR のダッシュボードに「Eye」のパネルが入ります。次に SteamVR を起動したときから一緒に起動します。すぐ開きたいときは、ダッシュボードの「プログラムを起動」（＋）から「frameeyeosc パネル」を選んでください。
@@ -61,9 +65,9 @@ sudo は要りません。全部ホームフォルダ（`~/.local/bin`、`~/.con
 - 基本: 送信の一時停止、VRChat か VRCFaceTracking（ETVR）か、送り先の PC（自動か、今送っている PC で固定。VR の中で IP を打たなくて済みます）、ポート、言語（日本語 / English）、SteamVR と一緒に起動、すべて既定に戻す、アプリを終了
 - 視線: スムージングのオン / オフ、なめらかさの弱 / 中 / 強と 3 つの値、見つめている時の遊び、まばたき中は視線を止める、左右の目を別々に動かす、不確かな視線を使わない、一瞬の途切れを消す
 - まぶた: 自動キャリブレーションと覚えた値、左右の倍率、左右の今の開き具合の上に重ねた 4 つの目盛り（目を閉じたり見開いたりしながら合わせる）、左右をそろえる強さ、まばたきを届ける（閉じたまま保つ時間・両目で閉じる）、まぶたのなめらかさ
-- 詳細: パラメーター名の頭、ファイルの場所、コマンドで固定中の項目
+- 詳細: パラメーター名の頭、版の表示と更新の確認・更新、ファイルの場所、コマンドで固定中の項目
 
-パネルがするのは `config.json` を書くことと状態ファイルを読むことだけです。既定の言語を決めるために、起動時に 1 回だけ Steam の `~/.steam/registry.vdf` の `language` の行も読みます（読むだけ）。閉じても、終了しても、入れていなくても frameeyeosc は送り続けます。ダッシュボードで開いていない間は、何も読まず、何も描きません。「SteamVR と一緒に起動」は、パネルの systemd ユーザーサービス（`frameeyeosc-panel.service`）を有効 / 無効にします。ビルド方法や確認用のオプションは [panel/README.md](panel/README.md) にあります。
+パネルがするのは `config.json` を書くことと状態ファイルを読むことだけです。既定の言語を決めるために、起動時に 1 回だけ Steam の `~/.steam/registry.vdf` の `language` の行も読みます（読むだけ）。更新には `~/.local/share/frameeyeosc/frame-update.sh` を使います（上を参照）。閉じても、終了しても、入れていなくても frameeyeosc は送り続けます。ダッシュボードで開いていない間は、更新の確認のほかは、何も読まず、何も描きません。「SteamVR と一緒に起動」は、パネルの systemd ユーザーサービス（`frameeyeosc-panel.service`）を有効 / 無効にします。ビルド方法や確認用のオプションは [panel/README.md](panel/README.md) にあります。
 
 ## 設定
 
@@ -98,6 +102,7 @@ sudo は要りません。全部ホームフォルダ（`~/.local/bin`、`~/.con
 | `blink_sync_below` | `--blink-sync-below` | `0.35` | 片目が閉じていて、もう片方がこれより小さい（VRCFT の値）とき、両目とも閉じて送る。もう片方が開いているウインクはそのまま。`0` で無効 |
 | `calibration_reset` | | `0` | 増やすと、まぶたの学習をやり直す |
 | `language` | | Steam の言語 | パネルの言語。`"ja"` か `"en"`。書いていないときは、Steam の言語が日本語なら日本語、それ以外なら英語 |
+| `update_check` | | `true` | パネルが起動時と 1 日 1 回、GitHub に新しい版がないか確かめる。frameeyeosc 本体は使わない |
 
 コマンドラインのオプションは、このファイルより優先されます。オプションは `~/.config/frameeyeosc/env` に書き、`systemctl --user restart frameeyeosc` で反映します:
 
@@ -150,6 +155,7 @@ frameeyeosc は、VRCFaceTracking 用の ETVR Tracking Module が読む形式で
 ## プライバシー
 
 - 視線とまぶたの値は上の送り先（あなたの PC）にだけ送ります。テレメトリはなく、インターネットにも接続しません
+- パネルは、起動時と 1 日 1 回まで、GitHub（`api.github.com`）に最新のリリースを問い合わせます（「新しい版の確認」がオフなら問い合わせません）。ふつうの Web アクセスと同じく、GitHub には IP アドレスが見えます。ほかには何も送らず、ダウンロードも GitHub からだけです
 - ディスクに保存するのは、左右それぞれの目の「普段の開き具合」の学習値2つ（`~/.config/frameeyeosc/calibration`）と設定だけです。最新の目の値は状態ファイルにありますが、これはメモリの上にあって本人しか読めず、1 秒に 10 回上書きされます。履歴は残しません
 - OSC は暗号化されないので、同じネットワーク上の他の機器から読める可能性があります
 
@@ -168,7 +174,16 @@ frameeyeosc は、VRCFaceTracking 用の ETVR Tracking Module が読む形式で
 ```sh
 cargo test --release
 cmake -G Ninja -S panel -B panel/build && ninja -C panel/build
-scripts/package.sh   # 両方入った dist/frameeyeosc-<version>-steamframe-aarch64.tar.gz を作る
+scripts/package.sh   # 両方入った dist/frameeyeosc-<version>-steamframe-aarch64.tar.gz と dist/SHA256SUMS を作る
+```
+
+`vendor/frame-updater/` は、私の Steam Frame 用アプリで共通の更新の仕組みのコピーです。ここでは書き換えないでください。`MANIFEST.sha256` と違っていると `scripts/package.sh` が止まります。
+
+リリースを公開するときは、2 つとも添付します。`SHA256SUMS` が無いリリースは、パネルの「更新」では入れず、手で更新してもらう表示になります:
+
+```sh
+gh release create v0.4.0 --title v0.4.0 --notes-file notes.md
+gh release upload v0.4.0 dist/frameeyeosc-0.4.0-steamframe-aarch64.tar.gz dist/SHA256SUMS
 ```
 
 目の処理を実データで調整するときは、アイトラッカーの生の値を記録してから再生します（記録中は何も送らないので、サービスと並べて動かせます）。再生すると、今の設定と、同じ設定から 0.4.0 の処理を外したものの指標を並べて出します。設定はいつもどおり `config.json` とオプションから読みます。記録は個人のデータなので、リポジトリに入れないでください。

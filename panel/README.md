@@ -18,6 +18,7 @@ frameeyeosc の設定を、Steam Frame を被ったまま SteamVR のダッシ�
 - まぶた: 左右それぞれ、細い灰色の棒が生の値（倍率を掛けた後）、太い色の棒が送った値
 - 視線: 枠の中に、輪が生の値、塗った点が送った値
 - いちばん下に赤で 1 行（2 行まで）: パネルが設定を書けなかった、設定ファイルが壊れている、自動起動の切り替えに失敗、本体が報告した設定のエラー（この順で 1 つだけ）
+- 赤の行が無いときは、新しい版があるあいだ・更新中・入れ終わったあと、いちばん下にお知らせ（「v0.4.1 があります」など）。押すと詳細タブへ
 
 右はタブ:
 
@@ -26,7 +27,7 @@ frameeyeosc の設定を、Steam Frame を被ったまま SteamVR のダッシ�
 | 基本 | 送信（送る / 止める）、送り先（VRChat に直接 / VRCFaceTracking（ETVR））、送り先の PC（自動 / 今の相手で固定）、ポート（− / ＋、既定に戻す）、言語（日本語 / English）、SteamVR と一緒に起動（オン / オフ）、すべて既定に戻す、アプリを終了 |
 | 視線 | スムージング（オン / オフ）、なめらかさ（弱 / 中 / 強）、細かく変える（止まっている時・速い動き・変化の感度の 3 つを − / ＋）、見つめている時の遊び（角度も表示）、まばたき中は視線を止める（オン / オフとしきい値）、左右の目を別々に動かす、不確かな視線を使わない（オン / オフと上限）、一瞬の途切れを消す（オン / オフ） |
 | まぶた | 自動キャリブレーション（オン / オフ、覚えた値、覚えている最中か、リセット）、左右の倍率（自動 / 固定と左右の − / ＋）、生の値の棒と 4 つの目盛りの線、目盛り ①閉じ ②普通 ③見開き始め ④見開き最大 の − / ＋、左右をそろえる強さ、まばたきを届ける（閉じたまま保つ ms と両目で閉じるしきい値の − / ＋）、まぶたのなめらかさ |
-| 詳細 | パラメーター名の頭（/FT / なし、送るアドレスの例）、設定ファイル・キャリブレーション・状態ファイルの場所、本体の PID と動いている時間、コマンドで固定中の項目と今の値 |
+| 詳細 | パラメーター名の頭（/FT / なし、送るアドレスの例）、バージョン（今の版・最後に確かめた時刻・［確認］／新しい版があれば［更新］、確認を 1 回はさむ）、新しい版の確認（オン / オフ）、設定ファイル・キャリブレーション・状態ファイルの場所、本体の PID と動いている時間、コマンドで固定中の項目と今の値 |
 
 - まぶたタブの棒は、目を開け閉めしながら目盛りの線を今の値に合わせるためのもの。棒の範囲は 0〜1.2
 - 目盛りは「閉じ < 普通 ≦ 見開き始め ≦ 見開き最大」の順を崩さないよう、− / ＋ で動ける範囲を制限している
@@ -55,6 +56,7 @@ frameeyeosc の設定を、Steam Frame を被ったまま SteamVR のダッシ�
 |---|---|---|
 | 設定 `config.json` | `$XDG_CONFIG_HOME/frameeyeosc/config.json`（無ければ `~/.config/frameeyeosc/config.json`） | 読んで書く（書くのはパネルだけ） |
 | 状態 `status.json` | `$XDG_RUNTIME_DIR/frameeyeosc/status.json`（無ければ `/run/user/<uid>/frameeyeosc/status.json`） | 読むだけ |
+| 更新 | `~/.local/share/frameeyeosc/frame-update.sh`、`~/.cache/frameeyeosc/`（`update-check.json`・`update-state.json`・`update.log`） | スクリプトを動かし、状態ファイルを読む |
 
 - 書き方: 同じフォルダの `config.json.tmp` に書く → `fsync` → `rename`（→ フォルダも `fsync`）。読み込んだ JSON の中身を書き換えて書き戻すので、パネルが知らないキーも消えない。ファイルが無いときは、全部の項目を既定値で書いたファイルを作る
 - 設定ファイルが壊れた JSON のときは、ふつうのボタンでは書かない（中身を失わないため）。「設定ファイルが壊れています」と赤で出る。「すべて既定に戻す」だけは、壊れたファイルを `config.json.broken` に写してから既定値で作り直す
@@ -63,6 +65,9 @@ frameeyeosc の設定を、Steam Frame を被ったまま SteamVR のダッシ�
 - 本体が別の設定ファイル（`--config`）を読んでいるときは、詳細タブに赤で出す
 - 状態ファイルは、パネルが**開いている間だけ** 1 秒に 10 回読む。設定ファイルは同じときに更新時刻と大きさだけ見て、変わっていたら読み直す。表示に出る値（丸めた値）が変わったときだけ描き直す
 - 閉じている間はどちらのファイルも読まず、描かない
+- 更新の確認だけは閉じている間も動く: 起動時と 1 時間ごとに `frame-update.sh check` を裏で動かす（GitHub に行くのは、スクリプトが覚えている答えが 24 時間より古いときだけ）。`update_check` が false なら動かさない。［確認］は 24 時間を待たずに `--force` で確かめ、`update_check` が false でも使える
+- ［更新］→ 確認で「更新する」を押すと `frame-update.sh install --detach` を動かす。スクリプトが SHA256SUMS で確かめてから、新しい版の `install.sh` を前回と同じオプション（`~/.config/frameeyeosc/install-args`、無ければ `--with-panel`）で、systemd のユーザーユニット `frameeyeosc-update` の中で実行する。`install.sh` がパネルを再起動しても更新は続く。パネルは `update-state.json` を 0.5 秒ごとに読んで進み具合を出す
+- 仕組みは frame-updater の共通部品（`vendor/frame-updater/`、C++ は `update_check.{h,cpp}`）。ここでは書き換えない
 
 ## ビルド（Frame 上）
 
@@ -97,6 +102,8 @@ ssh steamos@<Frame の IP> 'cd ~/frameeyeosc-panel && cmake -G Ninja -S . -B bui
 ./build/frameeyeosc-panel --dump-png out/etvr_2026-09-27_00-00-00.png --fake-etvr --fake-prompt etvr
 ./build/frameeyeosc-panel --dump-png out/t_2026-09-27_00-00-00.png --config /tmp/t/config.json --click 883,148
 ./build/frameeyeosc-panel --thumbnail-png out/thumbnail_2026-09-27_00-00-00.png --thumbnail-size 256
+./build/frameeyeosc-panel --dump-png out/update_2026-09-27_00-00-00.png --fake-update available --tab advanced
+./build/frameeyeosc-panel --version               # 版（Cargo.toml から）
 ./build/frameeyeosc-panel --contrast-report       # 色の組み合わせごとのコントラスト比と合否
 ./build/frameeyeosc-panel --probe                 # 常駐しているパネルを SteamVR 経由で探して状態を出す
 ./build/frameeyeosc-panel --probe-switch-away 3   # ダッシュボードを一時的な別のオーバーレイに切り替える（閉じたときの確認用）
@@ -104,6 +111,8 @@ ssh steamos@<Frame の IP> 'cd ~/frameeyeosc-panel && cmake -G Ninja -S . -B bui
 
 - `--dump-png` は今の設定ファイルと状態ファイルで描く。`--config PATH`・`--status PATH` で別のファイルを読める
 - `--fake` か `--fake-*` を付けると、ファイルを読まずに作り物の状態で描く: `--fake-not-running`・`--fake-paused`・`--fake-no-tracking`・`--fake-etvr`・`--fake-fixed`・`--fake-target-null`・`--fake-locked`・`--fake-config-error`・`--fake-broken`・`--fake-write-error`・`--fake-custom`・`--fake-prompt vrchat|etvr`・`--fake-autostart on|off|missing|unknown`。`--preview-quit`・`--preview-reset` で「もう一度押すと〜」の見た目
+- 更新の見た目は `--fake-update checking|uptodate|available|manual|installing|installed|checkfailed|installfailed`。`--preview-update-prompt`（`--fake-update available` と一緒に）で更新の確認
+- `--update-live` を付けると本物の更新の仕組みを動かす: 最初に確認し、`--click` のあとは始まった確認や更新が終わるまで待ってから描く。更新は本当に行われるので、偽の GitHub（`FRAME_UPDATE_API_URL`・`FRAME_UPDATE_ALLOW_INSECURE=1`）と別の `HOME` で試す
 - `--click X,Y`（何回でも）は、描く前にその座標を押したことにする。当たり判定と設定ファイルの書き込みをヘッドセットなしで確かめる用（`--fake` とは一緒に使えない。`--config` の設定ファイルを本当に書き換えるので、試すときは別の場所を指定する）
 - `--probe` は Background 型でつなぐだけで、オーバーレイも Vulkan も作らない。`FindOverlay`・名前・幅・閉じるボタン・表示中か・`GetOverlayTextureSize` を出す
 - `contrib/icons/frameeyeosc-panel-{48,128,256}.png` は `--thumbnail-png` で書き出したもの（ダッシュボードのサムネイルと同じ絵）
@@ -156,7 +165,8 @@ systemctl --user daemon-reload
 ## 守っていること
 
 - 書くのは設定ファイル（と、壊れていたときの `config.json.broken`）だけ。アイトラッキングの共有メモリ・カメラ・GPIO・sysfs・`/persist` には触らない。sudo を使わない
-- 外部コマンドは `systemctl --user` だけ。fork＋execvp で、シェルを通さず固定の引数で呼ぶ。2 秒（enable / disable は 5 秒）で終わらなければ SIGKILL、どの場合も `waitpid` で片付ける
+- 外部コマンドは `systemctl --user` と `/bin/sh ~/.local/share/frameeyeosc/frame-update.sh` だけ。どちらも固定の引数で呼び、コマンドの文字列を組み立ててシェルに渡すことはしない。`systemctl` は 2 秒（enable / disable は 5 秒）、更新の確認は 90 秒で終わらなければ SIGKILL、どの場合も `waitpid` で片付ける
+- 更新のスクリプトが書くのは `~/.cache/frameeyeosc/` だけ。新しい版を入れるのは［更新］を押して確認したときだけ
 - `systemctl` はワーカースレッドで実行する（ポインターへの応答 33 ms おきを止めない）。SIGTERM・SIGINT・SIGUSR1 はメインスレッドで受ける
 - パネルを閉じている間は、ファイルも読まず、コマンドも実行せず、描かない。イベントを 0.25 秒おきに見るだけ
 
@@ -194,6 +204,7 @@ systemctl --user daemon-reload
 | `src/autostart.*` | `systemctl --user` で自動起動を読む・切り替えるワーカースレッド |
 | `src/command.*` | fork＋execvp・パイプ・タイムアウト・waitpid |
 | `src/theme.*` | 色の定義と WCAG のコントラスト比（`--contrast-report`） |
+| `../vendor/frame-updater/` | 更新の確認・更新の共通部品（frame-updater の `sync.sh` で写したもの）。CMake が `cpp/update_check.cpp` を一緒にビルドする |
 | `src/i18n.*` | 画面の文言（日本語・英語）。ログは英語 |
 | `src/vr_overlay.*` | OpenVR の接続、ダッシュボードのオーバーレイ、イベント、終了処理、`--probe` |
 | `src/vk_texture.*`・`src/draw.*`・`src/json.*` | Vulkan の画像、描画の部品、JSON の読み書き |

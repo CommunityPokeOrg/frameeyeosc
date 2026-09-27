@@ -167,6 +167,7 @@ const std::vector<SettingSpec>& settingSpecs() {
         {key::kBlinkSyncBelow, SettingType::Number, 0.35, "", 0.0, 0.75, 0.05, 2},
         {key::kCalibrationReset, SettingType::Integer, 0, "", 0, 1e9, 1, 0},
         {key::kLanguage, SettingType::String, 0, "ja", 0, 0, 0, 0},
+        {key::kUpdateCheck, SettingType::Bool, 1, "", 0, 1, 1, 0},
     };
     return specs;
 }

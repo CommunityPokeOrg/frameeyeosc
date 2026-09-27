@@ -148,6 +148,57 @@ UiText makeJapanese() {
     t.promptEtvrDetail2 = "（ETVR 側でもまぶたをなめらかにしているため）";
     t.promptYes = "する";
     t.promptNo = "しない";
+
+    t.rowVersion = "バージョン";
+    t.checkedFormat = "確認 %s";
+    t.upToDateFormat = "v%s・最新です";
+    t.availableFormat = "v%s があります";
+    t.runningFormat = "今は v%s";
+    t.checking = "確かめています…";
+    t.updateManual = "GitHub から手で更新してね";
+    t.checkButton = "確認";
+    t.updateButton = "更新";
+    t.installingFormat = "更新中: %s";
+    t.installingHint = "途中でパネルが閉じることがあります";
+    t.installedFormat = "v%s を入れました";
+    t.installedHint = "パネルを開き直すと新しい版になります";
+    t.installFailed = "更新できませんでした（今の版のままです）";
+    t.checkFailedFormat = "v%s・確認できませんでした";
+    t.retry = "もう一度";
+    t.dismiss = "閉じる";
+    t.rowUpdateCheck = "新しい版の確認";
+    t.hintUpdateCheck = "起動時と 1 日 1 回 GitHub を見る";
+    t.updatePromptFormat = "v%s に更新しますか？";
+    t.updatePromptDetail1 = "GitHub からダウンロードして入れ替えます";
+    t.updatePromptDetail2 = "本体とパネルが再起動し、送信は数秒止まります";
+    t.updatePromptYes = "更新する";
+    t.updatePromptNo = "やめる";
+    t.stepStart = "準備中";
+    t.stepDownload = "ダウンロード中";
+    t.stepVerify = "ファイルを確認中";
+    t.stepExtract = "展開中";
+    t.stepInstall = "入れ替え中";
+    t.reasonNetwork = "GitHub につながりません";
+    t.reasonRateLimited = "GitHub の回数制限です。1 時間ほどあとで試してね";
+    t.reasonNotFound = "公開されている版がありません";
+    t.reasonBadResponse = "GitHub の返事を読めませんでした";
+    t.reasonBadVersion = "版の番号を読めませんでした";
+    t.reasonBadUrl = "GitHub 以外の場所へ向かったので止めました";
+    t.reasonMissingTool = "必要なコマンド（python3）がありません";
+    t.reasonNoChecksums = "確認用の SHA256SUMS がありません。手で更新してね";
+    t.reasonNoAsset = "この版には入れるファイルがありません";
+    t.reasonChecksumMismatch = "ダウンロードしたファイルが壊れています";
+    t.reasonUnsafeArchive = "ファイルの中身が安全でないので止めました";
+    t.reasonNoInstaller = "ファイルに install.sh がありません";
+    t.reasonInstallFailed = "install.sh が失敗しました（update.log を見てね）";
+    t.reasonBadArgs = "前回のインストールのオプションを読めません";
+    t.reasonBusy = "別の更新が動いています";
+    t.reasonNotNewer = "もう最新の版です";
+    t.reasonDetachFailed = "更新を始められませんでした（systemd-run）";
+    t.reasonInterrupted = "更新が途中で止まりました";
+    t.reasonIo = "ファイルを書けませんでした";
+    t.reasonUpdater = "更新の仕組みが動きませんでした";
+    t.reasonOther = "うまくいきませんでした";
     return t;
 }
 
@@ -292,6 +343,57 @@ UiText makeEnglish() {
     t.promptEtvrDetail2 = "(ETVR already smooths the eyelids)";
     t.promptYes = "Yes";
     t.promptNo = "No";
+
+    t.rowVersion = "Version";
+    t.checkedFormat = "Checked %s";
+    t.upToDateFormat = "v%s · Up to date";
+    t.availableFormat = "v%s is available";
+    t.runningFormat = "Now v%s";
+    t.checking = "Checking…";
+    t.updateManual = "Update this one by hand from GitHub";
+    t.checkButton = "Check";
+    t.updateButton = "Update";
+    t.installingFormat = "Updating: %s";
+    t.installingHint = "The panel may close meanwhile";
+    t.installedFormat = "v%s is installed";
+    t.installedHint = "Reopen the panel to use it";
+    t.installFailed = "The update failed (nothing was changed)";
+    t.checkFailedFormat = "v%s · Couldn't check";
+    t.retry = "Try again";
+    t.dismiss = "Close";
+    t.rowUpdateCheck = "Check for updates";
+    t.hintUpdateCheck = "At start and once a day, on GitHub";
+    t.updatePromptFormat = "Update to v%s?";
+    t.updatePromptDetail1 = "It downloads the release from GitHub and installs it";
+    t.updatePromptDetail2 = "frameeyeosc and the panel restart; sending stops for a few seconds";
+    t.updatePromptYes = "Update";
+    t.updatePromptNo = "Cancel";
+    t.stepStart = "Preparing";
+    t.stepDownload = "Downloading";
+    t.stepVerify = "Verifying";
+    t.stepExtract = "Unpacking";
+    t.stepInstall = "Installing";
+    t.reasonNetwork = "Can't reach GitHub";
+    t.reasonRateLimited = "GitHub's rate limit was hit. Try again in an hour";
+    t.reasonNotFound = "No published release";
+    t.reasonBadResponse = "Couldn't read GitHub's answer";
+    t.reasonBadVersion = "Couldn't read the version number";
+    t.reasonBadUrl = "Stopped: the download led outside GitHub";
+    t.reasonMissingTool = "A required command (python3) is missing";
+    t.reasonNoChecksums = "The release has no SHA256SUMS. Update by hand";
+    t.reasonNoAsset = "The release has no file to install";
+    t.reasonChecksumMismatch = "The download is corrupt (checksum mismatch)";
+    t.reasonUnsafeArchive = "Stopped: the archive has unsafe contents";
+    t.reasonNoInstaller = "The archive has no install.sh";
+    t.reasonInstallFailed = "install.sh failed (see update.log)";
+    t.reasonBadArgs = "The saved install options are invalid";
+    t.reasonBusy = "Another update is running";
+    t.reasonNotNewer = "Already up to date";
+    t.reasonDetachFailed = "Couldn't start the update (systemd-run)";
+    t.reasonInterrupted = "The update was interrupted";
+    t.reasonIo = "Couldn't write files";
+    t.reasonUpdater = "The updater didn't run";
+    t.reasonOther = "Something went wrong";
     return t;
 }
 
@@ -355,6 +457,48 @@ Language systemLanguage() {
 
 const UiText& uiText(Language language) {
     return language == Language::En ? kEnglish : kJapanese;
+}
+
+const char* updateStepText(const UiText& t, const std::string& step) {
+    if (step == "download") return t.stepDownload;
+    if (step == "verify") return t.stepVerify;
+    if (step == "extract") return t.stepExtract;
+    if (step == "install") return t.stepInstall;
+    return t.stepStart;
+}
+
+const char* updateReasonText(const UiText& t, const std::string& code) {
+    static const struct {
+        const char* code;
+        const char* UiText::*text;
+    } kReasons[] = {
+        {"network", &UiText::reasonNetwork},
+        {"rate-limited", &UiText::reasonRateLimited},
+        {"not-found", &UiText::reasonNotFound},
+        {"bad-response", &UiText::reasonBadResponse},
+        {"bad-version", &UiText::reasonBadVersion},
+        {"bad-url", &UiText::reasonBadUrl},
+        {"missing-tool", &UiText::reasonMissingTool},
+        {"no-checksums", &UiText::reasonNoChecksums},
+        {"no-asset", &UiText::reasonNoAsset},
+        {"checksum-mismatch", &UiText::reasonChecksumMismatch},
+        {"unsafe-archive", &UiText::reasonUnsafeArchive},
+        {"no-installer", &UiText::reasonNoInstaller},
+        {"install-failed", &UiText::reasonInstallFailed},
+        {"bad-args", &UiText::reasonBadArgs},
+        {"busy", &UiText::reasonBusy},
+        {"not-newer", &UiText::reasonNotNewer},
+        {"detach-failed", &UiText::reasonDetachFailed},
+        {"interrupted", &UiText::reasonInterrupted},
+        {"io", &UiText::reasonIo},
+        {"usage", &UiText::reasonUpdater},
+        {"script-failed", &UiText::reasonUpdater},
+        {"spawn-failed", &UiText::reasonUpdater},
+    };
+    for (const auto& reason : kReasons) {
+        if (code == reason.code) return t.*reason.text;
+    }
+    return t.reasonOther;
 }
 
 const char* languageCode(Language language) {

@@ -67,6 +67,7 @@ constexpr const char* kDespike = "despike";
 constexpr const char* kBlinkSyncBelow = "blink_sync_below";
 constexpr const char* kCalibrationReset = "calibration_reset";
 constexpr const char* kLanguage = "language";
+constexpr const char* kUpdateCheck = "update_check";  ///< panel only: look for a new release on GitHub
 }  // namespace key
 
 /** Output types (the "output" key). */

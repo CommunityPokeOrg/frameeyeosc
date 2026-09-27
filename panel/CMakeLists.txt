@@ -7,6 +7,15 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# The panel ships in the same tarball as frameeyeosc, so it takes its version from Cargo.toml
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../Cargo.toml" CARGO_VERSION_LINE REGEX "^version = \"[^\"]+\"" LIMIT_COUNT 1)
+string(REGEX REPLACE "^version = \"([^\"]+)\".*" "\\1" FRAMEEYEOSC_VERSION "${CARGO_VERSION_LINE}")
+if(NOT FRAMEEYEOSC_VERSION)
+  message(FATAL_ERROR "Could not read the version from ../Cargo.toml")
+endif()
+# The update checker shared with the other Frame apps (copied by frame-updater's sync.sh)
+set(FRAME_UPDATER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/frame-updater")
+
 # The OpenVR library that ships with SteamVR (its path on the Frame's SteamOS)
 set(OPENVR_LIB_DIR "/opt/steamvr/bin/linuxarm64" CACHE PATH "Directory containing libopenvr_api.so")
 
@@ -30,8 +39,10 @@ add_executable(frameeyeosc-panel
   src/theme.cpp
   src/vk_texture.cpp
   src/vr_overlay.cpp
+  ${FRAME_UPDATER_DIR}/cpp/update_check.cpp
 )
-target_include_directories(frameeyeosc-panel PRIVATE third_party/openvr)
+target_include_directories(frameeyeosc-panel PRIVATE third_party/openvr ${FRAME_UPDATER_DIR}/cpp)
+target_compile_definitions(frameeyeosc-panel PRIVATE FRAMEEYEOSC_VERSION="${FRAMEEYEOSC_VERSION}")
 target_compile_options(frameeyeosc-panel PRIVATE -Wall -Wextra)
 target_link_libraries(frameeyeosc-panel PRIVATE
   PkgConfig::CAIRO

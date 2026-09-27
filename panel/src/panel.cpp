@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 
 namespace {
 
@@ -400,6 +401,36 @@ std::string formatText(const char* format, const std::string& value) {
     return text;
 }
 
+/**
+ * When GitHub last answered, short: the time if it was today, the month and day otherwise.
+ * @param unixTime seconds since 1970
+ * @return "16:45" or "9/27"
+ */
+std::string checkedText(long long unixTime) {
+    const std::time_t when = static_cast<std::time_t>(unixTime);
+    const std::time_t now = std::time(nullptr);
+    std::tm whenTm {};
+    std::tm nowTm {};
+    localtime_r(&when, &whenTm);
+    localtime_r(&now, &nowTm);
+    char text[32];
+    if (whenTm.tm_year == nowTm.tm_year && whenTm.tm_yday == nowTm.tm_yday) {
+        std::snprintf(text, sizeof(text), "%d:%02d", whenTm.tm_hour, whenTm.tm_min);
+    } else {
+        std::snprintf(text, sizeof(text), "%d/%d", whenTm.tm_mon + 1, whenTm.tm_mday);
+    }
+    return text;
+}
+
+/**
+ * A version without a leading "v" (the texts add their own).
+ * @param version "0.4.0" or "v0.4.0"
+ * @return "0.4.0"
+ */
+std::string bareVersion(const std::string& version) {
+    return !version.empty() && (version[0] == 'v' || version[0] == 'V') ? version.substr(1) : version;
+}
+
 }  // namespace
 
 bool PanelHit::operator==(const PanelHit& other) const {
@@ -476,6 +507,10 @@ PanelHit EyePanel::pointerDown(double x, double y, double now) {
         case PanelAction::PromptNo:
             promptOutput_.clear();
             return hit;
+        case PanelAction::UpdateConfirm:
+        case PanelAction::UpdateCancel:
+            updatePromptVersion_.clear();
+            return hit;
         default: return hit;
     }
 }
@@ -508,6 +543,12 @@ bool EyePanel::tick(double now) {
 
 void EyePanel::showPrompt(const std::string& output) {
     promptOutput_ = output;
+    hover_ = {};
+    pressed_ = {};
+}
+
+void EyePanel::showUpdatePrompt(const std::string& version) {
+    updatePromptVersion_ = bareVersion(version);
     hover_ = {};
     pressed_ = {};
 }
@@ -813,7 +854,34 @@ void EyePanel::drawStatus(const Pen& pen, const UiText& t, const PanelModel& m) 
     if (!message.empty()) {
         const std::vector<std::string> lines = wrapText(pen, message, 15, true, x1 - x0, 2);
         for (size_t i = 0; i < lines.size(); ++i) pen.text(x0, 636 + i * 22, lines[i], 15, kDanger, true);
+    } else {
+        drawUpdateNotice(pen, t, m.update, x0, x1);
     }
+}
+
+void EyePanel::drawUpdateNotice(const Pen& pen, const UiText& t, const frame_updater::UpdateStatus& u, double x0,
+                                double x1) {
+    std::string text;
+    switch (u.state) {
+        case frame_updater::UpdateState::Available: text = formatText(t.availableFormat, bareVersion(u.latest)); break;
+        case frame_updater::UpdateState::Installing:
+            text = formatText(t.installingFormat, updateStepText(t, u.step));
+            break;
+        case frame_updater::UpdateState::Installed: text = formatText(t.installedFormat, bareVersion(u.version)); break;
+        default: return;
+    }
+    // Opens the Advanced tab, where the version row is
+    const PanelHit hit {PanelAction::Tab, nullptr, static_cast<int>(PanelTab::Advanced)};
+    const bool usable = tab_ != PanelTab::Advanced;
+    const double y = 618;
+    const double h = 44;
+    const int pointer = usable ? pointerState(hit) : 0;
+    fillRounded(pen, x0, y, x1 - x0, h, h / 2, pointer > 0 ? kControlHover : kAccentTint);
+    strokeRounded(pen, x0, y, x1 - x0, h, h / 2, kAccent, 2);
+    drawDot(pen.cr, x0 + 22, y + h / 2, 6, kAccent);
+    const double size = fitSize(pen, text, 16, 11, x1 - x0 - 50, true);
+    pen.text(x0 + 38, centerBaseline(y, h, size), text, size, kText, true);
+    addButton(hit, x0, y, x1 - x0, h, usable);
 }
 
 void EyePanel::drawTabs(const Pen& pen, const UiText& t) {
@@ -1252,26 +1320,37 @@ void EyePanel::drawAdvanced(const Pen& pen, const UiText& t, const PanelModel& m
         pen.text(kControlX + 4, y + kRowH + 18, example, fitSize(pen, example, 15, 11, kControlW, false), kTextMuted);
     }
     y += kRowH + 30;
+    // Version, new release check and install
+    drawUpdateRow(pen, t, m.update, y);
+    y += kRowH + kRowGap;
+    {
+        drawRowLabel(pen, t, y, kRowH, t.rowUpdateCheck, t.hintUpdateCheck, false);
+        drawSegmented(pen, kControlX, y + cy, 300, kControlH,
+                      {{t.on, {PanelAction::SetBool, key::kUpdateCheck, 1}},
+                       {t.off, {PanelAction::SetBool, key::kUpdateCheck, 0}}},
+                      v.flag(key::kUpdateCheck) ? 0 : 1, 20);
+    }
+    y += kRowH + 14;
     /**
      * A read-only row: title on the left, text on the right.
      */
     const auto infoRow = [&](const std::string& title, const std::string& hint, const std::string& value,
                              bool keepEnd) {
-        drawRowLabel(pen, t, y, 56, title, hint, false);
-        pen.text(kControlX, centerBaseline(y, 56, 16), ellipsize(pen, value, 16, false, kControlW, keepEnd), 16,
+        drawRowLabel(pen, t, y, 48, title, hint, false);
+        pen.text(kControlX, centerBaseline(y, 48, 16), ellipsize(pen, value, 16, false, kControlW, keepEnd), 16,
                  kText);
     };
     // File locations
     infoRow(t.rowConfigPath, "", m.configPath, true);
     if (s.running && !s.configPath.empty() && s.configPath != m.configPath) {
         const std::string warning = t.configPathMismatch + s.configPath;
-        pen.text(kControlX, y + 54, ellipsize(pen, warning, 14, true, kControlW, true), 14, kDanger, true);
+        pen.text(kControlX, y + 47, ellipsize(pen, warning, 14, true, kControlW, true), 14, kDanger, true);
     }
-    y += 64;
+    y += 52;
     infoRow(t.rowCalibrationPath, "", s.running && !s.calibrationPath.empty() ? s.calibrationPath : "—", true);
-    y += 64;
+    y += 52;
     infoRow(t.rowStatusPath, "", m.statusPath, true);
-    y += 64;
+    y += 52;
     // frameeyeosc process
     {
         std::string text = t.notRunning;
@@ -1289,7 +1368,7 @@ void EyePanel::drawAdvanced(const Pen& pen, const UiText& t, const PanelModel& m
         }
         infoRow(t.rowCore, "", text, false);
     }
-    y += 64;
+    y += 52;
     // Locked by the command line, with the values in effect
     {
         std::vector<std::string> items;
@@ -1318,9 +1397,92 @@ void EyePanel::drawAdvanced(const Pen& pen, const UiText& t, const PanelModel& m
                 lines.push_back(ellipsize(pen, item, 16, false, kControlW, false));
             }
         }
-        if (lines.size() > 4) lines.resize(4);
+        if (lines.size() > 3) lines.resize(3);
         for (size_t i = 0; i < lines.size(); ++i) pen.text(kControlX, y + 34 + i * 24, lines[i], 16, kText);
     }
+}
+
+void EyePanel::drawUpdateRow(const Pen& pen, const UiText& t, const frame_updater::UpdateStatus& u, double y) {
+    using frame_updater::UpdateState;
+    const std::string current = bareVersion(u.current);
+    drawRowLabel(pen, t, y, kRowH, t.rowVersion, u.checkedAt > 0 ? formatText(t.checkedFormat, checkedText(u.checkedAt)) : "",
+                 false);
+    std::string main = "v" + current;
+    std::string detail;
+    bool detailIsError = false;
+    PanelHit hit {PanelAction::UpdateCheck, nullptr, 0};
+    const char* label = t.checkButton;
+    bool accent = false;
+    switch (u.state) {
+        case UpdateState::Unknown: break;
+        case UpdateState::UpToDate: main = formatText(t.upToDateFormat, current); break;
+        case UpdateState::Available:
+            main = formatText(t.availableFormat, bareVersion(u.latest));
+            if (u.installable) {
+                detail = formatText(t.runningFormat, current);
+                hit = {PanelAction::UpdateInstall, nullptr, 0};
+                label = t.updateButton;
+                accent = true;
+            } else {
+                detail = t.updateManual;
+            }
+            break;
+        case UpdateState::Installing:
+            main = formatText(t.installingFormat, updateStepText(t, u.step));
+            detail = t.installingHint;
+            hit = {};
+            break;
+        case UpdateState::Installed:
+            main = formatText(t.installedFormat, bareVersion(u.version));
+            detail = t.installedHint;
+            hit = {PanelAction::UpdateDismiss, nullptr, 0};
+            label = t.dismiss;
+            break;
+        case UpdateState::CheckFailed:
+            main = formatText(t.checkFailedFormat, current);
+            detail = updateReasonText(t, u.error);
+            detailIsError = true;
+            break;
+        case UpdateState::InstallFailed:
+            // Closing it brings back the check result, with "Update" to try again
+            main = t.installFailed;
+            detail = updateReasonText(t, u.error);
+            detailIsError = true;
+            hit = {PanelAction::UpdateDismiss, nullptr, 0};
+            label = t.dismiss;
+            break;
+    }
+    if (u.checking && u.state != UpdateState::Installing) {
+        detail = t.checking;
+        detailIsError = false;
+    }
+
+    const double bw = 150;
+    const double bx = kInnerRight - bw;
+    const double by = y + (kRowH - kControlH) / 2;
+    const double textW = bx - 16 - kControlX;
+    if (detail.empty()) {
+        const double size = fitSize(pen, main, 19, 13, textW, true);
+        pen.text(kControlX, centerBaseline(y, kRowH, size), main, size, kText, true);
+    } else {
+        pen.text(kControlX, y + kRowH / 2 - 3, main, fitSize(pen, main, 19, 13, textW, true), kText, true);
+        pen.text(kControlX, y + kRowH / 2 + 19, detail, fitSize(pen, detail, 15, 11, textW, detailIsError),
+                 detailIsError ? kDanger : kTextMuted, detailIsError);
+    }
+    if (hit.action == PanelAction::None) return;
+    // A check can't be started while one runs
+    const bool usable = !(hit.action == PanelAction::UpdateCheck && u.checking);
+    const int pointer = usable ? pointerState(hit) : 0;
+    if (accent) {
+        fillRounded(pen, bx, by, bw, kControlH, kControlH / 2, pointer == 2 ? kAccentPressed : kAccent);
+    } else {
+        fillRounded(pen, bx, by, bw, kControlH, kControlH / 2, pointer > 0 ? kControlHover : kControl);
+        strokeRounded(pen, bx, by, bw, kControlH, kControlH / 2, usable ? kBorder : kDivider, 2);
+    }
+    const double size = fitSize(pen, label, 19, 12, bw - 24, true);
+    const Color labelColor = accent ? kOnAccent : (usable ? kText : kTextDisabled);
+    textCentered(pen, bx + bw / 2, centerBaseline(by, kControlH, size), label, size, labelColor, true);
+    addButton(hit, bx, by, bw, kControlH, usable);
 }
 
 void EyePanel::drawPrompt(const Pen& pen, const UiText& t) {
@@ -1329,17 +1491,19 @@ void EyePanel::drawPrompt(const Pen& pen, const UiText& t) {
     cairo_set_source_rgba(pen.cr, 0, 0, 0, 0.62);
     pen.roundedRect(0, 0, kWidth, kHeight, 24);
     cairo_fill(pen.cr);
+    const bool update = !updatePromptVersion_.empty();
     const bool etvr = promptOutput_ == kOutputEtvr;
     const double w = 760;
     const double h = 270;
     const double x = (kWidth - w) / 2;
     const double y = (kHeight - h) / 2;
     drawCard(pen, x, y, w, h, 24, kCard, kAccent, 2);
-    const std::string title = etvr ? t.promptEtvr : t.promptVrchat;
+    const std::string title = update ? formatText(t.updatePromptFormat, updatePromptVersion_)
+                                     : (etvr ? t.promptEtvr : t.promptVrchat);
     const double titleSize = fitSize(pen, title, 24, 16, w - 60, true);
     textCentered(pen, x + w / 2, y + 62, title, titleSize, kText, true);
-    const std::string detail1 = etvr ? t.promptEtvrDetail1 : t.promptVrchatDetail1;
-    const std::string detail2 = etvr ? t.promptEtvrDetail2 : t.promptVrchatDetail2;
+    const std::string detail1 = update ? t.updatePromptDetail1 : (etvr ? t.promptEtvrDetail1 : t.promptVrchatDetail1);
+    const std::string detail2 = update ? t.updatePromptDetail2 : (etvr ? t.promptEtvrDetail2 : t.promptVrchatDetail2);
     textCentered(pen, x + w / 2, y + 108, detail1, fitSize(pen, detail1, 17, 12, w - 60, false), kTextMuted, false);
     if (!detail2.empty()) {
         textCentered(pen, x + w / 2, y + 136, detail2, fitSize(pen, detail2, 17, 12, w - 60, false), kTextMuted,
@@ -1350,10 +1514,11 @@ void EyePanel::drawPrompt(const Pen& pen, const UiText& t) {
     const double by = y + h - 32 - kControlH - 4;
     for (int i = 0; i < 2; ++i) {
         const bool yes = i == 0;
-        const PanelHit hit {yes ? PanelAction::PromptYes : PanelAction::PromptNo, nullptr, arg};
+        PanelHit hit {yes ? PanelAction::PromptYes : PanelAction::PromptNo, nullptr, arg};
+        if (update) hit = {yes ? PanelAction::UpdateConfirm : PanelAction::UpdateCancel, nullptr, 0};
         const double bx = yes ? x + w / 2 - bw - 12 : x + w / 2 + 12;
         const int pointer = pointerState(hit);
-        const std::string label = yes ? t.promptYes : t.promptNo;
+        const std::string label = update ? (yes ? t.updatePromptYes : t.updatePromptNo) : (yes ? t.promptYes : t.promptNo);
         if (yes) {
             fillRounded(pen, bx, by, bw, kControlH + 4, (kControlH + 4) / 2, pointer == 2 ? kAccentPressed : kAccent);
         } else {
@@ -1389,7 +1554,7 @@ void EyePanel::render(const PanelModel& model) {
         case PanelTab::Lids: drawLids(pen, t, model, view); break;
         case PanelTab::Advanced: drawAdvanced(pen, t, model, view); break;
     }
-    if (!promptOutput_.empty()) drawPrompt(pen, t);
+    if (promptOpen()) drawPrompt(pen, t);
 
     // Forget hover on a button that is gone or can no longer be pressed
     bool hoverFound = false;

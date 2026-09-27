@@ -53,6 +53,10 @@ Options in `FRAMEEYEOSC_ARGS` in `env` still work as before. But anything set th
 
 To remove it: `./install.sh --uninstall` (removes the panel too; add `--purge` to also delete settings and calibration).
 
+### Updating from the panel (0.4.0 and later)
+
+The panel's Advanced page shows the installed version. At start and then at most once a day, the panel asks GitHub whether a newer release exists; "Check" asks right away. When one exists, "Update" downloads it, checks it against the release's `SHA256SUMS`, and runs its `install.sh` with the options of your last install (kept in `~/.config/frameeyeosc/install-args`). frameeyeosc and the panel restart on the new version. If anything fails before `install.sh` runs, nothing changes; the log is in `~/.cache/frameeyeosc/update.log`. Turn "Check for updates" off to stop the daily check (the "Check" button still works). The update itself only runs when you press the button.
+
 ## Panel
 
 `./install.sh --with-panel` adds an "Eye" panel to the SteamVR dashboard. It starts together with SteamVR from the next SteamVR start; to open it right away, pick "frameeyeosc panel" under Launch program (+) on the dashboard.
@@ -61,9 +65,9 @@ To remove it: `./install.sh --uninstall` (removes the panel too; add `--purge` t
 - Basic: pause sending, VRChat or VRCFaceTracking (ETVR), target PC (automatic, or fixed to the PC it sends to now, so there's no IP to type in VR), port, language (Japanese / English), start with SteamVR, reset all, quit.
 - Gaze: smoothing on or off, light / medium / strong presets and the three filter values, deadzone, holding the gaze while blinking, per-eye gaze, skipping unreliable gaze, removing one-sample glitches.
 - Eyelids: auto calibration and its learned values, per-eye scales, the four openness marks drawn over each eye's live openness (blink and open wide to set them), left/right sync, keeping blinks visible (hold time and closing both eyes), eyelid smoothing.
-- Advanced: parameter prefix, file locations, options locked by the command line.
+- Advanced: parameter prefix, the version with checking for and installing updates, file locations, options locked by the command line.
 
-The panel only writes `config.json` and reads the status file. To pick its default language, it also reads the `language` line of Steam's `~/.steam/registry.vdf` once at startup (read only). Closing it, quitting it, or not installing it doesn't stop frameeyeosc. It reads nothing and draws nothing while it isn't open on the dashboard. Its "Start with SteamVR" switch enables or disables its systemd user unit (`frameeyeosc-panel.service`). Build notes and debugging options are in [panel/README.md](panel/README.md) (Japanese).
+The panel only writes `config.json` and reads the status file. To pick its default language, it also reads the `language` line of Steam's `~/.steam/registry.vdf` once at startup (read only). For updates it runs `~/.local/share/frameeyeosc/frame-update.sh` (see above). Closing it, quitting it, or not installing it doesn't stop frameeyeosc. Apart from the update check, it reads nothing and draws nothing while it isn't open on the dashboard. Its "Start with SteamVR" switch enables or disables its systemd user unit (`frameeyeosc-panel.service`). Build notes and debugging options are in [panel/README.md](panel/README.md) (Japanese).
 
 ## Settings
 
@@ -98,6 +102,7 @@ Settings are in `~/.config/frameeyeosc/config.json`. The panel writes it, and yo
 | `blink_sync_below` | `--blink-sync-below` | `0.35` | When one eye is closed and the other is below this (VRCFT scale), both are sent closed. Winks, with the other eye open, pass through. `0` turns it off |
 | `calibration_reset` | | `0` | Increase it to make the eyelid calibration start over |
 | `language` | | Steam's language | Panel language, `"ja"` or `"en"`. Without it, the panel is in Japanese if Steam is set to Japanese and in English otherwise |
+| `update_check` | | `true` | The panel looks for a new release on GitHub at start and once a day. frameeyeosc itself ignores it |
 
 Command-line options win over the file. They go in `~/.config/frameeyeosc/env` (then `systemctl --user restart frameeyeosc`):
 
@@ -150,6 +155,7 @@ Eyelid calibration is automatic. For the first 20 seconds after you put the head
 ## Privacy
 
 - frameeyeosc sends gaze and eyelid values only to the destination above (your PC). It has no telemetry and doesn't talk to the internet.
+- The panel asks GitHub (`api.github.com`) for the latest release at start and at most once a day, unless "Check for updates" is off. Like any web request, this shows GitHub your IP address. Nothing else is sent, and downloads only come from GitHub.
 - On disk it stores only two numbers, each eye's learned relaxed openness, in `~/.config/frameeyeosc/calibration`, plus your settings. The latest eye values are in the status file, which is in memory, readable only by you, and overwritten ten times a second; no history is kept.
 - The OSC messages are unencrypted, so other devices on the same network could read them.
 
@@ -168,7 +174,16 @@ Build and test on the headset (the binary must link against the headset's glibc,
 ```sh
 cargo test --release
 cmake -G Ninja -S panel -B panel/build && ninja -C panel/build
-scripts/package.sh   # builds dist/frameeyeosc-<version>-steamframe-aarch64.tar.gz with both
+scripts/package.sh   # builds dist/frameeyeosc-<version>-steamframe-aarch64.tar.gz with both, and dist/SHA256SUMS
+```
+
+`vendor/frame-updater/` is a copy of the update checker shared by my Steam Frame apps. Don't edit it here: `scripts/package.sh` stops if it differs from what the copy's `MANIFEST.sha256` records.
+
+To publish a release, attach both files. The panel's "Update" button refuses releases without `SHA256SUMS` and asks for a manual update instead:
+
+```sh
+gh release create v0.4.0 --title v0.4.0 --notes-file notes.md
+gh release upload v0.4.0 dist/frameeyeosc-0.4.0-steamframe-aarch64.tar.gz dist/SHA256SUMS
 ```
 
 To tune the eye processing against real data, record the eye tracker's raw samples (nothing is sent while recording, so it can run next to the service), then replay the file. The replay prints a few numbers for the current settings next to the same settings with the 0.4.0 steps turned off; settings come from `config.json` and options as usual. Recordings are personal data, so keep them out of the repository.

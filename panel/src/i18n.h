@@ -163,6 +163,60 @@ struct UiText {
     const char* promptEtvrDetail2;
     const char* promptYes;
     const char* promptNo;
+
+    // Updates (the version row on the Advanced tab, the notice in the status column, the update prompt)
+    const char* rowVersion;
+    const char* checkedFormat;        ///< "Checked %s" (time or date of the last answer from GitHub)
+    const char* upToDateFormat;       ///< "v%s · Up to date"
+    const char* availableFormat;      ///< "v%s is available"
+    const char* runningFormat;        ///< "Now v%s"
+    const char* checking;
+    const char* updateManual;         ///< the release can't be installed from the panel
+    const char* checkButton;
+    const char* updateButton;
+    const char* installingFormat;     ///< "Updating: %s" (a step below)
+    const char* installingHint;
+    const char* installedFormat;      ///< "v%s is installed"
+    const char* installedHint;
+    const char* installFailed;
+    const char* checkFailedFormat;    ///< "v%s · Couldn't check"
+    const char* retry;
+    const char* dismiss;
+    const char* rowUpdateCheck;
+    const char* hintUpdateCheck;
+    const char* updatePromptFormat;   ///< "Update to v%s?"
+    const char* updatePromptDetail1;
+    const char* updatePromptDetail2;
+    const char* updatePromptYes;
+    const char* updatePromptNo;
+    // Install steps (UpdateStatus::step)
+    const char* stepStart;
+    const char* stepDownload;
+    const char* stepVerify;
+    const char* stepExtract;
+    const char* stepInstall;
+    // Why a check or an install failed (UpdateStatus::error; see frame-updater's strings.md)
+    const char* reasonNetwork;
+    const char* reasonRateLimited;
+    const char* reasonNotFound;
+    const char* reasonBadResponse;
+    const char* reasonBadVersion;
+    const char* reasonBadUrl;
+    const char* reasonMissingTool;
+    const char* reasonNoChecksums;
+    const char* reasonNoAsset;
+    const char* reasonChecksumMismatch;
+    const char* reasonUnsafeArchive;
+    const char* reasonNoInstaller;
+    const char* reasonInstallFailed;
+    const char* reasonBadArgs;
+    const char* reasonBusy;
+    const char* reasonNotNewer;
+    const char* reasonDetachFailed;
+    const char* reasonInterrupted;
+    const char* reasonIo;
+    const char* reasonUpdater;        ///< the updater itself didn't run (usage, script-failed, spawn-failed)
+    const char* reasonOther;
 };
 
 /**
@@ -171,6 +225,22 @@ struct UiText {
  * @return the table (valid for the whole program)
  */
 const UiText& uiText(Language language);
+
+/**
+ * The text of an install step.
+ * @param t the text table
+ * @param step UpdateStatus::step ("download" and so on)
+ * @return the text
+ */
+const char* updateStepText(const UiText& t, const std::string& step);
+
+/**
+ * The text of an update error code.
+ * @param t the text table
+ * @param code UpdateStatus::error ("network" and so on); unknown codes get a general text
+ * @return the text
+ */
+const char* updateReasonText(const UiText& t, const std::string& code);
 
 /**
  * The language name written in config.json.

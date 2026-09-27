@@ -23,7 +23,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <ctime>
 #include <functional>
+#include <iterator>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -40,10 +43,11 @@ constexpr int kThumbnailSize = 256;       ///< dashboard thumbnail edge (px)
 constexpr double kPanelPollSec = 0.033;   ///< event polling while the panel is visible
 constexpr double kClosedPollSec = 0.25;   ///< event polling while it is not
 constexpr double kStatusReadSec = 0.1;    ///< status.json is read this often while the panel is visible
+constexpr double kUpdateSettleSec = 60.0; ///< --update-live: longest wait for a check or an install to finish
 
 /** The command line. */
 struct Options {
-    enum class Mode { Overlay, Print, DumpPng, Probe, SwitchAway, ContrastReport, Help };
+    enum class Mode { Overlay, Print, DumpPng, Probe, SwitchAway, ContrastReport, Help, Version };
     Mode mode = Mode::Overlay;
     std::string configPath;
     std::string statusPath;
@@ -54,6 +58,7 @@ struct Options {
     PanelTab tab = PanelTab::Basic;
     bool previewQuit = false;
     bool previewReset = false;
+    bool previewUpdatePrompt = false;
     double switchAwaySec = 3.0;
     // Fake states for --dump-png (any of them draws a made-up state instead of reading the files)
     bool fake = false;
@@ -69,6 +74,8 @@ struct Options {
     bool fakeWriteError = false;
     bool fakeCustom = false;
     std::string fakePrompt;       ///< vrchat / etvr
+    std::string fakeUpdate;       ///< a made-up update state (see printUsage)
+    bool updateLive = false;      ///< --dump-png: run the real update checker (and wait for it after clicks)
     std::vector<std::pair<double, double>> clicks;  ///< --click X,Y: presses carried out before the PNG is drawn
     Autostart fakeAutostart = Autostart::Disabled;
 };
@@ -139,6 +146,7 @@ void printUsage() {
         "      --tab basic|gaze|lids|advanced  Draw this tab\n"
         "      --preview-quit    Show \"press again to quit\"\n"
         "      --preview-reset   Show \"press again to reset\"\n"
+        "      --preview-update-prompt  Show the \"update to ...?\" question (with --fake-update available)\n"
         "      --fake            Draw a made-up state (running, sending to VRChat) instead of the files.\n"
         "                        Each --fake-* below implies --fake\n"
         "      --fake-not-running / --fake-paused / --fake-no-tracking / --fake-etvr / --fake-fixed\n"
@@ -150,10 +158,15 @@ void printUsage() {
         "      --fake-custom     Gaze smoothing values that match no preset\n"
         "      --fake-prompt vrchat|etvr  The recommended-settings question\n"
         "      --fake-autostart on|off|missing|unknown\n"
+        "      --fake-update checking|uptodate|available|manual|installing|installed|checkfailed|installfailed\n"
+        "                        A made-up update state (the version row on the Advanced tab)\n"
+        "      --update-live     Run the real update checker: check first, and after each --click wait for the\n"
+        "                        check or install it started (installs really happen; for testing with a fake GitHub)\n"
         "      --click X,Y       Press the panel at X,Y first (repeatable; writes --config; not with --fake)\n"
         "  --contrast-report     Print the WCAG contrast ratio of every color pair on screen\n"
         "  --probe               Diagnostics: connect to SteamVR as a background app and describe the resident panel\n"
         "  --probe-switch-away [S]  Diagnostics: switch the dashboard to a temporary overlay for S s (default 3)\n"
+        "  --version             Print the version\n"
         "  --config PATH         Config file (default ~/.config/frameeyeosc/config.json)\n"
         "  --status PATH         Status file (default $XDG_RUNTIME_DIR/frameeyeosc/status.json)\n");
 }
@@ -204,6 +217,8 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.previewQuit = true;
         } else if (arg == "--preview-reset") {
             options.previewReset = true;
+        } else if (arg == "--preview-update-prompt") {
+            options.previewUpdatePrompt = true;
         } else if (arg == "--fake") {
             options.fake = true;
         } else if (arg == "--fake-not-running") {
@@ -249,6 +264,19 @@ bool parseOptions(int argc, char** argv, Options& options) {
                 return false;
             }
             options.fake = true;
+        } else if (arg == "--fake-update" && hasNext) {
+            options.fakeUpdate = argv[++i];
+            static const char* const kStates[] = {"checking",  "uptodate",  "available",   "manual",
+                                                  "installing", "installed", "checkfailed", "installfailed"};
+            if (std::find(std::begin(kStates), std::end(kStates), options.fakeUpdate) == std::end(kStates)) {
+                std::fprintf(stderr, "--fake-update: unknown state %s\n", options.fakeUpdate.c_str());
+                return false;
+            }
+            options.fake = true;
+        } else if (arg == "--update-live") {
+            options.updateLive = true;
+        } else if (arg == "--version") {
+            options.mode = Options::Mode::Version;
         } else if (arg == "--click" && hasNext) {
             double x = 0;
             double y = 0;
@@ -275,6 +303,10 @@ bool parseOptions(int argc, char** argv, Options& options) {
             return false;
         }
     }
+    if (options.fake && options.updateLive) {
+        std::fprintf(stderr, "--update-live works on the real files, not with --fake\n");
+        return false;
+    }
     if (options.fake && !options.clicks.empty()) {
         std::fprintf(stderr, "--click works on the real files, not with --fake\n");
         return false;
@@ -294,6 +326,67 @@ Language configLanguage(const ConfigFile& config) {
     const JsonValue* written = config.root.get(key::kLanguage);
     if (written != nullptr && written->isString()) parseLanguage(written->text, language);
     return language;
+}
+
+/**
+ * The update checker's settings: frame-update.sh as install.sh puts it, this release's tarball name and the
+ * install.sh option used when ~/.config/frameeyeosc/install-args is missing (0.3.x did not write it).
+ * @return the settings
+ */
+frame_updater::UpdaterConfig updaterConfig() {
+    frame_updater::UpdaterConfig c;
+    const char* data = std::getenv("XDG_DATA_HOME");
+    const char* home = std::getenv("HOME");
+    const std::string dataHome =
+        data != nullptr && data[0] == '/' ? std::string(data) : std::string(home != nullptr ? home : "") + "/.local/share";
+    c.script = dataHome + "/frameeyeosc/frame-update.sh";
+    c.app = "frameeyeosc";
+    c.repo = "sasaken1102r/frameeyeosc";
+    c.currentVersion = FRAMEEYEOSC_VERSION;
+    c.assetPattern = "frameeyeosc-{version}-steamframe-aarch64.tar.gz";
+    // The update button is only in the panel, so whoever uses it has the panel installed
+    c.defaultInstallArgs = {"--with-panel"};
+    return c;
+}
+
+/**
+ * A made-up update state for --fake-update.
+ * @param state the state name
+ * @return the status
+ */
+frame_updater::UpdateStatus fakeUpdate(const std::string& state) {
+    using frame_updater::UpdateState;
+    frame_updater::UpdateStatus u;
+    u.current = FRAMEEYEOSC_VERSION;
+    u.latest = u.current;
+    u.url = "https://github.com/sasaken1102r/frameeyeosc/releases/latest";
+    u.checkedAt = static_cast<long long>(std::time(nullptr)) - 600;
+    if (state == "checking") {
+        u.checking = true;
+        u.checkedAt = 0;
+    } else if (state == "uptodate") {
+        u.state = UpdateState::UpToDate;
+    } else if (state == "available" || state == "manual") {
+        u.state = UpdateState::Available;
+        u.latest = "9.9.9";
+        u.installable = state == "available";
+        if (!u.installable) u.reason = "no-checksums";
+    } else if (state == "installing") {
+        u.state = UpdateState::Installing;
+        u.step = "download";
+        u.version = "9.9.9";
+    } else if (state == "installed") {
+        u.state = UpdateState::Installed;
+        u.version = "9.9.9";
+    } else if (state == "checkfailed") {
+        u.state = UpdateState::CheckFailed;
+        u.error = "network";
+    } else if (state == "installfailed") {
+        u.state = UpdateState::InstallFailed;
+        u.version = "9.9.9";
+        u.error = "checksum-mismatch";
+    }
+    return u;
 }
 
 /**
@@ -371,10 +464,30 @@ PanelModel fakeModel(const Options& options) {
     m.autostart.autostart = options.fakeAutostart;
     m.language = configLanguage(m.config);
     if (options.fakeWriteError) m.panelError = "rename failed: Read-only file system";
+    m.update = fakeUpdate(options.fakeUpdate);
+    if (options.fakeUpdate.empty()) m.update.state = frame_updater::UpdateState::UpToDate;
     return m;
 }
 
-void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, AutostartWorker& autostart);
+void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, AutostartWorker& autostart,
+              frame_updater::UpdateChecker* updater);
+
+/**
+ * --update-live: tick the update checker until its check or install is over (or time runs out).
+ * @param updater the checker
+ * @param enabled the update_check setting
+ */
+void settleUpdater(frame_updater::UpdateChecker& updater, bool enabled) {
+    const double end = nowSeconds() + kUpdateSettleSec;
+    // Give a just-started install a moment to write its state file
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    while (nowSeconds() < end) {
+        updater.tick(enabled);
+        const auto& u = updater.status();
+        if (!u.checking && u.state != frame_updater::UpdateState::Installing) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+}
 
 /**
  * --dump-png / --thumbnail-png: draw without OpenVR and save PNGs.
@@ -402,6 +515,15 @@ int runDumpPng(const Options& options) {
         if (options.previewQuit) panel.armQuitForPreview();
         if (options.previewReset) panel.armResetForPreview();
         if (!options.fakePrompt.empty()) panel.showPrompt(options.fakePrompt);
+        if (options.previewUpdatePrompt) panel.showUpdatePrompt(model.update.latest);
+        std::unique_ptr<frame_updater::UpdateChecker> updater;
+        const bool updateCheck = model.config.flag(key::kUpdateCheck);
+        if (options.updateLive) {
+            updater = std::make_unique<frame_updater::UpdateChecker>(updaterConfig());
+            updater->tick(updateCheck);
+            settleUpdater(*updater, updateCheck);
+            model.update = updater->status();
+        }
         // Presses as the laser pointer would make them (hit areas and config writes, without a headset)
         AutostartWorker idleAutostart;  // never started: autostart presses are only logged
         for (const auto& click : options.clicks) {
@@ -409,8 +531,19 @@ int runDumpPng(const Options& options) {
             const PanelHit hit = panel.pointerDown(click.first, click.second, nowSeconds());
             std::printf("click %.0f,%.0f -> action %d key %s arg %d\n", click.first, click.second,
                         static_cast<int>(hit.action), hit.key != nullptr ? hit.key : "-", hit.arg);
-            if (hit.action != PanelAction::Quit) applyHit(hit, model, panel, idleAutostart);
+            if (hit.action != PanelAction::Quit) applyHit(hit, model, panel, idleAutostart, updater.get());
             panel.pointerUp();
+            if (updater) {
+                settleUpdater(*updater, model.config.flag(key::kUpdateCheck));
+                model.update = updater->status();
+            }
+        }
+        if (updater) {
+            const auto& u = model.update;
+            std::printf("update: state %d, checking %d, current %s, latest %s, installable %d, step %s, version %s, "
+                        "error %s, checked_at %lld\n",
+                        static_cast<int>(u.state), u.checking, u.current.c_str(), u.latest.c_str(), u.installable,
+                        u.step.c_str(), u.version.c_str(), u.error.c_str(), u.checkedAt);
         }
         panel.pointerLeave();
         panel.render(model);
@@ -506,7 +639,8 @@ std::string statusSignature(const EyeStatus& s) {
  * @param panel the panel (to open the recommendation prompt)
  * @param autostart the autostart worker
  */
-void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, AutostartWorker& autostart) {
+void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, AutostartWorker& autostart,
+              frame_updater::UpdateChecker* updater) {
     const SettingsView view(model);
     std::function<void(JsonValue&)> change;
     std::string openPrompt;
@@ -644,6 +778,24 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
             break;
         }
         case PanelAction::ResetAll: reset = true; break;
+        case PanelAction::UpdateCheck:
+            std::fprintf(stderr, "[update] check now\n");
+            if (updater != nullptr) updater->checkNow();
+            return;
+        case PanelAction::UpdateInstall:
+            if (model.update.state == frame_updater::UpdateState::Available && model.update.installable) {
+                panel.showUpdatePrompt(model.update.latest);
+            }
+            return;
+        case PanelAction::UpdateConfirm:
+            std::fprintf(stderr, "[update] installing %s (log: %s)\n", model.update.latest.c_str(),
+                         updater != nullptr ? updater->logPath().c_str() : "-");
+            if (updater != nullptr && !updater->install()) std::fprintf(stderr, "[update] could not start it\n");
+            return;
+        case PanelAction::UpdateCancel: std::fprintf(stderr, "[update] install: no\n"); return;
+        case PanelAction::UpdateDismiss:
+            if (updater != nullptr) updater->dismiss();
+            return;
     }
 
     std::string error;
@@ -737,6 +889,29 @@ bool startedByOwnService() {
 }
 
 /**
+ * Log what the update checker found, once per change (not the "checking" flag alone).
+ * @param u the status
+ */
+void logUpdate(const frame_updater::UpdateStatus& u) {
+    static std::string last;
+    std::string line;
+    switch (u.state) {
+        case frame_updater::UpdateState::Unknown: return;
+        case frame_updater::UpdateState::UpToDate: line = "up to date (" + u.current + ")"; break;
+        case frame_updater::UpdateState::Available:
+            line = "new release " + u.latest + (u.installable ? "" : " (not installable: " + u.reason + ")");
+            break;
+        case frame_updater::UpdateState::Installing: line = "installing " + u.version + ": " + u.step; break;
+        case frame_updater::UpdateState::Installed: line = "installed " + u.version + "; reopen to use it"; break;
+        case frame_updater::UpdateState::CheckFailed: line = "check failed (" + u.error + "): " + u.message; break;
+        case frame_updater::UpdateState::InstallFailed: line = "install failed (" + u.error + "): " + u.message; break;
+    }
+    if (line == last) return;
+    last = line;
+    std::fprintf(stderr, "[update] %s\n", line.c_str());
+}
+
+/**
  * Stay resident as a dashboard overlay. Waits for SteamVR, exits quietly when it quits.
  * If another instance runs, asks it to open its panel and exits (no VR_Init).
  * @param options the command line
@@ -774,6 +949,9 @@ int runOverlay(const Options& options) {
     EyePanel panel(fonts);
     AutostartWorker autostart;
     autostart.start();
+    frame_updater::UpdateChecker updater(updaterConfig());
+    std::fprintf(stderr, "[update] frameeyeosc-panel %s, checking %s\n", FRAMEEYEOSC_VERSION,
+                 model.config.flag(key::kUpdateCheck) ? "on" : "off");
     VrOverlay vr;
 
     // Wait for SteamVR
@@ -814,6 +992,7 @@ int runOverlay(const Options& options) {
     }
 
     uint64_t drawnAutostart = autostart.snapshot(model.autostart);
+    uint64_t drawnUpdate = 0;
     std::string lastSignature;
     std::string lastStamp = configStamp(model.configPath);
     bool lastRunning = false;
@@ -879,7 +1058,7 @@ int runOverlay(const Options& options) {
                         std::fprintf(stderr, "[VR] quitting from the panel's \"Quit\"\n");
                         userQuit = true;
                     } else {
-                        applyHit(hit, model, panel, autostart);
+                        applyHit(hit, model, panel, autostart, &updater);
                         lastStamp = configStamp(model.configPath);
                     }
                     dirty = true;
@@ -894,6 +1073,14 @@ int runOverlay(const Options& options) {
         const uint64_t autostartVersion = autostart.snapshot(model.autostart);
         if (autostartVersion != drawnAutostart) {
             drawnAutostart = autostartVersion;
+            dirty = true;
+        }
+        // Checks at start and then daily (frame-update.sh asks GitHub at most once a day), even while closed
+        updater.tick(model.config.flag(key::kUpdateCheck));
+        if (updater.revision() != drawnUpdate) {
+            drawnUpdate = updater.revision();
+            model.update = updater.status();
+            logUpdate(model.update);
             dirty = true;
         }
 
@@ -939,6 +1126,7 @@ int main(int argc, char** argv) {
     }
     switch (options.mode) {
         case Options::Mode::Help: printUsage(); return 0;
+        case Options::Mode::Version: std::printf("frameeyeosc-panel %s\n", FRAMEEYEOSC_VERSION); return 0;
         case Options::Mode::Print: return runPrint(options);
         case Options::Mode::DumpPng: return runDumpPng(options);
         case Options::Mode::Probe: return VrOverlay::probe();

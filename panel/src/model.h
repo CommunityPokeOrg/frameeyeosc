@@ -6,6 +6,7 @@
 #include "config.h"
 #include "i18n.h"
 #include "status.h"
+#include "update_check.h"
 
 #include <string>
 #include <vector>
@@ -20,6 +21,7 @@ struct PanelModel {
     std::string panelError;      ///< the panel's own last write failure (English detail); empty if none
     bool panelErrorBroken = false;  ///< that failure was because config.json is broken
     Language language = Language::Ja;
+    frame_updater::UpdateStatus update;  ///< new-release check and install (see frame-updater)
 };
 
 /**
