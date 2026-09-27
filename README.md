@@ -74,10 +74,11 @@ From 0.4.0 on, the panel's "Update" button does the update. The panel's Advanced
 - The left column always shows what frameeyeosc is doing: sending or paused, where it sends to, messages per second, both eyelids and the gaze (raw and sent), and a config error if there is one.
 - Basic: pause sending, VRChat or VRCFaceTracking (ETVR), target PC (automatic, or fixed to the PC it sends to now, so there's no IP to type in VR), port, language (Japanese / English), start with SteamVR, reset all, quit.
 - Gaze: smoothing on or off, light / medium / strong presets and the three filter values, deadzone, holding the gaze while blinking, per-eye gaze, skipping unreliable gaze, removing one-sample glitches.
+- Gaze fit: look at a dot to set where "straight ahead" is, or at five dots to also set how far the gaze moves up, down and sideways (see [Gaze fit](#gaze-fit)); the same values by hand, and undo.
 - Eyelids: auto calibration and its learned values, per-eye scales, the four openness marks drawn over each eye's live openness (blink and open wide to set them), left/right sync, keeping blinks visible (hold time and closing both eyes), eyelid smoothing.
 - Advanced: parameter prefix, the version with checking for and installing updates, file locations, options locked by the command line.
 
-The panel writes `config.json` and reads the status file. To pick its default language, it also reads the `language` line of Steam's `~/.steam/registry.vdf` once at startup (read only). For updates it runs `~/.local/share/frameeyeosc/frame-update.sh` (see above). Closing it, quitting it, or not installing it doesn't stop frameeyeosc. While it isn't open on the dashboard it draws nothing. Besides running the update check, the only thing it reads then is the update state file (`~/.cache/frameeyeosc/update-state.json`), about twice a second. Its "Start with SteamVR" switch enables or disables its systemd user unit (`frameeyeosc-panel.service`). Build notes and debugging options are in [panel/README.md](panel/README.md) (Japanese).
+The panel writes `config.json` and reads the status file. To pick its default language, it also reads the `language` line of Steam's `~/.steam/registry.vdf` once at startup (read only). For updates it runs `~/.local/share/frameeyeosc/frame-update.sh` (see above). Closing it, quitting it, or not installing it doesn't stop frameeyeosc. While it isn't open on the dashboard it draws nothing. Besides running the update check, the only thing it reads then is the update state file (`~/.cache/frameeyeosc/update-state.json`), about twice a second. The exception is a gaze fit: then it also reads the status file and shows the dot with the dashboard closed, until the fit is over. Its "Start with SteamVR" switch enables or disables its systemd user unit (`frameeyeosc-panel.service`). Build notes and debugging options are in [panel/README.md](panel/README.md) (Japanese).
 
 ## Settings
 
@@ -110,6 +111,8 @@ Settings are in `~/.config/frameeyeosc/config.json`. The panel writes it, and yo
 | `lid_sync` | `--lid-sync` | `0.4` | Evens out small left/right eyelid differences; larger ones (winks) pass through. `0` turns it off |
 | `blink_hold_ms` | `--blink-hold-ms` | `80` | Once an eye is closed, it is sent fully closed for at least this long, so short blinks reach other players. `0` turns it off |
 | `blink_sync_below` | `--blink-sync-below` | `0.35` | When one eye is closed and the other is below this (VRCFT scale), both are sent closed. Winks, with the other eye open, pass through. `0` turns it off |
+| `gaze_offset_x` / `gaze_offset_y` | `--gaze-offset-x` / `--gaze-offset-y` | `0` / `0` | The gaze that counts as straight ahead, from -0.5 to 0.5 (1.0 = 45°; + is right / up). Usually set by the gaze fit |
+| `gaze_gain_x` / `gaze_gain_up` / `gaze_gain_down` | `--gaze-gain-x` / `--gaze-gain-up` / `--gaze-gain-down` | `1.0` | How far the gaze moves from there, sideways, up and down, from 0.5 to 2. Usually set by the five-dot fit |
 | `calibration_reset` | | `0` | Increase it to make the eyelid calibration start over |
 | `language` | | Steam's language | Panel language, `"ja"` or `"en"`. Without it, the panel is in Japanese if Steam is set to Japanese and in English otherwise |
 | `update_check` | | `true` | The panel looks for a new release on GitHub at start and once a day (an hour later after a failed check). frameeyeosc itself ignores it |
@@ -124,7 +127,7 @@ Whatever is set there can't be changed from the file, and the panel shows it as 
 
 ## Status file
 
-frameeyeosc writes what it is doing to `$XDG_RUNTIME_DIR/frameeyeosc/status.json` (usually `/run/user/1000/frameeyeosc/status.json`) ten times a second: whether it is sending, the destination, messages per second, the latest raw and sent values, the calibration, the settings in effect, which of them are locked by the command line, and any config error. The panel reads it. The folder is readable only by you, lives in memory, and is gone after a reboot. Only the latest values are kept.
+frameeyeosc writes what it is doing to `$XDG_RUNTIME_DIR/frameeyeosc/status.json` (usually `/run/user/1000/frameeyeosc/status.json`) ten times a second: whether it is sending, the destination, messages per second, the latest raw and sent values, the calibration, the settings in effect, which of them are locked by the command line, any config error, and the latest gaze fit measurement. The panel reads it. The folder is readable only by you, lives in memory, and is gone after a reboot. Only the latest values are kept.
 
 ## VRCFaceTracking (ETVR) mode
 
@@ -140,6 +143,17 @@ Notes:
 - The module smooths the eyelids itself. When you switch in the panel, it offers lighter eyelid smoothing on the frameeyeosc side. Because of that smoothing, a blink held closed for `blink_hold_ms` may not reach fully closed on the avatar; raise it (for example to 120) if short blinks still look half-closed.
 - After VRCFaceTracking starts, its window can show "Not Responding" for close to two minutes while the module loads. It isn't broken; wait.
 - The PC has to accept UDP 8889. VRCFaceTracking's ModuleProcess usually has an inbound firewall rule already.
+
+## Gaze fit
+
+If the avatar looks a little off (for example too far down), the gaze fit on the panel's "Gaze fit" tab adjusts it. Keep your head still and look with your eyes only.
+
+- "Center": after you close the dashboard, a dot appears straight ahead for about 3 seconds. What your eyes read while you look at it becomes straight ahead (`gaze_offset_x` / `gaze_offset_y`).
+- "5 points": the dot appears straight ahead, then 15° up, 15° down, 20° left and 20° right, about 20 seconds in all. This also sets how far the gaze moves in each direction (`gaze_gain_x`, `gaze_gain_up`, `gaze_gain_down`), so that looking 15° up sends 15° up.
+
+The dot is fixed to the headset 2 m ahead, and only shows while the dashboard is closed; opening the dashboard stops the fit. A point where the gaze is unsteady or the eyes are closed is measured again, up to three times. The result shows on the tab and each measurement is logged (`journalctl --user -u frameeyeosc`). To go back, press "Reset" on the tab. The values can also be changed by hand there.
+
+How it works: the panel writes a `gaze_capture` request into `config.json`, frameeyeosc averages the tracker's gaze for 2 seconds (skipping the first 0.5 s and any samples with the eyes shut) and reports the average in the status file, and the panel turns the averages into the settings. The zero point and gains are applied to the gaze before smoothing, to both eyes and the combined gaze. With the defaults nothing changes.
 
 ## Calibration
 
@@ -171,7 +185,7 @@ Eyelid calibration is automatic. For the first 20 seconds after you put the head
   - from `install.sh`: the update script `~/.local/share/frameeyeosc/frame-update.sh` and your install options `~/.config/frameeyeosc/install-args`
   - from the update check and updates, in `~/.cache/frameeyeosc/`: `update-check.json` (GitHub's last answer), `update-state.json` (progress of the last update), `update.log` (log of the last update), the `update/` work folder (emptied after each run, except for the copy of the update script it keeps), and the `update.lock/` folder while a check or update runs
 
-  No eye data is stored. The latest eye values are in the status file, which is in memory, readable only by you, and overwritten ten times a second; no history is kept.
+  No eye data is stored, except that each gaze fit measurement (an average gaze direction and how much it spread) is logged as one line to the systemd journal. The latest eye values are in the status file, which is in memory, readable only by you, and overwritten ten times a second; no history is kept.
 - The OSC messages are unencrypted, so other devices on the same network could read them.
 
 ## Disclaimer
@@ -189,6 +203,7 @@ Build and test on the headset (the binary must link against the headset's glibc,
 ```sh
 cargo test --release
 cmake -G Ninja -S panel -B panel/build && ninja -C panel/build
+panel/build/gaze-fit-test   # the panel's gaze fit logic
 scripts/package.sh   # builds dist/frameeyeosc-<version>-steamframe-aarch64.tar.gz with both, and dist/SHA256SUMS
 ```
 

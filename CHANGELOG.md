@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0 (unreleased)
+
+Gaze calibration, for when the avatar's eyes look a little off (for example too far down).
+
+- New settings for where "straight ahead" is and how far the gaze moves from there: `gaze_offset_x` / `gaze_offset_y`, and `gaze_gain_x`, `gaze_gain_up` and `gaze_gain_down` (up and down separately). They apply to both eyes and the combined gaze, before smoothing. The defaults change nothing: the output is the same as 0.4.0's.
+- The panel has a new "Gaze fit" tab. "Center" shows a dot straight ahead and sets the zero point from where your eyes look. "5 points" also shows dots up, down, left and right and sets the three gains. The dot is its own small overlay, fixed to the headset 2 m ahead, and only shows while the dashboard is closed. The values can also be set by hand there, and "Reset" undoes the fit.
+- frameeyeosc averages the raw gaze for 2 seconds when the panel asks (`gaze_capture` in `config.json`), leaving out the first 0.5 s and samples with the eyes shut, and reports the result in the status file and as one line in the journal.
+
 ## 0.4.0 (2026-09-27)
 
 Steadier eyes and fewer missed blinks. The ideas come from the README of [CyrusOtter/SteamFrameEye](https://github.com/CyrusOtter/SteamFrameEye).
