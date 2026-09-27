@@ -153,7 +153,7 @@ UiText makeJapanese() {
     t.checkedFormat = "・確認 %s";
     t.rowUpdateCheck = "新しい版の確認";
     t.hintUpdateCheck = "起動時と 1 日 1 回、GitHub に新しい版がないか見に行きます";
-    t.updateUpToDateFormat = "最新の版です（%s）";
+    t.updateUpToDateFormat = "最新版です（%s）";
     t.updateChecking = "新しい版を確かめています…";
     t.updateAvailableFormat = "新しい版 %s があります";
     t.updateButton = "更新する";
@@ -190,7 +190,7 @@ UiText makeJapanese() {
     t.reasonInstallFailed = "install.sh が失敗しました";
     t.reasonBadArgs = "前回のインストールのオプションを読めません";
     t.reasonBusy = "別の更新が動いています";
-    t.reasonNotNewer = "もう最新の版です";
+    t.reasonNotNewer = "もう最新版です";
     t.reasonDetachFailed = "更新を始められませんでした（systemd-run）";
     t.reasonInterrupted = "更新が途中で止まりました";
     t.reasonIo = "ファイルを書けませんでした";
