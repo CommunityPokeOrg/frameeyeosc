@@ -4,6 +4,8 @@ Sends the Steam Frame's eye tracking (gaze and eye openness) to VRChat over OSC,
 
 [日本語版はこちら](README.ja.md)
 
+https://github.com/user-attachments/assets/f8969485-161b-40d4-b9e4-689dee6d1955
+
 This is a fork of [konsti219/frameeyeosc](https://github.com/konsti219/frameeyeosc). The Frame's public APIs only give you a combined gaze direction. konsti219 found that the eye tracker also measures how open each eye is and keeps it in an internal shared-memory object (`/dev/shm/eye-server.mmap`), and that is where this tool reads it from.
 
 ## What this fork adds
