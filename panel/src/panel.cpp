@@ -1236,7 +1236,7 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
     // What is going on: how it works, the run, the result (with "Reset"), or why it stopped
     {
         const bool compact = fitDetails_;
-        const double h = compact ? 60 : 150;
+        const double h = compact ? 50 : 150;
         const double x0 = kInnerX;
         const double x1 = kInnerRight;
         strokeRounded(pen, x0, y, x1 - x0, h, 14, kDivider, 1.5);
@@ -1340,7 +1340,7 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
             baseline += 22;
             pen.text(textX, baseline - 5, line, 15, kTextMuted);
         }
-        const double buttonH = compact ? 44 : kControlH;
+        const double buttonH = compact ? 40 : kControlH;
         if (stop) {
             drawButton(pen, x1 - 20 - buttonW, y + (h - buttonH) / 2, buttonW, buttonH, t.fitStop,
                        {PanelAction::FitStop, nullptr, 0}, true, false);
@@ -1348,13 +1348,13 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
             drawButton(pen, x1 - 20 - buttonW, y + (h - buttonH) / 2, buttonW, buttonH, t.fitReset,
                        {PanelAction::FitReset, nullptr, 0}, !anyLocked && !busy, false);
         }
-        y += h + 12;
+        y += h + (compact ? 8 : 12);
     }
     // "Fine-tune": the values by hand, folded away by default
     {
         const std::string label = std::string(t.fitDetails) + (fitDetails_ ? "  ▲" : "  ▼");
-        drawButton(pen, kInnerX, y, 230, 40, label, {PanelAction::FitDetails, nullptr, 0}, true, false);
-        y += 40 + 10;
+        drawButton(pen, kInnerX, y, 230, 38, label, {PanelAction::FitDetails, nullptr, 0}, true, false);
+        y += 38 + 8;
     }
     if (!fitDetails_) return;
     // The gaze zero point
@@ -1388,23 +1388,34 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
         }
     }
     y += kCaptionRowH + kRowGap;
+    // Holding the sideways gaze when looking far down, where the Frame's x jumps
+    {
+        const double h = 56;
+        const bool locked = v.locked(key::kGazeDownHoldXDeg);
+        const double value = v.number(key::kGazeDownHoldXDeg);
+        drawRowLabel(pen, t, y, h, t.rowDownHold, t.hintDownHold, locked);
+        const std::string text = value > 0 ? formatText(t.downHoldFormat, formatSetting(key::kGazeDownHoldXDeg, value))
+                                           : std::string(t.off);
+        drawStepper(pen, kControlX, y + (h - 44) / 2, 240, 44, key::kGazeDownHoldXDeg, value, text, !busy, locked);
+        y += h + kRowGap;
+    }
     // Each eye's lid readings, across the whole width: closed, up, straight ahead, down
     {
         const double titleSize = 18;
-        pen.text(kInnerX, y + 18, t.rowLidFit, titleSize, kText, true);
+        pen.text(kInnerX, y + 16, t.rowLidFit, titleSize, kText, true);
         const double titleW = pen.measure(t.rowLidFit, titleSize, true);
-        pen.text(kInnerX + titleW + 12, y + 18, t.hintLidFit, 15, kTextMuted);
+        pen.text(kInnerX + titleW + 12, y + 16, t.hintLidFit, 15, kTextMuted);
         const char* captions[4] = {t.capClosed, t.capUp, t.capAhead, t.capDown};
         const double labelW = 40;
         const double gap = 10;
         const double w = (kInnerRight - kInnerX - labelW - gap * 3) / 4;
-        const double stepperH = 46;
+        const double stepperH = 44;
         for (int i = 0; i < 4; ++i) {
             const double x = kInnerX + labelW + i * (w + gap);
-            drawCaption(pen, x + 4, y + 44, captions[i], 0, v.locked(kLidFitKeys[0][i]) || v.locked(kLidFitKeys[1][i]));
+            drawCaption(pen, x + 4, y + 40, captions[i], 0, v.locked(kLidFitKeys[0][i]) || v.locked(kLidFitKeys[1][i]));
         }
         for (int eye = 0; eye < 2; ++eye) {
-            const double rowY = y + 54 + eye * (stepperH + 6);
+            const double rowY = y + 48 + eye * (stepperH + 4);
             pen.text(kInnerX + 4, centerBaseline(rowY, stepperH, 18), eye == 0 ? t.left : t.right, 18, kText, true);
             for (int i = 0; i < 4; ++i) {
                 const char* name = kLidFitKeys[eye][i];

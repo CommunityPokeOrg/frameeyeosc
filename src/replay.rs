@@ -35,6 +35,9 @@ const GAZE_DEGREES: f32 = 45.0;
 const DOWN_DEGREES: f32 = 15.0;
 const DOWN_OPEN_SHARE: f32 = 0.6;
 const DOWN_CLOSING: f32 = 0.5;
+// The sideways gaze is judged while the tracker's gaze is at least this far down (below the default
+// --gaze-down-hold-x-deg and its fade), where the Frame's x jumps.
+const FAR_DOWN_DEGREES: f32 = 32.0;
 // Estimating a lid fit from a recording: where the live fit's 15° targets landed in the tracker's own
 // gaze (+15.8° and -17.8° on 2026-09-28), straight ahead within 3°, and each needs this many samples
 // with both eyes clearly open.
@@ -190,6 +193,7 @@ fn without_new_stages(settings: &Settings) -> Settings {
         blink_hold_ms: 0.0,
         despike: false,
         blink_sync_below: 0.0,
+        gaze_down_hold_x_deg: 0.0,
         ..settings.clone()
     }
 }
@@ -217,6 +221,8 @@ struct Metrics {
     // Median sent eyelid (VRCFT, both eyes) with the eyes open and away from blinks, looking down and ahead.
     lid_down: f64,
     lid_ahead: f64,
+    // Median |sent combined x| in degrees while looking FAR_DOWN_DEGREES down or more.
+    far_down_x: f64,
 }
 
 fn median(values: &mut [f64]) -> f64 {
@@ -376,6 +382,12 @@ fn metrics(samples: &[EyeData], sent: &[Sample]) -> Metrics {
             .collect();
         median(&mut lids)
     };
+    let far_down = -FAR_DOWN_DEGREES / GAZE_DEGREES;
+    let mut far_down_x: Vec<f64> = (0..n)
+        .filter(|i| gaze_angles(samples[*i].fixation_point)[1] <= far_down)
+        .map(|i| f64::from((sent[i].gaze[4] * GAZE_DEGREES).abs()))
+        .collect();
+    let far_down_x = median(&mut far_down_x);
     let lid_down = lid_median(&|vertical| vertical <= down_limit);
     let lid_ahead = lid_median(&|vertical| vertical.abs() <= ahead_limit);
     let mut down_closes = 0;
@@ -404,6 +416,7 @@ fn metrics(samples: &[EyeData], sent: &[Sample]) -> Metrics {
         down_closes,
         lid_down,
         lid_ahead,
+        far_down_x,
     }
 }
 
@@ -513,6 +526,8 @@ fn report(input: &Path, samples: &[EyeData], skipped: usize, settings: &Settings
     let lids = |m: &Metrics| format!("{:.2} / {:.2}", m.lid_down, m.lid_ahead);
     row(&mut text, "eyelid looking down / ahead (median)", lids(before), lids(after));
     row(&mut text, "closing while looking down (stretches)", before.down_closes.to_string(), after.down_closes.to_string());
+    let far = |m: &Metrics| format!("{:.1}", m.far_down_x);
+    row(&mut text, "sideways gaze looking 32°+ down (median deg)", far(before), far(after));
     match estimate_lid_fit(samples) {
         Some(fits) => {
             text.push_str("\nLid fit read from this recording (as config.json keys):\n ");

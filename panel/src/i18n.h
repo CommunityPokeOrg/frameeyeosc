@@ -166,6 +166,9 @@ struct UiText {
     const char* capUpDown;
     const char* capUp;
     const char* capDown;
+    const char* rowDownHold;         ///< holding the sideways gaze when looking far down
+    const char* hintDownHold;
+    const char* downHoldFormat;      ///< "Below %s°"
     const char* rowLidFit;
     const char* hintLidFit;
     const char* capClosed;

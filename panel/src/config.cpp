@@ -170,6 +170,7 @@ const std::vector<SettingSpec>& settingSpecs() {
         {key::kGazeGainX, SettingType::Number, 1.0, "", 0.5, 2.0, 0.05, 2},
         {key::kGazeGainUp, SettingType::Number, 1.0, "", 0.5, 2.0, 0.05, 2},
         {key::kGazeGainDown, SettingType::Number, 1.0, "", 0.5, 2.0, 0.05, 2},
+        {key::kGazeDownHoldXDeg, SettingType::Number, 28, "", 0.0, 45.0, 1.0, 0},
         {key::kLidFitClosedLeft, SettingType::NullableNumber, 0, "", 0.0, 1.5, 0.01, 2},
         {key::kLidFitClosedRight, SettingType::NullableNumber, 0, "", 0.0, 1.5, 0.01, 2},
         {key::kLidFitUpLeft, SettingType::NullableNumber, 0, "", 0.0, 1.5, 0.01, 2},

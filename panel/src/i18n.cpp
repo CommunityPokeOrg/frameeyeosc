@@ -153,6 +153,9 @@ UiText makeJapanese() {
     t.capUpDown = "上下";
     t.capUp = "上";
     t.capDown = "下";
+    t.rowDownHold = "真下で左右を止める";
+    t.hintDownHold = "0 = オフ";
+    t.downHoldFormat = "%s° より下";
     t.rowLidFit = "まぶたの読んだ値";
     t.hintLidFit = "Frame の生の開き具合";
     t.capClosed = "閉じ";
@@ -407,6 +410,9 @@ UiText makeEnglish() {
     t.capUpDown = "Up-down";
     t.capUp = "Up";
     t.capDown = "Down";
+    t.rowDownHold = "Hold sideways far down";
+    t.hintDownHold = "0 = off";
+    t.downHoldFormat = "Below %s°";
     t.rowLidFit = "Eyelid readings";
     t.hintLidFit = "Frame openness";
     t.capClosed = "Closed";

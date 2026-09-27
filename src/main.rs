@@ -38,6 +38,8 @@ const NOMINAL_DT: f32 = 1.0 / 90.0;
 const MAX_GAP: f64 = 0.25;
 // Blinks are fast, so eyelids track their speed with a quicker derivative filter than gaze.
 const LID_D_CUTOFF: f32 = 1.0;
+// The sideways gaze hold (--gaze-down-hold-x-deg) fades in over this many degrees further down.
+const DOWN_HOLD_FADE_DEG: f32 = 10.0;
 // The eye fit measures openness with the eyes on targets this far up and down (15° of 45°).
 const LID_FIT_PITCH: f32 = 15.0 / 45.0;
 // A fitted eye counts as closed from this share of the way from its closed reading to its open one,
@@ -209,6 +211,10 @@ struct Args {
     /// How far the gaze goes down, from --gaze-offset-y (0.5..2)
     #[arg(long, default_value_t = 1.0)]
     gaze_gain_down: f32,
+    /// Hold the sideways gaze when looking more than this many degrees down (fully 10° further down),
+    /// where the Frame's x jumps; 0 disables
+    #[arg(long, default_value_t = 28.0)]
+    gaze_down_hold_x_deg: f32,
     /// Settings file, re-read while running; options given here win over it
     /// [default: ~/.config/frameeyeosc/config.json]
     #[arg(long)]
@@ -309,6 +315,8 @@ struct Smoother {
     last_gaze: [Option<[f32; 2]>; 3],
     // The up/down gaze the eyelid fit last used, kept while the gaze is held.
     lid_vertical: Option<f32>,
+    // Left, right and combined raw x from the last sample above --gaze-down-hold-x-deg.
+    down_hold_x: Option<[f32; 3]>,
 }
 
 impl Smoother {
@@ -323,6 +331,7 @@ impl Smoother {
             last_time: None,
             last_gaze: [None; 3],
             lid_vertical: None,
+            down_hold_x: None,
         }
     }
 
@@ -417,6 +426,29 @@ impl Smoother {
         self.last_time = None;
         self.last_gaze = [None; 3];
         self.lid_vertical = None;
+        self.down_hold_x = None;
+    }
+
+    /// Below --gaze-down-hold-x-deg the Frame's sideways gaze jumps (by ~19° to the right when looking
+    /// ~40° down, 2026-09-28), so the left, right and combined x fade into their values from just before
+    /// the gaze went that low: not at all at the threshold, fully 10° further down. Judged on the raw
+    /// combined vertical gaze, before the zero point and gains, so the threshold is the tracker's own
+    /// degrees whatever the fit. Starting out that low, the held x is straight ahead as fitted.
+    fn hold_down_x(&mut self, raw_gaze: [f32; 6], settings: &Settings) -> [f32; 6] {
+        let threshold = settings.gaze_down_hold_x_deg;
+        let x = [raw_gaze[0], raw_gaze[2], raw_gaze[4]];
+        let down_deg = -raw_gaze[5] * 45.0;
+        if threshold <= 0.0 || down_deg <= threshold {
+            self.down_hold_x = Some(x);
+            return raw_gaze;
+        }
+        let held = self.down_hold_x.unwrap_or([settings.gaze_offset_x; 3]);
+        let live = (1.0 - (down_deg - threshold) / DOWN_HOLD_FADE_DEG).clamp(0.0, 1.0);
+        let mut out = raw_gaze;
+        for (pair, (held, x)) in held.into_iter().zip(x).enumerate() {
+            out[pair * 2] = live * x + (1.0 - live) * held;
+        }
+        out
     }
 }
 
@@ -1060,11 +1092,10 @@ fn process(settings: &Settings, smoother: &mut Smoother, scales: [f32; 2], data:
     let [x, y] = gaze_angles(data.fixation_point);
     let [left, right] = data.gaze.map(gaze_angles);
     let raw_gaze = [left[0], left[1], right[0], right[1], x, y];
-    // Before anything else, so the filters see the gaze the way it will be sent.
-    let corrected = correct_gaze(raw_gaze, settings);
     let reliable = gaze_quality(data, settings.gaze_quality_limit);
     let blink_stages = settings.blink_hold_ms > 0.0 || settings.blink_sync_below > 0.0;
     let (gaze, lids, gaze_held, openness_scaled) = if settings.raw {
+        let corrected = correct_gaze(raw_gaze, settings);
         let gaze = choose_gaze(corrected, [true; 2], settings.independent_eyes);
         let openness_scaled = lid_inputs(data.openness, corrected[5], scales, settings);
         let mapped = openness_scaled.map(|openness| lid_to_vrcft(openness, settings));
@@ -1077,6 +1108,8 @@ fn process(settings: &Settings, smoother: &mut Smoother, scales: [f32; 2], data:
         (gaze, lids, shut_eyes, openness_scaled)
     } else {
         let dt = smoother.advance(data.sample_time);
+        // Before anything else, so the filters see the gaze the way it will be sent.
+        let corrected = correct_gaze(smoother.hold_down_x(raw_gaze, settings), settings);
         let readings: [f32; 8] =
             std::array::from_fn(|i| if i < 6 { corrected[i] } else { data.openness[i - 6] });
         // Fed even while off, so turning it on does not start from an empty history.
@@ -1734,6 +1767,39 @@ mod tests {
         assert!(!sent[9].gaze_held && sent[10].gaze_held && !sent[12].gaze_held);
         let raw = run(&Settings { raw: true, ..settings() }, &readings);
         assert!(raw[10].gaze_held && !raw[12].gaze_held);
+    }
+
+    #[test]
+    fn looking_far_down_holds_the_sideways_gaze() {
+        let settings = settings();
+        let mut smoother = Smoother::new(&settings);
+        let at = |down_deg: f32, x: f32| {
+            let y = -down_deg / 45.0;
+            [x, y, x + 0.1, y, x + 0.05, y]
+        };
+        // Above the threshold nothing changes, and the x values are remembered.
+        assert_eq!(smoother.hold_down_x(at(20.0, 0.1), &settings), at(20.0, 0.1));
+        assert_eq!(smoother.hold_down_x(at(27.5, 0.1), &settings), at(27.5, 0.1));
+        // Halfway into the fade, halfway to the held values; fully held 10° below the threshold.
+        let half = smoother.hold_down_x(at(33.0, 0.5), &settings);
+        assert!((half[0] - 0.3).abs() < 1e-5 && (half[2] - 0.4).abs() < 1e-5 && (half[4] - 0.35).abs() < 1e-5);
+        let held = smoother.hold_down_x(at(42.0, 0.5), &settings);
+        assert!((held[0] - 0.1).abs() < 1e-6 && (held[2] - 0.2).abs() < 1e-6 && (held[4] - 0.15).abs() < 1e-6);
+        // The vertical gaze is left alone.
+        assert_eq!([held[1], held[3], held[5]], [at(42.0, 0.5)[1]; 3]);
+        // Starting out that low, straight ahead (as fitted) is held; after a reset too.
+        smoother.reset();
+        let fitted = Settings {
+            gaze_offset_x: 0.02,
+            ..settings.clone()
+        };
+        assert!((smoother.hold_down_x(at(42.0, 0.5), &fitted)[4] - 0.02).abs() < 1e-6);
+        // 0 turns it off.
+        let off = Settings {
+            gaze_down_hold_x_deg: 0.0,
+            ..settings
+        };
+        assert_eq!(smoother.hold_down_x(at(42.0, 0.5), &off), at(42.0, 0.5));
     }
 
     #[test]
