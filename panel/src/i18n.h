@@ -113,37 +113,51 @@ struct UiText {
     const char* rowDespike;
     const char* hintDespike;
 
-    // Gaze fit tab
+    // Eye fit tab
     const char* rowFit;
     const char* hintFit;
-    const char* fitCenter;           ///< button: set the zero point from the center dot
-    const char* fitFive;             ///< button: five dots
+    const char* fitStart;            ///< the one big button before any fit
+    const char* fitAgain;            ///< the same button once fitted
+    const char* fitCenterOnly;       ///< small button: re-center the gaze only
     const char* fitStop;
-    const char* fitIntro;            ///< before any run
+    const char* fitIntro;            ///< before any fit
     const char* fitNeedsRunning;
     const char* fitLocked;
     const char* fitWaiting;          ///< "Close the dashboard to start"
-    const char* fitWaitingCenter;
-    const char* fitWaitingFive;
+    const char* fitHowTo;            ///< while waiting / running (full fit)
+    const char* fitWaitingCenter;    ///< while waiting / running (re-centering)
     const char* fitRunningFormat;    ///< "Measuring: %s (%d of %d)"
     const char* fitRetryFormat;      ///< appended: ", try %d"
-    const char* fitDoneCenter;
-    const char* fitDoneFive;
-    const char* fitDoneCenterFormat; ///< the two zero points
-    const char* fitDoneFormat;       ///< the zero points and the three gains
+    const char* fitDone;             ///< right after a full fit
+    const char* fitDoneCenter;       ///< right after re-centering
+    const char* fitFitted;           ///< a fit is in config.json
+    const char* fitNotYet;           ///< the folded result line before any fit
+    const char* fitGazeCenterFormat; ///< "Gaze center: L-R %s, U-D %s"
+    const char* fitGazeRangeFormat;  ///< "Gaze range: L-R %s, up %s, down %s"
+    const char* fitGazeNone;
+    const char* fitLidFormat;        ///< "Eyelid %s: open %s, closed %s, looking down %s"
+    const char* fitLidsNone;
     const char* fitFailed;
     const char* failCancelled;
     const char* failWaitTimedOut;
     const char* failNotRunning;
     const char* failNoResult;
     const char* failUnsteadyFormat;  ///< %s = the point
+    const char* failNotClosed;
     const char* failNoMovementFormat;
+    const char* failLidRange;
     const char* failWrite;
     const char* pointCenter;
     const char* pointUp;
     const char* pointDown;
     const char* pointLeft;
     const char* pointRight;
+    const char* pointClosed;
+    const char* targetClose;         ///< on the target: "Close your eyes"
+    const char* targetKeepClosed;
+    const char* targetOpen;
+    const char* fitReset;
+    const char* fitDetails;          ///< the fold with the values by hand
     const char* rowOffset;
     const char* hintOffset;
     const char* rowGain;
@@ -152,9 +166,11 @@ struct UiText {
     const char* capUpDown;
     const char* capUp;
     const char* capDown;
-    const char* rowFitReset;
-    const char* hintFitReset;
-    const char* fitReset;
+    const char* rowLidFit;
+    const char* hintLidFit;
+    const char* capClosed;
+    const char* capAhead;
+    const char* lidFitInUse;         ///< Eyelids tab, instead of the learned values
 
     // Lids tab
     const char* rowCalibration;

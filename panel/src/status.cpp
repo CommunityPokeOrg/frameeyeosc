@@ -134,6 +134,11 @@ EyeStatus parseStatus(const std::string& text, double now, bool checkPid) {
         status.relaxed = readPair(cal->get("relaxed"));
         status.scales = readPair(cal->get("scales"));
         status.learning = readBool(*cal, "learning");
+        if (const JsonValue* fitted = cal->get("fitted"); fitted != nullptr && fitted->isArray()) {
+            for (size_t eye = 0; eye < 2 && eye < fitted->items.size(); ++eye) {
+                status.lidFitted[eye] = fitted->items[eye].isBool() && fitted->items[eye].boolean;
+            }
+        }
     }
     status.configPath = readText(root, "config_path");
     status.calibrationPath = readText(root, "calibration_path");
@@ -163,6 +168,12 @@ EyeStatus parseStatus(const std::string& text, double now, bool checkPid) {
                 c.x = x;
                 c.y = y;
                 c.spread = spread;
+            }
+            const Pair openness = readPair(capture->get("openness"));
+            c.hasOpenness = openness.valid();
+            if (c.hasOpenness) {
+                c.openness[0] = openness.v[0];
+                c.openness[1] = openness.v[1];
             }
         }
     }

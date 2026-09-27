@@ -448,7 +448,7 @@ std::string offsetText(double value) {
 }
 
 /**
- * The name of a gaze fit point.
+ * The name of a eye fit point.
  * @param t texts
  * @param point the point
  * @return the name
@@ -460,12 +460,13 @@ const char* pointName(const UiText& t, gaze_fit::Point point) {
         case gaze_fit::Point::Down: return t.pointDown;
         case gaze_fit::Point::Left: return t.pointLeft;
         case gaze_fit::Point::Right: return t.pointRight;
+        case gaze_fit::Point::Closed: return t.pointClosed;
     }
     return "";
 }
 
 /**
- * Why a gaze fit stopped, in words.
+ * Why a eye fit stopped, in words.
  * @param t texts
  * @param fit the session
  * @return the text
@@ -479,7 +480,9 @@ std::string failureText(const UiText& t, const gaze_fit::View& fit) {
         case Failure::NotRunning: return t.failNotRunning;
         case Failure::NoResult: return t.failNoResult;
         case Failure::Unsteady: return formatText(t.failUnsteadyFormat, pointName(t, fit.point));
+        case Failure::NotClosed: return t.failNotClosed;
         case Failure::NoMovement: return formatText(t.failNoMovementFormat, pointName(t, fit.point));
+        case Failure::NoLidRange: return t.failLidRange;
         case Failure::WriteFailed: return t.failWrite;
     }
     return "";
@@ -542,6 +545,9 @@ PanelHit EyePanel::pointerDown(double x, double y, double now) {
     switch (hit.action) {
         case PanelAction::Tab:
             tab_ = static_cast<PanelTab>(hit.arg);
+            return {};
+        case PanelAction::FitDetails:
+            fitDetails_ = !fitDetails_;
             return {};
         case PanelAction::Quit:
             // A single accidental press never quits
@@ -1195,10 +1201,12 @@ void EyePanel::drawButton(const Pen& pen, double x, double y, double w, double h
     addButton(hit, x, y, w, h, usable);
 }
 
-void EyePanel::drawGazeFit(const Pen& pen, const UiText& t, const PanelModel& m, const SettingsView& v) {
+void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, const SettingsView& v) {
     using gaze_fit::Mode;
     using gaze_fit::Phase;
     const gaze_fit::View& fit = m.fit;
+    const FitInConfig saved = fitInConfig(v);
+    const bool anyFitted = saved.gazeFitted || saved.lidsFitted[0] || saved.lidsFitted[1];
     double y = kRowTop;
     const double cy = (kRowH - kControlH) / 2;
     const char* offsetKeys[2] = {key::kGazeOffsetX, key::kGazeOffsetY};
@@ -1206,87 +1214,122 @@ void EyePanel::drawGazeFit(const Pen& pen, const UiText& t, const PanelModel& m,
     bool anyLocked = false;
     for (const char* name : offsetKeys) anyLocked |= v.locked(name);
     for (const char* name : gainKeys) anyLocked |= v.locked(name);
-    const bool busy = fit.phase == Phase::Waiting || fit.phase == Phase::Settling || fit.phase == Phase::Capturing;
+    for (const auto& eye : kLidFitKeys) {
+        for (const char* name : eye) anyLocked |= v.locked(name);
+    }
+    const bool busy = fit.phase == Phase::Waiting || fit.phase == Phase::Settling || fit.phase == Phase::Capturing ||
+                      fit.phase == Phase::Reopen;
     const bool canRun = m.status.running && !anyLocked && !busy;
 
-    // Start: center only, or five points
+    // The one button to press: fit (again); and re-centering only, for after putting the headset back on
     {
         drawRowLabel(pen, t, y, kRowH, t.rowFit, t.hintFit, false);
         const double gap = 12;
-        const double bw = (kControlW - gap) / 2;
-        drawButton(pen, kControlX, y + cy, bw, kControlH, t.fitCenter, {PanelAction::FitCenter, nullptr, 0}, canRun,
-                   false);
-        drawButton(pen, kControlX + bw + gap, y + cy, bw, kControlH, t.fitFive, {PanelAction::FitFive, nullptr, 0},
-                   canRun, true);
+        const double smallW = 190;
+        const double bigW = kControlW - smallW - gap;
+        drawButton(pen, kControlX, y + cy, bigW, kControlH, anyFitted ? t.fitAgain : t.fitStart,
+                   {PanelAction::FitStart, nullptr, 0}, canRun, true);
+        drawButton(pen, kControlX + bigW + gap, y + cy, smallW, kControlH, t.fitCenterOnly,
+                   {PanelAction::FitCenter, nullptr, 0}, canRun, false);
     }
     y += kRowH + kRowGap + 6;
-    // What is going on: how to start, the run, or its result
+    // What is going on: how it works, the run, the result (with "Reset"), or why it stopped
     {
-        const double h = 104;
+        const bool compact = fitDetails_;
+        const double h = compact ? 60 : 150;
         const double x0 = kInnerX;
         const double x1 = kInnerRight;
         strokeRounded(pen, x0, y, x1 - x0, h, 14, kDivider, 1.5);
         std::string title;
-        std::string detail;
+        std::vector<std::string> paragraphs;
         bool error = false;
-        bool done = false;
+        bool check = false;
+        bool stop = false;
+        bool reset = false;
+        char text[320];
         switch (fit.phase) {
-            case Phase::Idle:
-                title = !m.status.running ? t.fitNeedsRunning : (anyLocked ? t.fitLocked : "");
-                error = !title.empty();
-                detail = t.fitIntro;
-                break;
             case Phase::Waiting:
                 title = t.fitWaiting;
-                detail = fit.mode == Mode::Center ? t.fitWaitingCenter : t.fitWaitingFive;
+                paragraphs.push_back(fit.mode == Mode::Center ? t.fitWaitingCenter : t.fitHowTo);
+                stop = true;
                 break;
             case Phase::Settling:
-            case Phase::Capturing: {
-                char text[192];
+            case Phase::Capturing:
+            case Phase::Reopen:
                 std::snprintf(text, sizeof(text), t.fitRunningFormat, pointName(t, fit.point), fit.index + 1, fit.count);
                 title = text;
                 if (fit.attempt > 1) {
                     std::snprintf(text, sizeof(text), t.fitRetryFormat, fit.attempt);
                     title += text;
                 }
-                detail = fit.mode == Mode::Center ? t.fitWaitingCenter : t.fitWaitingFive;
+                paragraphs.push_back(fit.mode == Mode::Center ? t.fitWaitingCenter : t.fitHowTo);
                 break;
-            }
-            case Phase::Done: {
-                done = true;
-                title = fit.mode == Mode::Center ? t.fitDoneCenter : t.fitDoneFive;
-                const gaze_fit::Values& r = fit.values;
-                const std::string x = offsetText(r.offsetX);
-                const std::string yText = offsetText(r.offsetY);
-                char text[256];
-                if (fit.mode == Mode::Center) {
-                    std::snprintf(text, sizeof(text), t.fitDoneCenterFormat, x.c_str(), yText.c_str());
-                } else {
-                    std::snprintf(text, sizeof(text), t.fitDoneFormat, x.c_str(), yText.c_str(),
-                                  twoDecimals(r.gainX).c_str(), twoDecimals(r.gainUp).c_str(),
-                                  twoDecimals(r.gainDown).c_str());
-                }
-                detail = text;
-                break;
-            }
             case Phase::Failed:
                 error = true;
                 title = t.fitFailed;
-                detail = failureText(t, fit);
+                paragraphs.push_back(failureText(t, fit));
+                break;
+            case Phase::Idle:
+            case Phase::Done:
+                if (anyFitted) {
+                    check = true;
+                    reset = true;
+                    title = fit.phase != Phase::Done ? t.fitFitted
+                                                     : (fit.mode == Mode::Center ? t.fitDoneCenter : t.fitDone);
+                    const gaze_fit::Values& r = saved.values;
+                    // One line each: the gaze center, the gaze range, and each eye's lid readings
+                    if (saved.gazeFitted) {
+                        std::snprintf(text, sizeof(text), t.fitGazeCenterFormat, offsetText(r.offsetX).c_str(),
+                                      offsetText(r.offsetY).c_str());
+                        paragraphs.push_back(text);
+                        std::snprintf(text, sizeof(text), t.fitGazeRangeFormat, twoDecimals(r.gainX).c_str(),
+                                      twoDecimals(r.gainUp).c_str(), twoDecimals(r.gainDown).c_str());
+                        paragraphs.push_back(text);
+                    } else {
+                        paragraphs.push_back(t.fitGazeNone);
+                    }
+                    if (r.hasLids) {
+                        for (int eye = 0; eye < 2; ++eye) {
+                            char drop[32];
+                            std::snprintf(drop, sizeof(drop), "%+.0f%%", (r.lidDown[eye] / r.lidOpen[eye] - 1) * 100);
+                            std::snprintf(text, sizeof(text), t.fitLidFormat, eye == 0 ? t.left : t.right,
+                                          twoDecimals(r.lidOpen[eye]).c_str(), twoDecimals(r.lidClosed[eye]).c_str(),
+                                          drop);
+                            paragraphs.push_back(text);
+                        }
+                    } else {
+                        paragraphs.push_back(t.fitLidsNone);
+                    }
+                } else {
+                    title = !m.status.running ? t.fitNeedsRunning : (anyLocked ? t.fitLocked : "");
+                    error = !title.empty();
+                    paragraphs.push_back(t.fitIntro);
+                }
                 break;
         }
-        const bool waiting = fit.phase == Phase::Waiting;
-        const double stopW = 150;
-        double textX = x0 + 20;
-        if (done) {
-            drawCheck(pen.cr, x0 + 34, y + 34, 26, kSuccess);
-            textX = x0 + 60;
+        // Folded down to one line while "Fine-tune" is open
+        if (compact) {
+            if (title.empty()) title = t.fitNotYet;
+            paragraphs.clear();
         }
-        const double textW = (waiting ? x1 - 20 - stopW - 16 : x1 - 20) - textX;
+        const double buttonW = 150;
+        const bool button = stop || reset;
+        double textX = x0 + 20;
+        if (check) {
+            drawCheck(pen.cr, x0 + 32, compact ? y + h / 2 : y + 32, 24, kSuccess);
+            textX = x0 + 56;
+        }
+        const double textW = (button ? x1 - 20 - buttonW - 16 : x1 - 20) - textX;
         const std::vector<std::string> titleLines =
             title.empty() ? std::vector<std::string>() : wrapText(pen, title, 18, true, textW, 1);
-        const std::vector<std::string> detailLines =
-            wrapText(pen, detail, 15, false, textW, titleLines.empty() ? 3 : 2);
+        std::vector<std::string> detailLines;
+        const size_t maxDetail = titleLines.empty() ? 5 : 4;
+        for (const std::string& paragraph : paragraphs) {
+            if (detailLines.size() >= maxDetail) break;
+            for (const std::string& line : wrapText(pen, paragraph, 15, false, textW, maxDetail - detailLines.size())) {
+                detailLines.push_back(line);
+            }
+        }
         const double lineCount = titleLines.size() * 26.0 + detailLines.size() * 22.0;
         double baseline = y + (h - lineCount) / 2;
         for (const std::string& line : titleLines) {
@@ -1297,13 +1340,24 @@ void EyePanel::drawGazeFit(const Pen& pen, const UiText& t, const PanelModel& m,
             baseline += 22;
             pen.text(textX, baseline - 5, line, 15, kTextMuted);
         }
-        if (waiting) {
-            drawButton(pen, x1 - 20 - stopW, y + (h - kControlH) / 2, stopW, kControlH, t.fitStop,
+        const double buttonH = compact ? 44 : kControlH;
+        if (stop) {
+            drawButton(pen, x1 - 20 - buttonW, y + (h - buttonH) / 2, buttonW, buttonH, t.fitStop,
                        {PanelAction::FitStop, nullptr, 0}, true, false);
+        } else if (reset) {
+            drawButton(pen, x1 - 20 - buttonW, y + (h - buttonH) / 2, buttonW, buttonH, t.fitReset,
+                       {PanelAction::FitReset, nullptr, 0}, !anyLocked && !busy, false);
         }
-        y += h + 14;
+        y += h + 12;
     }
-    // The zero point by hand
+    // "Fine-tune": the values by hand, folded away by default
+    {
+        const std::string label = std::string(t.fitDetails) + (fitDetails_ ? "  ▲" : "  ▼");
+        drawButton(pen, kInnerX, y, 230, 40, label, {PanelAction::FitDetails, nullptr, 0}, true, false);
+        y += 40 + 10;
+    }
+    if (!fitDetails_) return;
+    // The gaze zero point
     {
         drawRowLabel(pen, t, y, kCaptionRowH, t.rowOffset, t.hintOffset, false);
         const char* captions[2] = {t.capLeftRight, t.capUpDown};
@@ -1318,7 +1372,7 @@ void EyePanel::drawGazeFit(const Pen& pen, const UiText& t, const PanelModel& m,
         }
     }
     y += kCaptionRowH + kRowGap;
-    // The gains by hand
+    // The gaze gains
     {
         drawRowLabel(pen, t, y, kCaptionRowH, t.rowGain, t.hintGain, false);
         const char* captions[3] = {t.capLeftRight, t.capUp, t.capDown};
@@ -1334,14 +1388,36 @@ void EyePanel::drawGazeFit(const Pen& pen, const UiText& t, const PanelModel& m,
         }
     }
     y += kCaptionRowH + kRowGap;
-    // Back to no correction
+    // Each eye's lid readings, across the whole width: closed, up, straight ahead, down
     {
-        bool isDefault = true;
-        for (const char* name : offsetKeys) isDefault &= std::fabs(v.number(name)) < 1e-9;
-        for (const char* name : gainKeys) isDefault &= std::fabs(v.number(name) - 1.0) < 1e-9;
-        drawRowLabel(pen, t, y, kRowH, t.rowFitReset, t.hintFitReset, false);
-        drawButton(pen, kControlX, y + cy, 200, kControlH, t.fitReset, {PanelAction::FitReset, nullptr, 0},
-                   !anyLocked && !busy && !isDefault, false);
+        const double titleSize = 18;
+        pen.text(kInnerX, y + 18, t.rowLidFit, titleSize, kText, true);
+        const double titleW = pen.measure(t.rowLidFit, titleSize, true);
+        pen.text(kInnerX + titleW + 12, y + 18, t.hintLidFit, 15, kTextMuted);
+        const char* captions[4] = {t.capClosed, t.capUp, t.capAhead, t.capDown};
+        const double labelW = 40;
+        const double gap = 10;
+        const double w = (kInnerRight - kInnerX - labelW - gap * 3) / 4;
+        const double stepperH = 46;
+        for (int i = 0; i < 4; ++i) {
+            const double x = kInnerX + labelW + i * (w + gap);
+            drawCaption(pen, x + 4, y + 44, captions[i], 0, v.locked(kLidFitKeys[0][i]) || v.locked(kLidFitKeys[1][i]));
+        }
+        for (int eye = 0; eye < 2; ++eye) {
+            const double rowY = y + 54 + eye * (stepperH + 6);
+            pen.text(kInnerX + 4, centerBaseline(rowY, stepperH, 18), eye == 0 ? t.left : t.right, 18, kText, true);
+            for (int i = 0; i < 4; ++i) {
+                const char* name = kLidFitKeys[eye][i];
+                const double x = kInnerX + labelW + i * (w + gap);
+                const double value = v.number(name);
+                double low = -1e9;
+                double high = 1e9;
+                lidMarkBounds(name, v, low, high);
+                // Only a fitted eye's readings can be changed; fitting is what sets them
+                drawStepper(pen, x, rowY, w, stepperH, name, value, formatSetting(name, value),
+                            !busy && saved.lidsFitted[eye], v.locked(name), low, high);
+            }
+        }
     }
 }
 
@@ -1356,7 +1432,11 @@ void EyePanel::drawLids(const Pen& pen, const UiText& t, const PanelModel& m, co
         const bool locked = v.locked(key::kLidCalibration);
         const bool on = v.flag(key::kLidCalibration);
         std::string learned;
-        if (s.running && (std::isfinite(s.relaxed.v[0]) || std::isfinite(s.relaxed.v[1]))) {
+        const FitInConfig saved = fitInConfig(v);
+        const bool lidFit = saved.lidsFitted[0] && saved.lidsFitted[1];
+        if (lidFit) {
+            learned = t.lidFitInUse;
+        } else if (s.running && (std::isfinite(s.relaxed.v[0]) || std::isfinite(s.relaxed.v[1]))) {
             char text[128];
             std::snprintf(text, sizeof(text), t.learnedFormat, twoDecimals(s.relaxed.v[0]).c_str(),
                           twoDecimals(s.relaxed.v[1]).c_str());
@@ -1369,7 +1449,7 @@ void EyePanel::drawLids(const Pen& pen, const UiText& t, const PanelModel& m, co
                       {{t.on, {PanelAction::SetBool, key::kLidCalibration, 1}},
                        {t.off, {PanelAction::SetBool, key::kLidCalibration, 0}}},
                       on ? 0 : 1, 20, locked);
-        if (s.running && s.learning) {
+        if (s.running && s.learning && !lidFit) {
             const double lx = kControlX + 194;
             drawDot(cr, lx + 6, y + kRowH / 2, 5, kAccent);
             pen.text(lx + 18, centerBaseline(y, kRowH, 16), t.learning,
@@ -1816,7 +1896,7 @@ void EyePanel::render(const PanelModel& model) {
     switch (tab_) {
         case PanelTab::Basic: drawBasic(pen, t, model, view); break;
         case PanelTab::Gaze: drawGaze(pen, t, view); break;
-        case PanelTab::GazeFit: drawGazeFit(pen, t, model, view); break;
+        case PanelTab::EyeFit: drawEyeFit(pen, t, model, view); break;
         case PanelTab::Lids: drawLids(pen, t, model, view); break;
         case PanelTab::Advanced: drawAdvanced(pen, t, model, view); break;
     }

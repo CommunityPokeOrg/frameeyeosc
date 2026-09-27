@@ -15,7 +15,7 @@ struct Pair {
     bool valid() const;
 };
 
-/** The latest gaze capture frameeyeosc reports (asked for by the panel's gaze fit). */
+/** The latest gaze capture frameeyeosc reports (asked for by the panel's eye fit). */
 struct GazeCaptureStatus {
     bool present = false;
     long long id = 0;
@@ -25,6 +25,8 @@ struct GazeCaptureStatus {
     double x = 0.0;           ///< raw combined gaze, before the zero point and gains
     double y = 0.0;
     double spread = 0.0;
+    bool hasOpenness = false;  ///< openness is there (done with samples)
+    double openness[2] = {0.0, 0.0};  ///< each eye's average Frame openness, before any scale
     int samples = 0;
 };
 
@@ -57,6 +59,7 @@ struct EyeStatus {
     Pair relaxed {};         ///< learned relaxed openness per eye (NaN = not learned)
     Pair scales {};          ///< the scale in use per eye
     bool learning = false;
+    bool lidFitted[2] = {false, false};  ///< each eye uses the eye fit (no learning, no scale)
 
     std::string configPath;
     std::string calibrationPath;

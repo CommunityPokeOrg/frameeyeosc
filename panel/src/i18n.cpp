@@ -42,7 +42,7 @@ UiText makeJapanese() {
 
     t.tabBasic = "基本";
     t.tabGaze = "視線";
-    t.tabGazeFit = "視線合わせ";
+    t.tabGazeFit = "目を合わせる";
     t.tabLids = "まぶた";
     t.tabAdvanced = "詳細";
 
@@ -101,36 +101,50 @@ UiText makeJapanese() {
     t.rowDespike = "一瞬の途切れを消す";
     t.hintDespike = "視線とまぶた。約 11 ms 遅れる";
 
-    t.rowFit = "点を見て合わせる";
-    t.hintFit = "頭は動かさず、目だけで見る";
-    t.fitCenter = "正面を合わせる";
-    t.fitFive = "5 点で合わせる";
+    t.rowFit = "目を合わせる";
+    t.hintFit = "視線とまぶた・約 30 秒";
+    t.fitStart = "目を合わせる";
+    t.fitAgain = "もう一度合わせる";
+    t.fitCenterOnly = "正面だけ合わせ直す";
     t.fitStop = "やめる";
-    t.fitIntro = "点が出たら、動くか消えるまで見続けてください。正面は約 3 秒、5 点は約 20 秒です";
+    t.fitIntro = "ダッシュボードを閉じると始まります。頭は動かさず、点を目で追ってください。最後に 3 秒目を閉じます";
     t.fitNeedsRunning = "frameeyeosc が動いているときに使えます";
-    t.fitLocked = "正面の位置か動く幅がコマンドで固定されているので使えません";
+    t.fitLocked = "視線かまぶたの値がコマンドで固定されているので使えません";
     t.fitWaiting = "ダッシュボードを閉じると始まります";
-    t.fitWaitingCenter = "正面に点が出ます。ダッシュボードを開くと止まります";
-    t.fitWaitingFive = "正面・上・下・左・右の順に点が出ます。ダッシュボードを開くと止まります";
+    t.fitHowTo = "頭は動かさず、点を目で追ってください。最後に 3 秒目を閉じます。ダッシュボードを開くと止まります";
+    t.fitWaitingCenter = "正面に点が出ます。頭は動かさず見てください。ダッシュボードを開くと止まります";
     t.fitRunningFormat = "測っています: %s（%d / %d）";
     t.fitRetryFormat = "・%d 回目";
-    t.fitDoneCenter = "正面を合わせました";
-    t.fitDoneFive = "5 点で合わせました";
-    t.fitDoneCenterFormat = "正面 左右 %s・上下 %s";
-    t.fitDoneFormat = "正面 左右 %s・上下 %s／幅 左右 %s・上 %s・下 %s";
+    t.fitDone = "合わせました";
+    t.fitDoneCenter = "正面を合わせ直しました";
+    t.fitFitted = "合わせてあります";
+    t.fitNotYet = "まだ合わせていません";
+    t.fitGazeCenterFormat = "視線の正面: 左右 %s・上下 %s";
+    t.fitGazeRangeFormat = "視線の幅: 左右 %s・上 %s・下 %s";
+    t.fitGazeNone = "視線: 合わせていません";
+    t.fitLidFormat = "まぶた %s: 開 %s・閉 %s・下を見ると %s";
+    t.fitLidsNone = "まぶた: 合わせていません（自動で覚えています）";
     t.fitFailed = "合わせられませんでした";
     t.failCancelled = "止めました（ダッシュボードを開くと止まります）";
     t.failWaitTimedOut = "1 分のうちにダッシュボードが閉じられませんでした";
     t.failNotRunning = "frameeyeosc が動いていません";
     t.failNoResult = "frameeyeosc から結果が届きませんでした";
     t.failUnsteadyFormat = "%s の点で視線が落ち着きませんでした（目を閉じていたかも）";
+    t.failNotClosed = "目を閉じているのが測れませんでした（3 回）";
     t.failNoMovementFormat = "%s の点で視線がほとんど動きませんでした";
+    t.failLidRange = "まぶたの開け閉めの差が小さすぎました";
     t.failWrite = "設定ファイルに書けませんでした";
     t.pointCenter = "正面";
     t.pointUp = "上";
     t.pointDown = "下";
     t.pointLeft = "左";
     t.pointRight = "右";
+    t.pointClosed = "目を閉じる";
+    t.targetClose = "目を閉じて";
+    t.targetKeepClosed = "閉じたまま";
+    t.targetOpen = "開けて OK";
+    t.fitReset = "元に戻す";
+    t.fitDetails = "細かく直す";
     t.rowOffset = "正面の位置";
     t.hintOffset = "＋ は右・上";
     t.rowGain = "動く幅";
@@ -139,9 +153,11 @@ UiText makeJapanese() {
     t.capUpDown = "上下";
     t.capUp = "上";
     t.capDown = "下";
-    t.rowFitReset = "合わせる前に戻す";
-    t.hintFitReset = "正面 0・幅 1.00";
-    t.fitReset = "元に戻す";
+    t.rowLidFit = "まぶたの読んだ値";
+    t.hintLidFit = "Frame の生の開き具合";
+    t.capClosed = "閉じ";
+    t.capAhead = "正面";
+    t.lidFitInUse = "目を合わせた値を使っています";
 
     t.rowCalibration = "自動キャリブレーション";
     t.learnedFormat = "覚えた値 左 %s・右 %s";
@@ -277,7 +293,7 @@ UiText makeEnglish() {
 
     t.tabBasic = "Basic";
     t.tabGaze = "Gaze";
-    t.tabGazeFit = "Gaze fit";
+    t.tabGazeFit = "Eye fit";
     t.tabLids = "Eyelids";
     t.tabAdvanced = "Advanced";
 
@@ -336,37 +352,53 @@ UiText makeEnglish() {
     t.rowDespike = "Remove glitches";
     t.hintDespike = "Gaze and lids, ~11 ms later";
 
-    t.rowFit = "Look at the dot";
-    t.hintFit = "Keep your head still";
-    t.fitCenter = "Center";
-    t.fitFive = "5 points";
+    t.rowFit = "Fit your eyes";
+    t.hintFit = "Gaze and eyelids, about 30 s";
+    t.fitStart = "Fit my eyes";
+    t.fitAgain = "Fit again";
+    t.fitCenterOnly = "Re-center only";
     t.fitStop = "Stop";
-    t.fitIntro = "When the dot appears, keep looking at it until it moves or disappears. Center takes about 3 s, "
-                 "five points about 20 s.";
+    t.fitIntro = "It starts when you close the dashboard. Keep your head still and follow the dot with your eyes. "
+                 "At the end, close your eyes for 3 seconds.";
     t.fitNeedsRunning = "Works while frameeyeosc is running";
-    t.fitLocked = "Not available: the gaze center or range is locked by the command line";
+    t.fitLocked = "Not available: gaze or eyelid values are locked by the command line";
     t.fitWaiting = "Close the dashboard to start";
-    t.fitWaitingCenter = "The dot appears straight ahead. Opening the dashboard stops it.";
-    t.fitWaitingFive = "The dot appears straight ahead, then up, down, left and right. Opening the dashboard stops it.";
+    t.fitHowTo = "Keep your head still and follow the dot with your eyes. At the end, close your eyes for 3 seconds. "
+                 "Opening the dashboard stops it.";
+    t.fitWaitingCenter = "A dot appears straight ahead. Keep your head still and look at it. Opening the dashboard "
+                         "stops it.";
     t.fitRunningFormat = "Measuring: %s (%d of %d)";
     t.fitRetryFormat = ", try %d";
-    t.fitDoneCenter = "Center is set";
-    t.fitDoneFive = "Fitted with five points";
-    t.fitDoneCenterFormat = "Center L-R %s, U-D %s";
-    t.fitDoneFormat = "Center L-R %s, U-D %s; range L-R %s, up %s, down %s";
-    t.fitFailed = "Could not calibrate";
+    t.fitDone = "Fitted";
+    t.fitDoneCenter = "Re-centered";
+    t.fitFitted = "Fitted";
+    t.fitNotYet = "Not fitted yet";
+    t.fitGazeCenterFormat = "Gaze center: L-R %s, U-D %s";
+    t.fitGazeRangeFormat = "Gaze range: L-R %s, up %s, down %s";
+    t.fitGazeNone = "Gaze: not fitted";
+    t.fitLidFormat = "Eyelid %s: open %s, closed %s, looking down %s";
+    t.fitLidsNone = "Eyelids: not fitted (learned automatically)";
+    t.fitFailed = "Could not fit";
     t.failCancelled = "Stopped (opening the dashboard stops it)";
     t.failWaitTimedOut = "The dashboard wasn't closed within a minute";
     t.failNotRunning = "frameeyeosc is not running";
     t.failNoResult = "No answer from frameeyeosc";
     t.failUnsteadyFormat = "The gaze wasn't steady at the %s dot (eyes closed?)";
+    t.failNotClosed = "Couldn't measure your eyes closed (3 tries)";
     t.failNoMovementFormat = "The gaze hardly moved toward the %s dot";
+    t.failLidRange = "The eyelids barely changed between open and closed";
     t.failWrite = "Couldn't write the settings file";
     t.pointCenter = "center";
     t.pointUp = "up";
     t.pointDown = "down";
     t.pointLeft = "left";
     t.pointRight = "right";
+    t.pointClosed = "eyes closed";
+    t.targetClose = "Close your eyes";
+    t.targetKeepClosed = "Keep them closed";
+    t.targetOpen = "Open them";
+    t.fitReset = "Reset";
+    t.fitDetails = "Fine-tune";
     t.rowOffset = "Straight ahead";
     t.hintOffset = "+ is right / up";
     t.rowGain = "Range";
@@ -375,9 +407,11 @@ UiText makeEnglish() {
     t.capUpDown = "Up-down";
     t.capUp = "Up";
     t.capDown = "Down";
-    t.rowFitReset = "Undo the fit";
-    t.hintFitReset = "Center 0, range 1.00";
-    t.fitReset = "Reset";
+    t.rowLidFit = "Eyelid readings";
+    t.hintLidFit = "Frame openness";
+    t.capClosed = "Closed";
+    t.capAhead = "Ahead";
+    t.lidFitInUse = "Using the eye fit";
 
     t.rowCalibration = "Auto calibration";
     t.learnedFormat = "Learned L %s / R %s";

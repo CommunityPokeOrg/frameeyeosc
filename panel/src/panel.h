@@ -43,10 +43,11 @@ enum class PanelAction {
     UpdateConfirm,     ///< install it (the prompt closes itself)
     UpdateCancel,
     UpdateDismiss,     ///< close the "installed" / "failed" message
-    FitCenter,         ///< gaze fit: set the zero point from the center dot (the caller starts the session)
-    FitFive,           ///< gaze fit: zero point and gains from five dots
-    FitStop,           ///< gaze fit: stop waiting for the dashboard to close
-    FitReset,          ///< gaze_offset_x/y = 0, gaze_gain_x/up/down = 1
+    FitStart,          ///< eye fit: the whole fit (the caller starts the session)
+    FitCenter,         ///< eye fit: re-center the gaze only
+    FitStop,           ///< eye fit: stop waiting for the dashboard to close
+    FitReset,          ///< gaze_offset_x/y = 0, gaze_gain_x/up/down = 1, lid_fit_* = null
+    FitDetails,        ///< open / close "Fine-tune" (handled inside the panel)
 };
 
 /** A button: its action, the config key it changes and an argument. */
@@ -62,7 +63,7 @@ struct PanelHit {
 };
 
 /** The tabs, in the order they are shown. */
-enum class PanelTab { Basic, Gaze, GazeFit, Lids, Advanced };
+enum class PanelTab { Basic, Gaze, EyeFit, Lids, Advanced };
 
 /**
  * Draws the panel image and finds the button under the laser pointer.
@@ -148,6 +149,12 @@ public:
     PanelTab tab() const { return tab_; }
 
     /**
+     * Open or close "Fine-tune" on the Eye fit tab.
+     * @param open whether it is open
+     */
+    void setFitDetails(bool open) { fitDetails_ = open; }
+
+    /**
      * The image as un-premultiplied RGBA for OpenVR.
      * @return width() * height() * 4 bytes
      */
@@ -193,6 +200,7 @@ private:
     PanelHit hover_;
     PanelHit pressed_;
     PanelTab tab_ = PanelTab::Basic;
+    bool fitDetails_ = false;  ///< "Fine-tune" is open on the Eye fit tab
     bool quitArmed_ = false;
     double quitArmedUntil_ = 0.0;
     bool resetArmed_ = false;
@@ -259,13 +267,14 @@ private:
     void drawGaze(const Pen& pen, const UiText& t, const SettingsView& view);
 
     /**
-     * The Gaze fit tab: calibrating the gaze zero point and gains, and setting them by hand.
+     * The Eye fit tab: one button for the whole fit (gaze and eyelids), re-centering, the result, and the values
+     * by hand under "Fine-tune".
      * @param pen drawing tools
      * @param t texts
      * @param model the model
      * @param view the settings shown
      */
-    void drawGazeFit(const Pen& pen, const UiText& t, const PanelModel& model, const SettingsView& view);
+    void drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& model, const SettingsView& view);
 
     /**
      * A plain button (or an accent one) with a centered label.

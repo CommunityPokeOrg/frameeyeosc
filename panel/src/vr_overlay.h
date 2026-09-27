@@ -1,4 +1,4 @@
-// Connection to OpenVR, the dashboard panel (plus its thumbnail), and the gaze fit's head-locked target.
+// Connection to OpenVR, the dashboard panel (plus its thumbnail), and the eye fit's head-locked target.
 #pragma once
 
 #include "vk_texture.h"
@@ -24,7 +24,7 @@ struct VrEvents {
 
 /**
  * Wraps the connection to OpenVR as an overlay app.
- * Never changes SteamVR settings; only creates and shows a dashboard panel, and during a gaze fit a small target
+ * Never changes SteamVR settings; only creates and shows a dashboard panel, and during an eye fit a small target
  * overlay fixed to the headset.
  * Images are sent as Vulkan textures via SetOverlayTexture rather than SetOverlayRaw.
  */
@@ -90,7 +90,7 @@ public:
     bool dashboardVisible() const;
 
     /**
-     * Show the gaze fit's target: an overlay of its own (not on the dashboard), fixed to the headset 2 m ahead in
+     * Show the eye fit's target: an overlay of its own (not on the dashboard), fixed to the headset 2 m ahead in
      * the given direction. Created the first time it is needed and kept, hidden, until shutdown. The caller only
      * shows it while the dashboard is closed.
      * @param yawDeg degrees to the right of straight ahead
@@ -146,7 +146,7 @@ private:
     bool connected_ = false;
     uint64_t dashboardHandle_ = 0;  ///< vr::VROverlayHandle_t (the dashboard panel)
     uint64_t thumbnailHandle_ = 0;  ///< the dashboard thumbnail
-    uint64_t targetHandle_ = 0;     ///< the gaze fit's target (0 until first needed)
+    uint64_t targetHandle_ = 0;     ///< the eye fit's target (0 until first needed)
     bool targetShown_ = false;
     bool targetPlaced_ = false;     ///< its transform was set, to targetYaw_ / targetPitch_
     double targetYaw_ = 0.0;

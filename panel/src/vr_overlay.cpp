@@ -25,7 +25,7 @@ constexpr const char* kDashboardName = "Eye";
 constexpr float kDashboardWidthM = 2.8f;
 // On shutdown, how long to wait after clearing the overlay before VR_Shutdown (about 36 frames at 90Hz)
 constexpr int kShutdownWaitMs = 400;
-// The gaze fit's target: an ordinary (not dashboard) overlay fixed to the headset
+// The eye fit's target: an ordinary (not dashboard) overlay fixed to the headset
 constexpr const char* kTargetKey = "sasaken.frameeyeosc-panel.target";
 constexpr const char* kTargetName = "Eye target";
 // 2 m ahead and 0.3 m wide (about 8.6 degrees), so the eyes point about where the head-relative direction says

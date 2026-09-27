@@ -70,7 +70,15 @@ constexpr const char* kGazeOffsetY = "gaze_offset_y";
 constexpr const char* kGazeGainX = "gaze_gain_x";
 constexpr const char* kGazeGainUp = "gaze_gain_up";
 constexpr const char* kGazeGainDown = "gaze_gain_down";
-/** A request, not a setting: {"id": N, "target": "center"} asks frameeyeosc to average the gaze (gaze fit). */
+constexpr const char* kLidFitClosedLeft = "lid_fit_closed_left";
+constexpr const char* kLidFitClosedRight = "lid_fit_closed_right";
+constexpr const char* kLidFitUpLeft = "lid_fit_up_left";
+constexpr const char* kLidFitUpRight = "lid_fit_up_right";
+constexpr const char* kLidFitOpenLeft = "lid_fit_open_left";
+constexpr const char* kLidFitOpenRight = "lid_fit_open_right";
+constexpr const char* kLidFitDownLeft = "lid_fit_down_left";
+constexpr const char* kLidFitDownRight = "lid_fit_down_right";
+/** A request, not a setting: {"id": N, "target": "center"} asks frameeyeosc to average the gaze (eye fit). */
 constexpr const char* kGazeCapture = "gaze_capture";
 constexpr const char* kCalibrationReset = "calibration_reset";
 constexpr const char* kLanguage = "language";

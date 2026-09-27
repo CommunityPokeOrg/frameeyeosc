@@ -100,6 +100,39 @@ std::vector<SettingChange> recommendedSettings(const std::string& output, const 
     return changes;
 }
 
+const char* const kLidFitKeys[2][4] = {
+    {key::kLidFitClosedLeft, key::kLidFitUpLeft, key::kLidFitOpenLeft, key::kLidFitDownLeft},
+    {key::kLidFitClosedRight, key::kLidFitUpRight, key::kLidFitOpenRight, key::kLidFitDownRight},
+};
+
+FitInConfig fitInConfig(const SettingsView& view) {
+    FitInConfig fit;
+    gaze_fit::Values& v = fit.values;
+    v.offsetX = view.number(key::kGazeOffsetX);
+    v.offsetY = view.number(key::kGazeOffsetY);
+    v.gainX = view.number(key::kGazeGainX);
+    v.gainUp = view.number(key::kGazeGainUp);
+    v.gainDown = view.number(key::kGazeGainDown);
+    fit.gazeFitted = std::fabs(v.offsetX) > 1e-9 || std::fabs(v.offsetY) > 1e-9 || std::fabs(v.gainX - 1) > 1e-9 ||
+                     std::fabs(v.gainUp - 1) > 1e-9 || std::fabs(v.gainDown - 1) > 1e-9;
+    for (int eye = 0; eye < 2; ++eye) {
+        double readings[4];
+        bool all = true;
+        for (int i = 0; i < 4; ++i) {
+            readings[i] = view.number(kLidFitKeys[eye][i]);
+            all &= std::isfinite(readings[i]);
+        }
+        fit.lidsFitted[eye] = all;
+        if (!all) continue;
+        v.lidClosed[eye] = readings[0];
+        v.lidUp[eye] = readings[1];
+        v.lidOpen[eye] = readings[2];
+        v.lidDown[eye] = readings[3];
+    }
+    v.hasLids = fit.lidsFitted[0] && fit.lidsFitted[1];
+    return fit;
+}
+
 void lidMarkBounds(const std::string& name, const SettingsView& view, double& low, double& high) {
     const double closed = view.number(key::kLidClosed);
     const double open = view.number(key::kLidOpen);
@@ -117,6 +150,19 @@ void lidMarkBounds(const std::string& name, const SettingsView& view, double& lo
         high = wide;
     } else if (name == key::kLidWide) {
         low = widenStart;
+    }
+    for (int eye = 0; eye < 2; ++eye) {
+        for (int i = 0; i < 4; ++i) {
+            if (name != kLidFitKeys[eye][i]) continue;
+            const double closedReading = view.number(kLidFitKeys[eye][0]);
+            if (i == 0) {
+                double lowestOpen = 1e9;
+                for (int j = 1; j < 4; ++j) lowestOpen = std::fmin(lowestOpen, view.number(kLidFitKeys[eye][j]));
+                high = lowestOpen - gaze_fit::kMinLidRange;
+            } else {
+                low = closedReading + gaze_fit::kMinLidRange;
+            }
+        }
     }
 }
 

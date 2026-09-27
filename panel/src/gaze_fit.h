@@ -1,22 +1,25 @@
-// Gaze calibration (the "Gaze fit" tab): where the targets are, how captured gaze averages become the gaze zero
-// point and gains, and the step-by-step session the panel runs while the dashboard is closed. Nothing here talks to
-// OpenVR or writes files, so it can be tested on its own (gaze_fit_test.cpp).
+// The eye fit (the "Eye fit" tab): where the targets are, how captured averages become the gaze zero point and
+// gains and each eye's lid fit, and the step-by-step session the panel runs while the dashboard is closed.
+// Nothing here talks to OpenVR or writes files, so it can be tested on its own (gaze_fit_test.cpp).
 #pragma once
 
 #include "status.h"
 
 namespace gaze_fit {
 
-/** Only the center point, or all five. */
-enum class Mode { Center, FivePoint };
+/** The whole fit (five gaze points and the eyes-shut step), or only re-centering the gaze. */
+enum class Mode { Full, Center };
 
-/** The targets, in the order the five-point fit shows them. */
-enum class Point { Center, Up, Down, Left, Right };
+/** The steps, in the order the full fit shows them. */
+enum class Point { Center, Up, Down, Left, Right, Closed };
 
-/** A target as seen from the head. */
+/** How many steps there are at most. */
+constexpr int kPointCount = 6;
+
+/** A step's target as seen from the head. */
 struct Target {
     Point point;
-    const char* name;  ///< sent with the capture request and logged by frameeyeosc
+    const char* name;  ///< sent with the capture request and logged by frameeyeosc ("closed" = eyes shut)
     double yawDeg;     ///< degrees to the right
     double pitchDeg;   ///< degrees up
 };
@@ -28,12 +31,22 @@ constexpr double kUpDownDeg = 15.0;
 constexpr double kFullScaleDeg = 45.0;
 /** A capture is used when it has at least this many samples (of about 135 in the 1.5 s frameeyeosc averages)... */
 constexpr int kMinSamples = 45;
-/** ...and spreads no more than this (on the -1..1 scale; 0.06 is about 2.7°). */
+/** ...and its gaze spreads no more than this (on the -1..1 scale; 0.06 is about 2.7°). */
 constexpr double kMaxSpread = 0.06;
-/** Tries per point before giving up. */
+/** The eyes-shut capture counts when each eye reads below this share of its straight-ahead open reading. */
+constexpr double kClosedShare = 0.7;
+/** Each eye's open readings must be at least this far above its closed one (frameeyeosc checks the same). */
+constexpr double kMinLidRange = 0.1;
+/** Tries per step before giving up. */
 constexpr int kMaxAttempts = 3;
-/** Seconds the target shows before the capture is asked for, so the eyes can find it. */
+/** Seconds a target shows before its capture is asked for, so the eyes can find it... */
 constexpr double kSettleSec = 1.0;
+/** ...of which the dot spends this long gliding over from the previous target. */
+constexpr double kMoveSec = 0.35;
+/** The eyes-shut step: "close your eyes" counts down this long, then the capture is asked for. */
+constexpr double kCloseSettleSec = 3.0;
+/** After it, "open your eyes" shows this long before the result is written. */
+constexpr double kReopenSec = 1.5;
 /** How long frameeyeosc captures (its first 0.5 s are skipped). */
 constexpr double kCaptureSec = 2.0;
 /** Seconds to wait for a capture's result: frameeyeosc reads config.json once a second, then gives up after 5 s. */
@@ -48,53 +61,68 @@ constexpr double kGainMin = 0.5;
 constexpr double kGainMax = 2.0;
 
 /**
- * A target.
+ * A step's target.
  * @param point which one
  * @return where it is
  */
 const Target& target(Point point);
 
 /**
- * How many points a mode shows.
+ * How many steps a mode has.
  * @param mode the mode
- * @return 1 or 5
+ * @return 6 or 1
  */
 int pointCount(Mode mode);
 
 /**
- * The point shown at a step.
+ * The step shown at a position.
  * @param mode the mode
  * @param index 0-based step
- * @return the point
+ * @return the step
  */
 Point pointAt(Mode mode, int index);
 
-/** One capture's result (the raw combined gaze, before the zero point and gains). */
+/** One capture's result (the raw combined gaze and openness, before any correction or scale). */
 struct Measured {
     double x = 0.0;
     double y = 0.0;
     double spread = 0.0;
+    double openness[2] = {0.0, 0.0};  ///< left, right
+    bool hasOpenness = false;
     int samples = 0;
 };
 
 /**
- * Whether a capture is steady and long enough to use.
+ * Whether a gaze capture is steady and long enough to use.
  * @param measured the capture
  * @return true if usable
  */
 bool usable(const Measured& measured);
 
-/** The five settings a fit writes. */
+/**
+ * Whether the eyes-shut capture is long enough and the eyes were shut.
+ * @param closed the eyes-shut capture
+ * @param center the straight-ahead capture (its openness is "open")
+ * @return true if usable
+ */
+bool usableClosed(const Measured& closed, const Measured& center);
+
+/** The settings a fit writes. */
 struct Values {
     double offsetX = 0.0;
     double offsetY = 0.0;
     double gainX = 1.0;
     double gainUp = 1.0;
     double gainDown = 1.0;
+    bool hasLids = false;  ///< the eyelid readings below are set
+    double lidClosed[2] = {0.0, 0.0};  ///< left, right
+    double lidUp[2] = {0.0, 0.0};
+    double lidOpen[2] = {0.0, 0.0};
+    double lidDown[2] = {0.0, 0.0};
 };
 
 /**
- * The zero point from the center capture; the gains stay as they are.
+ * The zero point from the center capture; everything else stays as it is.
  * @param center the center capture
  * @param current the settings now
  * @return the new settings (rounded, within range)
@@ -102,21 +130,30 @@ struct Values {
 Values fitCenter(const Measured& center, const Values& current);
 
 /**
- * The zero point and the three gains from all five captures. Each gain makes the target angle come out as that
- * angle: gain = target / (point - center), with left and right averaged into one gain.
+ * The zero point and the three gains from the five gaze captures. Each gain makes the target angle come out as
+ * that angle: gain = target / (point - center), with left and right averaged into one gain.
  * @param points the captures, indexed by Point
- * @param out the new settings (rounded, within range)
+ * @param out the new gaze settings (rounded, within range); the lid readings are left alone
  * @param failed the first point that did not move far enough the right way
  * @return false if a point did not move far enough the right way
  */
-bool fitFive(const Measured points[5], Values& out, Point& failed);
+bool fitGaze(const Measured points[kPointCount], Values& out, Point& failed);
+
+/**
+ * Each eye's lid fit: the eyes-shut reading, and the open readings looking up, straight ahead and down.
+ * @param points the captures, indexed by Point (Closed included)
+ * @param out where the lid readings go (hasLids set)
+ * @return false if an eye's open readings are not at least kMinLidRange above its closed one
+ */
+bool fitLids(const Measured points[kPointCount], Values& out);
 
 /** Where a session is. */
 enum class Phase {
     Idle,       ///< nothing going on (maybe showing the last result)
     Waiting,    ///< waiting for the dashboard to close
-    Settling,   ///< a target is shown; the capture is asked for after kSettleSec
+    Settling,   ///< a target is shown; its capture is asked for after the settle time
     Capturing,  ///< waiting for frameeyeosc's result
+    Reopen,     ///< "open your eyes" after the eyes-shut step
     Done,       ///< the new settings were written
     Failed,     ///< stopped; see Failure
 };
@@ -129,18 +166,28 @@ enum class Failure {
     NotRunning,    ///< frameeyeosc is not running
     NoResult,      ///< frameeyeosc did not answer a capture
     Unsteady,      ///< a point stayed unsteady or eyes closed for kMaxAttempts tries
+    NotClosed,     ///< the eyes-shut step never read as shut
     NoMovement,    ///< a point did not move far enough the right way
+    NoLidRange,    ///< the eyelids barely changed between open and shut
     WriteFailed,   ///< config.json could not be written
+};
+
+/** How the target looks at the moment. */
+enum class TargetStyle {
+    Dot,          ///< a dot to look at
+    CloseEyes,    ///< "close your eyes" with a countdown
+    KeepClosed,   ///< "keep them closed"
+    OpenEyes,     ///< "open your eyes"
 };
 
 /** What the panel shows about a session. */
 struct View {
     Phase phase = Phase::Idle;
-    Mode mode = Mode::Center;
+    Mode mode = Mode::Full;
     int index = 0;             ///< the step shown (0-based)
     int count = 1;             ///< steps in this mode
-    Point point = Point::Center;  ///< the point shown, or the one that failed
-    int attempt = 1;           ///< try at this point (1-based)
+    Point point = Point::Center;  ///< the step shown, or the one that failed
+    int attempt = 1;           ///< try at this step (1-based)
     Failure failure = Failure::None;
     Values values;             ///< the settings written (Done)
 };
@@ -149,24 +196,26 @@ struct View {
 struct Actions {
     bool writeCapture = false;  ///< write a gaze_capture request for `target`, then call captureSent / writeFailed
     const char* target = "";
-    bool writeValues = false;   ///< write `values` (once, when done): only the zero point in Center mode
+    bool writeValues = false;   ///< write `values` (once, when done): in Center mode only the zero point
     Values values;
-    bool showTarget = false;    ///< show the head-locked target at `point` (hide it otherwise)
-    Point point = Point::Center;
-    int seconds = 0;            ///< the countdown on the target
-    double progress = 0.0;      ///< the ring on the target, 1 -> 0 over one point
+    bool showTarget = false;    ///< show the head-locked target (hide it otherwise)
+    TargetStyle style = TargetStyle::Dot;
+    double yawDeg = 0.0;        ///< where, gliding between targets
+    double pitchDeg = 0.0;
+    int seconds = 0;            ///< the countdown on the target (0 = none)
+    double progress = 0.0;      ///< the ring on the target, 1 -> 0 over one step
 };
 
 /**
- * One calibration run. The caller ticks it about 30 times a second while it is active, with whether the
- * dashboard is open and the latest status.json, and carries out the returned actions.
+ * One fit. The caller ticks it every frame while it is active, with whether the dashboard is open and the latest
+ * status.json, and carries out the returned actions.
  */
 class Session {
 public:
     /**
      * Start: wait for the dashboard to close.
-     * @param mode center only, or five points
-     * @param current the settings now (Center mode keeps the gains)
+     * @param mode the whole fit, or re-centering only
+     * @param current the settings now (kept where the mode does not change them)
      * @param now monotonic seconds
      */
     void start(Mode mode, const Values& current, double now);
@@ -201,16 +250,17 @@ public:
 
 private:
     Phase phase_ = Phase::Idle;
-    Mode mode_ = Mode::Center;
+    Mode mode_ = Mode::Full;
     Failure failure_ = Failure::None;
     Values current_;
     Values result_;
-    Measured measured_[5];
+    Measured measured_[kPointCount];
     int index_ = 0;
     int attempt_ = 1;
     Point failedPoint_ = Point::Center;
+    Point previousPoint_ = Point::Center;  ///< where the dot glides from
     double startedAt_ = 0.0;     ///< when Waiting began
-    double phaseAt_ = 0.0;       ///< when Settling or Capturing began
+    double phaseAt_ = 0.0;       ///< when Settling, Capturing or Reopen began
     long long captureId_ = 0;    ///< 0 until captureSent
     double runningSeenAt_ = -1;  ///< when frameeyeosc was first seen capturing
     bool requested_ = false;     ///< the request was asked for and not yet confirmed
@@ -222,11 +272,23 @@ private:
     void fail(Failure failure);
 
     /**
-     * Show the next target, or finish.
+     * Show the next step, or finish.
      * @param now monotonic seconds
      * @param actions where to ask for the final write
      */
     void next(double now, Actions& actions);
+
+    /**
+     * Compute the result and ask for it to be written.
+     * @param actions where to ask for the write
+     */
+    void finish(Actions& actions);
+
+    /** @return the step shown now */
+    Point point() const { return pointAt(mode_, index_); }
+
+    /** @return how long the current step settles */
+    double settleSec() const { return point() == Point::Closed ? kCloseSettleSec : kSettleSec; }
 };
 
 }  // namespace gaze_fit

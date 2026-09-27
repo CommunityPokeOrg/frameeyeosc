@@ -23,7 +23,7 @@ struct PanelModel {
     bool panelErrorBroken = false;  ///< that failure was because config.json is broken
     Language language = Language::Ja;
     frame_updater::UpdateStatus update;  ///< new-release check and install (see frame-updater)
-    gaze_fit::View fit;          ///< the gaze fit session (Gaze fit tab)
+    gaze_fit::View fit;          ///< the eye fit session (Eye fit tab)
 };
 
 /**
@@ -88,6 +88,23 @@ private:
     const PanelModel& model_;
 };
 
+/** The eye fit as config.json holds it (shown on the Eye fit tab even when frameeyeosc is not running). */
+struct FitInConfig {
+    bool gazeFitted = false;              ///< the zero point or a gain is not the default
+    bool lidsFitted[2] = {false, false};  ///< all four readings of that eye are set
+    gaze_fit::Values values;              ///< hasLids when both eyes are fitted
+};
+
+/** The lid fit keys, [eye][closed, up, open, down]. */
+extern const char* const kLidFitKeys[2][4];
+
+/**
+ * The eye fit in the settings.
+ * @param view the settings
+ * @return what is fitted, and the values
+ */
+FitInConfig fitInConfig(const SettingsView& view);
+
 /** A gaze smoothing preset (the three One Euro values). */
 struct GazePreset {
     double minCutoff;
@@ -125,9 +142,9 @@ struct SettingChange {
 std::vector<SettingChange> recommendedSettings(const std::string& output, const SettingsView& view);
 
 /**
- * The range a lid mark may move in without passing its neighbours
- * (closed < open <= widen start <= widest).
- * @param name one of the four lid keys
+ * The range a lid mark may move in without passing its neighbours (closed < open <= widen start <= widest), or
+ * a lid fit reading in (closed at least 0.1 below the three open readings).
+ * @param name one of the four lid keys, or a lid fit key
  * @param view the settings
  * @param low lower bound (written)
  * @param high upper bound (written)

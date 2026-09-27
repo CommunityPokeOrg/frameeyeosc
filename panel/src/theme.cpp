@@ -104,11 +104,13 @@ const std::vector<ContrastPair>& contrastPairs() {
         {"lid mark line edges (accent fill)", kBg, kAccent, ContrastKind::Ui},
         {"lid mark lines between the bars (card)", kText, kCard, ContrastKind::Ui},
         {"numbered mark circles (card)", kAccent, kCard, ContrastKind::Ui},
-        {"gaze fit done check mark (card)", kSuccess, kCard, ContrastKind::Ui},
-        // The gaze fit target (drawn on its own dark disc, shown over the scene)
+        {"eye fit done check mark (card)", kSuccess, kCard, ContrastKind::Ui},
+        // The eye fit target (drawn on its own dark disc, shown over the scene)
         {"target dot (disc)", kText, kBg, ContrastKind::Ui},
         {"target ring (disc)", kAccent, kBg, ContrastKind::Ui},
         {"target seconds (disc)", kTextMuted, kBg, ContrastKind::Text},
+        {"target words (disc)", kText, kBg, ContrastKind::Text},
+        {"target countdown (disc)", kAccent, kBg, ContrastKind::Text},
     };
     return pairs;
 }
