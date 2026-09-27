@@ -148,7 +148,7 @@ const std::vector<SettingSpec>& settingSpecs() {
         {key::kGazeMinCutoff, SettingType::Number, 0.4, "", 0.05, 5.0, 0.05, 2},
         {key::kGazeBeta, SettingType::Number, 0.8, "", 0.0, 10.0, 0.1, 2},
         {key::kGazeDCutoff, SettingType::Number, 0.5, "", 0.1, 5.0, 0.1, 2},
-        {key::kGazeDeadzone, SettingType::Number, 0.03, "", 0.0, 0.2, 0.005, 3},
+        {key::kGazeDeadzone, SettingType::Number, 0.02, "", 0.0, 0.2, 0.005, 3},
         {key::kGazeHoldBelow, SettingType::Number, 0.5, "", 0.05, 1.0, 0.05, 2},
         {key::kIndependentEyes, SettingType::Bool, 0, "", 0, 1, 1, 0},
         {key::kLidMinCutoff, SettingType::Number, 6.0, "", 0.5, 30.0, 0.5, 1},

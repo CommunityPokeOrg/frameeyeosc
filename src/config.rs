@@ -81,7 +81,7 @@ impl Default for Settings {
             gaze_min_cutoff: 0.4,
             gaze_beta: 0.8,
             gaze_d_cutoff: 0.5,
-            gaze_deadzone: 0.03,
+            gaze_deadzone: 0.02,
             gaze_hold_below: 0.5,
             independent_eyes: false,
             lid_min_cutoff: 6.0,

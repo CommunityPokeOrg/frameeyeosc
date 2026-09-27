@@ -88,7 +88,7 @@ Settings are in `~/.config/frameeyeosc/config.json`. The panel writes it, and yo
 | `gaze_min_cutoff` | `--gaze-min-cutoff` | `0.4` | Lower = steadier gaze at rest, more lag |
 | `gaze_beta` | `--gaze-beta` | `0.8` | Higher = follows fast eye movements with less lag |
 | `gaze_d_cutoff` | `--gaze-d-cutoff` | `0.5` | Lower = tracker noise loosens the gaze filter less |
-| `gaze_deadzone` | `--gaze-deadzone` | `0.03` | Gaze changes smaller than this are ignored (1.0 = 45°) |
+| `gaze_deadzone` | `--gaze-deadzone` | `0.02` | Gaze changes smaller than this are ignored (1.0 = 45°) |
 | `gaze_hold_below` | `--gaze-hold-below` | `0.5` | Hold the gaze while either eye's openness is below this; `0` turns it off |
 | `independent_eyes` | `--independent-eyes` | `false` | Send each eye's own gaze instead of the shared one |
 | `gaze_quality_limit` | `--gaze-quality-limit` | `0` (off) | Optional safety net: ignore an eye's gaze while the Frame's own uncertainty (covariance) for it is above this (for example `0.03`). The other eye moves both, and if both are above it the gaze is held. Eyelids aren't affected. On a well-fitted headset it made no measurable difference, because the uncertainty only rises while the eyes are mostly shut, where `gaze_hold_below` already holds the gaze |

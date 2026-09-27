@@ -88,7 +88,7 @@ sudo は要りません。全部ホームフォルダ（`~/.local/bin`、`~/.con
 | `gaze_min_cutoff` | `--gaze-min-cutoff` | `0.4` | 下げるほど止まっている時の視線が安定（その分遅れる） |
 | `gaze_beta` | `--gaze-beta` | `0.8` | 上げるほど素早い視線の動きに遅れず付いていく |
 | `gaze_d_cutoff` | `--gaze-d-cutoff` | `0.5` | 下げるほど、トラッキングのノイズで視線のフィルタがゆるみにくい |
-| `gaze_deadzone` | `--gaze-deadzone` | `0.03` | これより小さい視線の変化は無視（1.0＝45°） |
+| `gaze_deadzone` | `--gaze-deadzone` | `0.02` | これより小さい視線の変化は無視（1.0＝45°） |
 | `gaze_hold_below` | `--gaze-hold-below` | `0.5` | どちらかの目の開き具合がこれより小さい間は視線を止める。`0` で無効 |
 | `independent_eyes` | `--independent-eyes` | `false` | 共通の視線ではなく、左右それぞれの視線を送る |
 | `gaze_quality_limit` | `--gaze-quality-limit` | `0`（オフ） | 念のための安全策: Frame が出す視線の不確かさ（共分散）がこれ（例: `0.03`）より大きい目の視線は使わない。片目だけならもう片方の目で両目を動かし、両目ともなら視線を止める。まぶたには影響しない。きちんと合ったヘッドセットでは測って差が出なかった。不確かさが上がるのはほぼ目を閉じかけている間だけで、そこは `gaze_hold_below` がもう視線を止めているため |

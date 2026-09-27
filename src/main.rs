@@ -131,7 +131,7 @@ struct Args {
     #[arg(long, default_value_t = 0.5)]
     gaze_d_cutoff: f32,
     /// Gaze changes smaller than this (1.0 = 45°) are ignored so the eyes stay put while fixating
-    #[arg(long, default_value_t = 0.03)]
+    #[arg(long, default_value_t = 0.02)]
     gaze_deadzone: f32,
     /// Hold the gaze while either eye's Frame openness is below this; 0 disables
     #[arg(long, default_value_t = 0.5)]
@@ -1092,6 +1092,15 @@ fn vrchat_stream(settings: &Settings) -> Option<(&str, u16, &str)> {
         .then(|| (settings.host.as_str(), settings.port(), settings.prefix.as_str()))
 }
 
+/// Why the samples stopped, for the log line when tracking is lost.
+fn lost_reason(next: &Next) -> String {
+    match next {
+        Next::Stopped => "eye server not producing".into(),
+        Next::Sample(_) => "unreadable sample".into(),
+        Next::Waiting => format!("no new samples for {} s", TIMEOUT.as_secs()),
+    }
+}
+
 /// Everything the main loop keeps between samples.
 struct Bridge {
     config: Config,
@@ -1130,7 +1139,16 @@ impl Bridge {
 
     fn on_sample(&mut self, data: EyeData) -> Result<(), Box<dyn Error>> {
         let now = Instant::now();
-        self.last_data = Some(now);
+        let previous = self.last_data.replace(now);
+        if self.active_since.is_none() {
+            match previous {
+                Some(last) => eprintln!(
+                    "Eye tracking resumed after {:.1} s",
+                    now.duration_since(last).as_secs_f32()
+                ),
+                None => eprintln!("Eye tracking started"),
+            }
+        }
         let since = *self.active_since.get_or_insert(now);
         let settled = since.elapsed() >= CAL_SETTLE;
         let sample = step(&self.settings, &mut self.smoother, &mut self.calibration, &data, settled);
@@ -1156,7 +1174,8 @@ impl Bridge {
         Ok(())
     }
 
-    fn on_lost(&mut self) -> Result<(), Box<dyn Error>> {
+    fn on_lost(&mut self, reason: &str) -> Result<(), Box<dyn Error>> {
+        eprintln!("Eye tracking stopped ({reason})");
         if vrchat_stream(&self.settings).is_some() {
             send_inactive(&self.output, &self.settings.prefix)?;
         }
@@ -1281,6 +1300,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut status_file = StatusFile::new(status::status_path());
     let mut source = EyeSource::open()?;
     eprintln!("Reading {SOURCE}");
+    // Whether the last attempt to reattach to a replaced shared memory failed, so it is logged once.
+    let mut reopen_failed = false;
     loop {
         if let Some(reload) = bridge.config.poll() {
             bridge.apply(reload)?;
@@ -1290,12 +1311,21 @@ fn main() -> Result<(), Box<dyn Error>> {
             Next::Sample(data) if data.is_finite() => bridge.on_sample(data)?,
             // Short waits are normal; only a whole second without data means tracking stopped.
             Next::Waiting if bridge.last_data.is_some_and(|last| last.elapsed() < TIMEOUT) => {}
-            _ if bridge.active_since.is_some() => bridge.on_lost()?,
+            next if bridge.active_since.is_some() => bridge.on_lost(&lost_reason(&next))?,
             // Idle: if the eye server recreated its shared memory, our mapping would go silent forever.
-            _ if source.is_stale() => {
-                eprintln!("{SOURCE} was replaced; reopening");
-                source = EyeSource::open()?;
-            }
+            // While the new one is missing or not set up yet, keep trying instead of exiting.
+            _ if source.is_stale() => match EyeSource::open() {
+                Ok(reopened) => {
+                    eprintln!("{SOURCE} was replaced; reattached");
+                    source = reopened;
+                    reopen_failed = false;
+                }
+                Err(error) if !reopen_failed => {
+                    eprintln!("{SOURCE} was replaced and can't be opened yet ({error}); retrying");
+                    reopen_failed = true;
+                }
+                Err(_) => {}
+            },
             _ => {}
         }
         if status_file.due() {
@@ -1460,6 +1490,17 @@ mod tests {
         let sent = run(&raw, &openness_track(20, &[(10, [0.2; 2])]));
         assert_eq!(sent[10].lids, [0.0; 2]);
         assert_eq!(sent[11].lids, [0.75; 2]);
+    }
+
+    #[test]
+    fn lost_tracking_says_why() {
+        assert_eq!(lost_reason(&Next::Stopped), "eye server not producing");
+        assert_eq!(lost_reason(&Next::Waiting), "no new samples for 1 s");
+        let unreadable = EyeData {
+            sample_time: f64::NAN,
+            ..EyeData::default()
+        };
+        assert_eq!(lost_reason(&Next::Sample(unreadable)), "unreadable sample");
     }
 
     #[test]
