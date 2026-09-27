@@ -61,6 +61,8 @@ pub struct CalibrationStatus {
     pub enabled: bool,
     pub relaxed: [f32; 2],
     pub scales: [f32; 2],
+    /// Whether each eye uses the panel's eye fit instead (no learning, no scale).
+    pub fitted: [bool; 2],
     pub learning: bool,
 }
 

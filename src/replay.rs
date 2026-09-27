@@ -1,8 +1,8 @@
 //! Recording the eye server's samples to CSV (--record), and running a recording back through the same
 //! processing (--replay) to compare settings by a few numbers.
 
-use crate::config::Settings;
-use crate::{CAL_SETTLE, EyeData, LidCalibration, MAX_GAP, NOMINAL_DT, Sample, Smoother, TIMEOUT, step};
+use crate::config::{LidFit, Settings};
+use crate::{CAL_SETTLE, EyeData, LidCalibration, MAX_GAP, NOMINAL_DT, Sample, Smoother, TIMEOUT, gaze_angles, step};
 use std::error::Error;
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
@@ -29,6 +29,23 @@ const JITTER_WINDOW: f64 = 0.3;
 const FIXATION_SPREAD: f64 = 1.0;
 // Gaze values of 1.0 are 45°.
 const GAZE_DEGREES: f32 = 45.0;
+// "Closing while looking down": the tracker's gaze is this many degrees down or more, the eye's reading
+// is at least DOWN_OPEN_SHARE of its straight-ahead open reading, it is away from blinks, and the sent
+// eyelid (VRCFT, relaxed = 0.75) is below DOWN_CLOSING: visibly a third closed.
+const DOWN_DEGREES: f32 = 15.0;
+const DOWN_OPEN_SHARE: f32 = 0.6;
+const DOWN_CLOSING: f32 = 0.5;
+// Estimating a lid fit from a recording: where the live fit's 15° targets landed in the tracker's own
+// gaze (+15.8° and -17.8° on 2026-09-28), straight ahead within 3°, and each needs this many samples
+// with both eyes clearly open.
+const FIT_ESTIMATE_UP: (f32, f32) = (12.0, 19.0);
+const FIT_ESTIMATE_DOWN: (f32, f32) = (-21.0, -15.0);
+const FIT_ESTIMATE_AHEAD: f32 = 3.0;
+const FIT_ESTIMATE_OPEN: f32 = 0.5;
+const FIT_ESTIMATE_SAMPLES: usize = 45;
+// Eyes-shut stretches: both readings below this for at least this long; their first half second is skipped.
+const FIT_ESTIMATE_SHUT: f32 = 0.45;
+const FIT_ESTIMATE_SHUT_SECONDS: f64 = 1.0;
 
 /// Column names of a recording, in the order `values` lists them.
 fn columns() -> Vec<String> {
@@ -195,6 +212,11 @@ struct Metrics {
     flicker: f64,
     // Share of samples where each eye's gaze failed the quality check.
     unreliable: [f64; 2],
+    // Stretches (per eye) where an eye looking down and clearly open, away from blinks, was sent as closing.
+    down_closes: usize,
+    // Median sent eyelid (VRCFT, both eyes) with the eyes open and away from blinks, looking down and ahead.
+    lid_down: f64,
+    lid_ahead: f64,
 }
 
 fn median(values: &mut [f64]) -> f64 {
@@ -340,6 +362,37 @@ fn metrics(samples: &[EyeData], sent: &[Sample]) -> Metrics {
     let unreliable = [0, 1].map(|eye| {
         sent.iter().filter(|sample| !sample.reliable[eye]).count() as f64 / n.max(1) as f64
     });
+
+    let reference = open_reference(samples);
+    let down_limit = -DOWN_DEGREES / GAZE_DEGREES;
+    let ahead_limit = FIT_ESTIMATE_AHEAD / GAZE_DEGREES;
+    let settled_open = |i: usize| {
+        !blink_nearby[i] && (0..2).all(|eye| samples[i].openness[eye] >= DOWN_OPEN_SHARE * reference[eye])
+    };
+    let lid_median = |keep: &dyn Fn(f32) -> bool| {
+        let mut lids: Vec<f64> = (0..n)
+            .filter(|i| settled_open(*i) && keep(gaze_angles(samples[*i].fixation_point)[1]))
+            .map(|i| f64::from(sent[i].lids[0] + sent[i].lids[1]) / 2.0)
+            .collect();
+        median(&mut lids)
+    };
+    let lid_down = lid_median(&|vertical| vertical <= down_limit);
+    let lid_ahead = lid_median(&|vertical| vertical.abs() <= ahead_limit);
+    let mut down_closes = 0;
+    for (eye, reference) in reference.into_iter().enumerate() {
+        let mut last: Option<usize> = None;
+        for i in 0..n {
+            let looking_down = gaze_angles(samples[i].fixation_point)[1] <= down_limit;
+            let open = samples[i].openness[eye] >= DOWN_OPEN_SHARE * reference;
+            // Away from blinks, so a blink's tail (held shut, then reopening) does not count
+            if looking_down && open && !blink_nearby[i] && sent[i].lids[eye] < DOWN_CLOSING {
+                if last.is_none_or(|last| i - last > BLINK_MERGE + 1) {
+                    down_closes += 1;
+                }
+                last = Some(i);
+            }
+        }
+    }
     Metrics {
         blinks: blinks.len(),
         blinks_shut,
@@ -348,7 +401,67 @@ fn metrics(samples: &[EyeData], sent: &[Sample]) -> Metrics {
         blink_jump: percentile(&mut jumps, 90.0),
         flicker: changes.iter().sum::<f64>() / changes.len().max(1) as f64,
         unreliable,
+        down_closes,
+        lid_down,
+        lid_ahead,
     }
+}
+
+/// The median of each eye's openness over the samples that `keep` picks; None with too few.
+fn median_openness(samples: &[EyeData], keep: impl Fn(usize) -> bool) -> Option<[f32; 2]> {
+    let picked: Vec<usize> = (0..samples.len()).filter(|i| keep(*i)).collect();
+    if picked.len() < FIT_ESTIMATE_SAMPLES {
+        return None;
+    }
+    Some([0, 1].map(|eye| {
+        let mut values: Vec<f64> = picked.iter().map(|i| f64::from(samples[*i].openness[eye])).collect();
+        median(&mut values) as f32
+    }))
+}
+
+/// Each eye's straight-ahead open reading, to judge "still open" by (1.0 when it can't be told).
+fn open_reference(samples: &[EyeData]) -> [f32; 2] {
+    let ahead = FIT_ESTIMATE_AHEAD / GAZE_DEGREES;
+    median_openness(samples, |i| {
+        gaze_angles(samples[i].fixation_point)[1].abs() <= ahead
+            && samples[i].openness.iter().all(|openness| *openness > FIT_ESTIMATE_OPEN)
+    })
+    .unwrap_or([1.0; 2])
+}
+
+/// A lid fit guessed from a recording that has looking up, straight ahead and down, and the eyes held
+/// shut for a while: the same readings the panel's eye fit measures. None if something is missing.
+fn estimate_lid_fit(samples: &[EyeData]) -> Option<[LidFit; 2]> {
+    let vertical: Vec<f32> = samples.iter().map(|data| gaze_angles(data.fixation_point)[1]).collect();
+    let open = |i: usize| samples[i].openness.iter().all(|openness| *openness > FIT_ESTIMATE_OPEN);
+    let within = |i: usize, low: f32, high: f32| (low / GAZE_DEGREES..=high / GAZE_DEGREES).contains(&vertical[i]);
+    let up = median_openness(samples, |i| open(i) && within(i, FIT_ESTIMATE_UP.0, FIT_ESTIMATE_UP.1))?;
+    let ahead = median_openness(samples, |i| open(i) && within(i, -FIT_ESTIMATE_AHEAD, FIT_ESTIMATE_AHEAD))?;
+    let down = median_openness(samples, |i| open(i) && within(i, FIT_ESTIMATE_DOWN.0, FIT_ESTIMATE_DOWN.1))?;
+    // Eyes-shut stretches long enough to be on purpose, not blinks
+    let shut = |data: &EyeData| data.openness.iter().all(|openness| *openness < FIT_ESTIMATE_SHUT);
+    let mut in_shut = vec![false; samples.len()];
+    let mut start = None;
+    for i in 0..=samples.len() {
+        match (samples.get(i).is_some_and(shut), start) {
+            (true, None) => start = Some(i),
+            (false, Some(from)) => {
+                let times = |j: usize| samples[j].sample_time;
+                if times(i - 1) - times(from) >= FIT_ESTIMATE_SHUT_SECONDS {
+                    (from..i).filter(|j| times(*j) - times(from) >= 0.5).for_each(|j| in_shut[j] = true);
+                }
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    let closed = median_openness(samples, |i| in_shut[i])?;
+    Some([0, 1].map(|eye| LidFit {
+        closed: closed[eye],
+        up: up[eye],
+        open: ahead[eye],
+        down: down[eye],
+    }))
 }
 
 /// p50 / p90 / p99 of each eye's larger x/y variance in one of the covariance fields.
@@ -397,6 +510,23 @@ fn report(input: &Path, samples: &[EyeData], skipped: usize, settings: &Settings
     row(&mut text, "eyelid flicker while open (VRCFT/sample)", format!("{:.4}", before.flicker), format!("{:.4}", after.flicker));
     let [left, right] = after.unreliable.map(|share| share * 100.0);
     row(&mut text, "gaze left out as unreliable (L / R)", "-".into(), format!("{left:.1}% / {right:.1}%"));
+    let lids = |m: &Metrics| format!("{:.2} / {:.2}", m.lid_down, m.lid_ahead);
+    row(&mut text, "eyelid looking down / ahead (median)", lids(before), lids(after));
+    row(&mut text, "closing while looking down (stretches)", before.down_closes.to_string(), after.down_closes.to_string());
+    match estimate_lid_fit(samples) {
+        Some(fits) => {
+            text.push_str("\nLid fit read from this recording (as config.json keys):\n ");
+            for (fit, side) in fits.iter().zip(["left", "right"]) {
+                let values = [("closed", fit.closed), ("up", fit.up), ("open", fit.open), ("down", fit.down)];
+                for (name, value) in values {
+                    text.push_str(&format!(" \"lid_fit_{name}_{side}\": {value:.3},"));
+                }
+            }
+            text.pop();
+            text.push('\n');
+        }
+        None => text.push_str("\nNo lid fit can be read from this recording (it needs up, ahead, down and eyes shut).\n"),
+    }
     text.push_str(&format!(
         "\nCovariance, larger of x/y per eye: p50 / p90 / p99 (share above gaze_quality_limit {})\n",
         settings.gaze_quality_limit
@@ -533,6 +663,32 @@ mod tests {
         // The deadzone keeps both still while fixating; the left eye's wild stretch is not a fixation.
         assert!(after.jitter <= before.jitter, "{before:?} {after:?}");
         assert!(after.flicker <= before.flicker, "{before:?} {after:?}");
+    }
+
+    #[test]
+    fn a_lid_fit_is_read_from_looking_around_and_closing_the_eyes() {
+        // 2 s each of looking 15° up, straight ahead and 15° down, then 3 s with the eyes shut.
+        let tilt = (15.0_f32).to_radians().tan();
+        let parts: [(f32, [f32; 2], usize); 4] =
+            [(tilt, [0.95, 0.85], 180), (0.0, [0.9, 0.8], 180), (-(18.0_f32).to_radians().tan(), [0.7, 0.62], 180), (0.0, [0.15, 0.26], 270)];
+        let mut samples = Vec::new();
+        for (y, openness, count) in parts {
+            for _ in 0..count {
+                let direction = [0.0, y, -1.0];
+                samples.push(EyeData {
+                    sample_time: samples.len() as f64 / 90.0,
+                    gaze: [direction; 2],
+                    fixation_point: direction,
+                    openness,
+                    ..EyeData::default()
+                });
+            }
+        }
+        let [left, right] = estimate_lid_fit(&samples).unwrap();
+        assert_eq!((left.up, left.open, left.down, left.closed), (0.95, 0.9, 0.7, 0.15));
+        assert_eq!((right.up, right.open, right.down, right.closed), (0.85, 0.8, 0.62, 0.26));
+        assert!(estimate_lid_fit(&samples[..540]).is_none());
+        assert_eq!(open_reference(&samples), [0.9, 0.8]);
     }
 
     #[test]

@@ -7,7 +7,7 @@ mod status;
 
 use capture::{Capture, CaptureResult, CaptureState};
 use clap::{CommandFactory, FromArgMatches, Parser};
-use config::{Config, OutputKind, Reload, Settings};
+use config::{Config, LidFit, OutputKind, Reload, Settings};
 use memmap2::{MmapMut, MmapOptions};
 use rosc::{OscMessage, OscPacket, OscType, encoder};
 use status::{CalibrationStatus, RawValues, SentValues, Status, StatusFile};
@@ -38,6 +38,12 @@ const NOMINAL_DT: f32 = 1.0 / 90.0;
 const MAX_GAP: f64 = 0.25;
 // Blinks are fast, so eyelids track their speed with a quicker derivative filter than gaze.
 const LID_D_CUTOFF: f32 = 1.0;
+// The eye fit measures openness with the eyes on targets this far up and down (15° of 45°).
+const LID_FIT_PITCH: f32 = 15.0 / 45.0;
+// A fitted eye counts as closed from this share of the way from its closed reading to its open one,
+// so readings a little above the eyes-shut average still close the eyelid. On the 2026-09-27 worn
+// recording, 0.3 closed more blinks than no fit (53 vs 50 of 60), and 0.1 or 0.2 fewer.
+const LID_FIT_CLOSED_MARGIN: f32 = 0.3;
 // How often the Steam Link PC is looked up again, to follow reconnects over another network.
 const RESOLVE_INTERVAL: Duration = Duration::from_secs(5);
 // Eyelid auto calibration keeps a decaying histogram of each eye's open readings (0.005 wide bins).
@@ -301,6 +307,8 @@ struct Smoother {
     last_time: Option<f64>,
     // Left, right and combined gaze as last sent, to hold while the gaze is unreliable.
     last_gaze: [Option<[f32; 2]>; 3],
+    // The up/down gaze the eyelid fit last used, kept while the gaze is held.
+    lid_vertical: Option<f32>,
 }
 
 impl Smoother {
@@ -314,6 +322,7 @@ impl Smoother {
             was_shut: [false; 2],
             last_time: None,
             last_gaze: [None; 3],
+            lid_vertical: None,
         }
     }
 
@@ -407,6 +416,7 @@ impl Smoother {
         self.was_shut = [false; 2];
         self.last_time = None;
         self.last_gaze = [None; 3];
+        self.lid_vertical = None;
     }
 }
 
@@ -534,6 +544,32 @@ fn write_calibration(path: &Path, [left, right]: [f32; 2]) -> io::Result<()> {
         format!("left_relaxed={left:.4}\nright_relaxed={right:.4}\n"),
     )?;
     fs::rename(temporary, path)
+}
+
+/// A fitted eye's expected open reading for an up/down gaze (-1..1): a line through its down, straight
+/// ahead and up readings, carried on past them, and never below half the straight-ahead one.
+fn expected_open(fit: &LidFit, vertical: f32) -> f32 {
+    let slope = if vertical >= 0.0 { fit.up - fit.open } else { fit.open - fit.down };
+    (fit.open + slope * vertical / LID_FIT_PITCH).max(0.5 * fit.open)
+}
+
+/// A fitted eye's openness on the --lid-closed / --lid-open scale: its closed reading (plus a margin)
+/// maps to --lid-closed and its expected open reading for where the eyes look maps to --lid-open.
+/// Higher readings go on past --lid-open toward widening as before.
+fn fitted_openness(openness: f32, vertical: f32, fit: &LidFit, settings: &Settings) -> f32 {
+    let range = (expected_open(fit, vertical) - fit.closed).max(0.05);
+    let fraction = (openness - fit.closed) / range;
+    let fraction = (fraction - LID_FIT_CLOSED_MARGIN) / (1.0 - LID_FIT_CLOSED_MARGIN);
+    settings.lid_closed + fraction * (settings.lid_open - settings.lid_closed)
+}
+
+/// Each eye's openness on the --lid-* scale: the eye fit when there is one, else the per-eye scale.
+fn lid_inputs(openness: [f32; 2], vertical: f32, scales: [f32; 2], settings: &Settings) -> [f32; 2] {
+    let fits = settings.lid_fit();
+    [0, 1].map(|eye| match &fits[eye] {
+        Some(fit) => fitted_openness(openness[eye], vertical, fit, settings),
+        None => openness[eye] * scales[eye],
+    })
 }
 
 /// Blend the two eyelids together in proportion to how close they already are:
@@ -1009,8 +1045,10 @@ fn step(
     settled: bool,
 ) -> Sample {
     // Openness read while the gaze is unreliable is suspect too, so it does not teach the calibration.
+    // Fitted eyes do not use it.
     if settings.lid_calibration
         && settled
+        && settings.lid_fit().iter().any(Option::is_none)
         && gaze_quality(data, settings.gaze_quality_limit) == [true; 2]
     {
         calibration.observe(data.openness);
@@ -1024,12 +1062,11 @@ fn process(settings: &Settings, smoother: &mut Smoother, scales: [f32; 2], data:
     let raw_gaze = [left[0], left[1], right[0], right[1], x, y];
     // Before anything else, so the filters see the gaze the way it will be sent.
     let corrected = correct_gaze(raw_gaze, settings);
-    let scale = |openness: [f32; 2]| [0, 1].map(|eye| openness[eye] * scales[eye]);
-    let openness_scaled = scale(data.openness);
     let reliable = gaze_quality(data, settings.gaze_quality_limit);
     let blink_stages = settings.blink_hold_ms > 0.0 || settings.blink_sync_below > 0.0;
-    let (gaze, lids, gaze_held) = if settings.raw {
+    let (gaze, lids, gaze_held, openness_scaled) = if settings.raw {
         let gaze = choose_gaze(corrected, [true; 2], settings.independent_eyes);
+        let openness_scaled = lid_inputs(data.openness, corrected[5], scales, settings);
         let mapped = openness_scaled.map(|openness| lid_to_vrcft(openness, settings));
         let shut = sync_blinks(mapped.map(|lid| lid <= 0.0), mapped, settings.blink_sync_below);
         let mut lids = sync_lids(mapped, settings.lid_sync);
@@ -1037,7 +1074,7 @@ fn process(settings: &Settings, smoother: &mut Smoother, scales: [f32; 2], data:
             shut_lids(&mut lids, shut);
         }
         let shut_eyes = data.openness.iter().any(|openness| *openness < settings.gaze_hold_below);
-        (gaze, lids, shut_eyes)
+        (gaze, lids, shut_eyes, openness_scaled)
     } else {
         let dt = smoother.advance(data.sample_time);
         let readings: [f32; 8] =
@@ -1048,8 +1085,6 @@ fn process(settings: &Settings, smoother: &mut Smoother, scales: [f32; 2], data:
         let angles: [f32; 6] = std::array::from_fn(|i| readings[i]);
         let openness = [readings[6], readings[7]];
         let mut gaze = choose_gaze(angles, reliable, settings.independent_eyes);
-        let mapped = scale(openness).map(|openness| lid_to_vrcft(openness, settings));
-        let mut lids = mapped;
         let hold = if openness.iter().any(|openness| *openness < settings.gaze_hold_below)
             || reliable == [false; 2]
         {
@@ -1059,13 +1094,21 @@ fn process(settings: &Settings, smoother: &mut Smoother, scales: [f32; 2], data:
         } else {
             [false; 3]
         };
+        // Where the eyes look up or down, for the eyelid fit: kept while blinking, like the gaze.
+        let vertical = match smoother.lid_vertical {
+            Some(held) if hold[2] => held,
+            _ => gaze[5],
+        };
+        smoother.lid_vertical = Some(vertical);
+        let mapped = lid_inputs(openness, vertical, scales, settings).map(|openness| lid_to_vrcft(openness, settings));
+        let mut lids = mapped;
         smoother.filter(dt, &mut gaze, &mut lids, hold);
         let mut lids = sync_lids(lids, settings.lid_sync);
         if blink_stages {
             let shut = smoother.hold_shut(data.sample_time, mapped.map(|lid| lid <= 0.0), mapped, settings);
             shut_lids(&mut lids, shut);
         }
-        (gaze, lids, hold[2])
+        (gaze, lids, hold[2], lid_inputs(data.openness, vertical, scales, settings))
     };
     Sample {
         openness: data.openness,
@@ -1225,7 +1268,7 @@ impl Bridge {
         }
         if let Some(capture) = &mut self.capture {
             let gaze = [sample.raw_gaze[4], sample.raw_gaze[5]];
-            if capture.add(data.sample_time, gaze, !sample.gaze_held) {
+            if capture.add(data.sample_time, gaze, data.openness, !sample.gaze_held) {
                 self.finish_capture();
             }
         }
@@ -1295,7 +1338,9 @@ impl Bridge {
                 enabled: settings.lid_calibration,
                 relaxed: status::round(self.calibration.relaxed),
                 scales: status::round(lid_scales(settings, &self.calibration)),
+                fitted: settings.lid_fit().map(|fit| fit.is_some()),
                 learning: settings.lid_calibration
+                    && settings.lid_fit().iter().any(Option::is_none)
                     && self
                         .active_since
                         .is_some_and(|since| since.elapsed() >= CAL_SETTLE),
@@ -1606,6 +1651,80 @@ mod tests {
         assert!((last.gaze[5] - 0.1).abs() < 1e-3, "{:?}", last.gaze);
         let raw = run(&Settings { raw: true, ..fitted }, &readings);
         assert!((raw[0].gaze[5] - 0.1).abs() < 1e-6);
+    }
+
+    fn fitted() -> Settings {
+        Settings {
+            lid_fit_closed_left: Some(0.15),
+            lid_fit_up_left: Some(0.95),
+            lid_fit_open_left: Some(0.9),
+            lid_fit_down_left: Some(0.7),
+            lid_fit_closed_right: Some(0.25),
+            lid_fit_up_right: Some(0.85),
+            lid_fit_open_right: Some(0.8),
+            lid_fit_down_right: Some(0.6),
+            ..settings()
+        }
+    }
+
+    #[test]
+    fn expected_openness_follows_the_gaze_up_and_down() {
+        let fit = fitted().lid_fit()[0].unwrap();
+        assert!((expected_open(&fit, 0.0) - 0.9).abs() < 1e-6);
+        assert!((expected_open(&fit, LID_FIT_PITCH) - 0.95).abs() < 1e-6);
+        assert!((expected_open(&fit, -LID_FIT_PITCH) - 0.7).abs() < 1e-6);
+        // Carried on past the down reading, but never below half the straight-ahead one.
+        assert!((expected_open(&fit, -1.5 * LID_FIT_PITCH) - 0.6).abs() < 1e-6);
+        assert!((expected_open(&fit, -1.0) - 0.45).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fitted_eyelids_stay_open_when_looking_down() {
+        let settings = fitted();
+        let fit = settings.lid_fit()[0].unwrap();
+        // Looking 15° down, the reading drops to the fitted down value: still relaxed open.
+        let down = fitted_openness(0.7, -LID_FIT_PITCH, &fit, &settings);
+        assert!((lid_to_vrcft(down, &settings) - 0.75).abs() < 1e-5, "{down}");
+        // The same reading straight ahead is a squint.
+        let ahead = lid_to_vrcft(fitted_openness(0.7, 0.0, &fit, &settings), &settings);
+        assert!(ahead > 0.4 && ahead < 0.6, "{ahead}");
+        // Near the closed reading the eye is shut, straight ahead or looking down.
+        assert_eq!(lid_to_vrcft(fitted_openness(0.2, 0.0, &fit, &settings), &settings), 0.0);
+        assert_eq!(lid_to_vrcft(fitted_openness(0.2, -LID_FIT_PITCH, &fit, &settings), &settings), 0.0);
+        // Wide open still widens.
+        assert!(lid_to_vrcft(fitted_openness(1.2, 0.0, &fit, &settings), &settings) > 0.9);
+        // Without a fit, the scale applies as before.
+        assert_eq!(lid_inputs([0.7, 0.7], -0.3, [1.0, 1.1], &Settings::default()), [0.7, 0.7 * 1.1]);
+    }
+
+    #[test]
+    fn fitted_eyelids_use_the_held_gaze_while_blinking() {
+        let settings = Settings {
+            despike: false,
+            gaze_deadzone: 0.0,
+            ..fitted()
+        };
+        // Looking 15° down (the fixation point at -tan 15°), then a blink where the gaze jumps up.
+        let down = (15.0_f32).to_radians().tan();
+        let mut readings: Vec<EyeData> = (0..20).map(|i| reading(i, [0.0, -down], [0.7, 0.6])).collect();
+        readings.push(reading(20, [0.0, 0.5], [0.3, 0.3]));
+        readings.push(reading(21, [0.0, 0.5], [0.3, 0.3]));
+        let sent = run(&settings, &readings);
+        assert!((sent[19].openness_scaled[0] - settings.lid_open).abs() < 0.01, "{:?}", sent[19].openness_scaled);
+        // During the blink the fit keeps using "down": 0.3 is well below the down reading either way.
+        assert!(sent[21].gaze_held && sent[21].openness_scaled[0] < settings.lid_closed + 0.1);
+        let unfitted = run(&Settings { despike: false, ..Settings::default() }, &readings);
+        assert!(unfitted[19].openness_scaled[0] < settings.lid_open);
+    }
+
+    #[test]
+    fn fitted_eyes_are_not_learned() {
+        let mut calibration = LidCalibration::load(None, 0.80);
+        let mut smoother = Smoother::new(&fitted());
+        for i in 0..900 {
+            step(&fitted(), &mut smoother, &mut calibration, &reading(i, [0.0, 0.0], [0.6, 0.6]), true);
+        }
+        assert!(calibration.histograms.iter().flatten().all(|weight| *weight == 0.0));
     }
 
     #[test]

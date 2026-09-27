@@ -17,6 +17,8 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(1);
 // Allowed gaze zero points and gains (the panel's steppers stay inside these too).
 const GAZE_OFFSET_RANGE: std::ops::RangeInclusive<f32> = -0.5..=0.5;
 const GAZE_GAIN_RANGE: std::ops::RangeInclusive<f32> = 0.5..=2.0;
+// A fitted eye's open readings must be at least this far above its closed one.
+const LID_FIT_MIN_RANGE: f32 = 0.1;
 // A gaze capture's target name is only echoed back, so it is kept short.
 const MAX_TARGET_CHARS: usize = 16;
 
@@ -78,6 +80,25 @@ pub struct Settings {
     pub gaze_gain_x: f32,
     pub gaze_gain_up: f32,
     pub gaze_gain_down: f32,
+    /// Each eye's Frame openness measured by the panel's eye fit: eyes shut, and open while looking
+    /// up, straight ahead and down. None until fitted; see `lid_fit`. Not command-line options.
+    pub lid_fit_closed_left: Option<f32>,
+    pub lid_fit_closed_right: Option<f32>,
+    pub lid_fit_up_left: Option<f32>,
+    pub lid_fit_up_right: Option<f32>,
+    pub lid_fit_open_left: Option<f32>,
+    pub lid_fit_open_right: Option<f32>,
+    pub lid_fit_down_left: Option<f32>,
+    pub lid_fit_down_right: Option<f32>,
+}
+
+/// One eye's fitted openness readings (Frame openness, before any scale).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LidFit {
+    pub closed: f32,
+    pub up: f32,
+    pub open: f32,
+    pub down: f32,
 }
 
 impl Default for Settings {
@@ -114,6 +135,14 @@ impl Default for Settings {
             gaze_gain_x: 1.0,
             gaze_gain_up: 1.0,
             gaze_gain_down: 1.0,
+            lid_fit_closed_left: None,
+            lid_fit_closed_right: None,
+            lid_fit_up_left: None,
+            lid_fit_up_right: None,
+            lid_fit_open_left: None,
+            lid_fit_open_right: None,
+            lid_fit_down_left: None,
+            lid_fit_down_right: None,
         }
     }
 }
@@ -121,6 +150,45 @@ impl Default for Settings {
 impl Settings {
     pub fn port(&self) -> u16 {
         self.port.unwrap_or(self.output.default_port())
+    }
+
+    /// Each eye's fit, if all four of its readings are set.
+    pub fn lid_fit(&self) -> [Option<LidFit>; 2] {
+        let fit = |closed: Option<f32>, up: Option<f32>, open: Option<f32>, down: Option<f32>| {
+            Some(LidFit {
+                closed: closed?,
+                up: up?,
+                open: open?,
+                down: down?,
+            })
+        };
+        [
+            fit(
+                self.lid_fit_closed_left,
+                self.lid_fit_up_left,
+                self.lid_fit_open_left,
+                self.lid_fit_down_left,
+            ),
+            fit(
+                self.lid_fit_closed_right,
+                self.lid_fit_up_right,
+                self.lid_fit_open_right,
+                self.lid_fit_down_right,
+            ),
+        ]
+    }
+
+    /// The eight lid fit readings: closed, up, open and down for the left eye, then the right.
+    fn lid_fit_readings(&self) -> [[Option<f32>; 4]; 2] {
+        [
+            [self.lid_fit_closed_left, self.lid_fit_up_left, self.lid_fit_open_left, self.lid_fit_down_left],
+            [
+                self.lid_fit_closed_right,
+                self.lid_fit_up_right,
+                self.lid_fit_open_right,
+                self.lid_fit_down_right,
+            ],
+        ]
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -147,7 +215,14 @@ impl Settings {
             self.gaze_gain_down,
         ];
         let scales = [self.lid_scale_left, self.lid_scale_right];
-        if !numbers.iter().chain(scales.iter().flatten()).all(|value| value.is_finite()) {
+        let lid_fit = self.lid_fit_readings();
+        let fitted = lid_fit.iter().flatten().flatten();
+        if !numbers
+            .iter()
+            .chain(scales.iter().flatten())
+            .chain(fitted.clone())
+            .all(|value| value.is_finite())
+        {
             return Err("settings must be finite numbers".into());
         }
         let host_ok = self.host.parse::<IpAddr>().is_ok()
@@ -192,6 +267,16 @@ impl Settings {
         let gains = [self.gaze_gain_x, self.gaze_gain_up, self.gaze_gain_down];
         if !gains.iter().all(|gain| GAZE_GAIN_RANGE.contains(gain)) {
             return Err("gaze_gain_x/up/down must be between 0.5 and 2".into());
+        }
+        if !lid_fit.iter().all(|eye| eye.iter().all(Option::is_some) || eye.iter().all(Option::is_none)) {
+            return Err("an eye's lid_fit_* values must all be set, or all null".into());
+        }
+        if !fitted.clone().all(|value| (0.0..=1.5).contains(value)) {
+            return Err("lid_fit_* values must be between 0 and 1.5".into());
+        }
+        let apart = |fit: &LidFit| [fit.up, fit.open, fit.down].iter().all(|open| *open >= fit.closed + LID_FIT_MIN_RANGE);
+        if !self.lid_fit().iter().flatten().all(apart) {
+            return Err("lid_fit_closed must be at least 0.1 below the open lid_fit_* values".into());
         }
         Ok(())
     }
@@ -559,6 +644,14 @@ mod tests {
         assert!(merged(r#"{"gaze_gain_up": 2.5}"#, &[]).is_err());
         assert!(merged(r#"{"gaze_gain_x": 0.4}"#, &[]).is_err());
         assert!(merged(r#"{"gaze_offset_x": 0.5, "gaze_gain_down": 0.5}"#, &[]).is_ok());
+        let fitted = r#""lid_fit_closed_left": 0.15, "lid_fit_up_left": 0.93, "lid_fit_open_left": 0.92,
+            "lid_fit_down_left": 0.78"#;
+        assert!(merged(&format!("{{{fitted}}}"), &[]).is_ok());
+        assert!(merged(&format!(r#"{{{fitted}, "lid_fit_open_right": 0.8}}"#), &[]).is_err());
+        assert!(merged(r#"{"lid_fit_closed_left": 0.5, "lid_fit_up_left": 0.9, "lid_fit_open_left": 0.9,
+            "lid_fit_down_left": 0.55}"#, &[]).is_err());
+        assert!(merged(r#"{"lid_fit_closed_left": -0.1, "lid_fit_up_left": 0.9, "lid_fit_open_left": 0.9,
+            "lid_fit_down_left": 0.8}"#, &[]).is_err());
     }
 
     #[test]
