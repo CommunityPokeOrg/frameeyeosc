@@ -59,8 +59,8 @@ sudo は要りません。全部ホームフォルダ（`~/.local/bin`、`~/.con
 
 - 左の列には、いつでも今の状態が出ます: 送信中か止めているか、送り先、毎秒の送信回数、左右のまぶたと視線（生の値と送った値）、設定のエラー
 - 基本: 送信の一時停止、VRChat か VRCFaceTracking（ETVR）か、送り先の PC（自動か、今送っている PC で固定。VR の中で IP を打たなくて済みます）、ポート、言語（日本語 / English）、SteamVR と一緒に起動、すべて既定に戻す、アプリを終了
-- 視線: スムージングのオン / オフ、なめらかさの弱 / 中 / 強と 3 つの値、見つめている時の遊び、まばたき中は視線を止める、左右の目を別々に動かす
-- まぶた: 自動キャリブレーションと覚えた値、左右の倍率、左右の今の開き具合の上に重ねた 4 つの目盛り（目を閉じたり見開いたりしながら合わせる）、左右をそろえる強さ、まぶたのなめらかさ
+- 視線: スムージングのオン / オフ、なめらかさの弱 / 中 / 強と 3 つの値、見つめている時の遊び、まばたき中は視線を止める、左右の目を別々に動かす、不確かな視線を使わない、一瞬の途切れを消す
+- まぶた: 自動キャリブレーションと覚えた値、左右の倍率、左右の今の開き具合の上に重ねた 4 つの目盛り（目を閉じたり見開いたりしながら合わせる）、左右をそろえる強さ、まばたきを届ける（閉じたまま保つ時間・両目で閉じる）、まぶたのなめらかさ
 - 詳細: パラメーター名の頭、ファイルの場所、コマンドで固定中の項目
 
 パネルがするのは `config.json` を書くことと状態ファイルを読むことだけです。既定の言語を決めるために、起動時に 1 回だけ Steam の `~/.steam/registry.vdf` の `language` の行も読みます（読むだけ）。閉じても、終了しても、入れていなくても frameeyeosc は送り続けます。ダッシュボードで開いていない間は、何も読まず、何も描きません。「SteamVR と一緒に起動」は、パネルの systemd ユーザーサービス（`frameeyeosc-panel.service`）を有効 / 無効にします。ビルド方法や確認用のオプションは [panel/README.md](panel/README.md) にあります。
@@ -80,18 +80,22 @@ sudo は要りません。全部ホームフォルダ（`~/.local/bin`、`~/.con
 | `host` | `--target` | `"auto"` | `"auto"` は Steam Link の接続先 PC。それ以外は IP アドレスかホスト名（ポートは付けない） |
 | `port` | `--port`、`--target` | `null` | `null` は `vrchat` なら 9000、`etvr` なら 8889 |
 | `prefix` | `--prefix` | `"/FT"` | パラメータ名の頭。`""` で頭なし |
-| `raw` | `--raw` | `false` | スムージングしない |
+| `raw` | `--raw` | `false` | スムージングしない。時間を使う処理（途切れ消し、視線を止める、品質チェック、閉じたまま保つ）もしない |
 | `gaze_min_cutoff` | `--gaze-min-cutoff` | `0.4` | 下げるほど止まっている時の視線が安定（その分遅れる） |
 | `gaze_beta` | `--gaze-beta` | `0.8` | 上げるほど素早い視線の動きに遅れず付いていく |
 | `gaze_d_cutoff` | `--gaze-d-cutoff` | `0.5` | 下げるほど、トラッキングのノイズで視線のフィルタがゆるみにくい |
 | `gaze_deadzone` | `--gaze-deadzone` | `0.03` | これより小さい視線の変化は無視（1.0＝45°） |
 | `gaze_hold_below` | `--gaze-hold-below` | `0.5` | どちらかの目の開き具合がこれより小さい間は視線を止める。`0` で無効 |
 | `independent_eyes` | `--independent-eyes` | `false` | 共通の視線ではなく、左右それぞれの視線を送る |
+| `gaze_quality_limit` | `--gaze-quality-limit` | `0.03` | Frame が出す視線の不確かさ（共分散）がこれより大きい目の視線は使わない。片目だけならもう片方の目で両目を動かし、両目ともなら視線を止める。まぶたには影響しない。`0` で無効。仮の値です |
+| `despike` | `--no-despike` | `true` | 視線と開き具合の 1 サンプルだけの途切れを消す（3 サンプルの中央値。全体が約 11 ms 遅れる） |
 | `lid_min_cutoff` / `lid_beta` | `--lid-min-cutoff` / `--lid-beta` | `6.0` / `5.0` | まぶたのなめらかさ（視線と同じ考え方） |
 | `lid_closed` / `lid_open` / `lid_widen_start` / `lid_wide` | `--lid-closed` など | `0.30` / `0.80` / `0.92` / `1.00` | Frame の開き具合を「閉じ／普通／見開き」にどう対応させるか |
 | `lid_scale_left` / `lid_scale_right` | `--lid-scale-left` / `--lid-scale-right` | `null`（学習値） | 学習値の代わりに固定の倍率を使う |
 | `lid_calibration` | `--no-lid-calibration` | `true` | まぶたを学習する |
 | `lid_sync` | `--lid-sync` | `0.4` | 左右のまぶたの小さな差を揃える。大きな差（ウインク）はそのまま。`0` で無効 |
+| `blink_hold_ms` | `--blink-hold-ms` | `80` | 目が閉じたら、少なくともこの時間は完全に閉じた値を送る。短いまばたきもほかの人に届くように。`0` で無効 |
+| `blink_sync_below` | `--blink-sync-below` | `0.35` | 片目が閉じていて、もう片方がこれより小さい（VRCFT の値）とき、両目とも閉じて送る。もう片方が開いているウインクはそのまま。`0` で無効 |
 | `calibration_reset` | | `0` | 増やすと、まぶたの学習をやり直す |
 | `language` | | Steam の言語 | パネルの言語。`"ja"` か `"en"`。書いていないときは、Steam の言語が日本語なら日本語、それ以外なら英語 |
 
@@ -118,7 +122,7 @@ frameeyeosc は、VRCFaceTracking 用の ETVR Tracking Module が読む形式で
 
 - 送るのは `EyeLeftX`・`EyeLeftY`・`EyeRightX`・`EyeRightY`・`EyeLidLeft`・`EyeLidRight` の 6 個です。`EyeX` / `EyeY` は送りません。これを受け取るとモジュールが片目用の読み方に切り替わり、送っていないまぶたの値を読むので、まぶたが開いたまま動かなくなるためです
 - モジュールはまぶたの 1.0 を「普通に開いた目」として扱うので、このモードでは見開きは伝わりません（1.0 で止めます）
-- モジュールもまぶたを自分でなめらかにしています。パネルで切り替えると、frameeyeosc 側のまぶたのなめらかさを弱めるか聞かれます
+- モジュールもまぶたを自分でなめらかにしています。パネルで切り替えると、frameeyeosc 側のまぶたのなめらかさを弱めるか聞かれます。そのなめらかさのせいで、`blink_hold_ms` の間閉じて送ってもアバターでは閉じきらないことがあります。短いまばたきが半目に見えるときは、120 くらいに上げてください
 - VRCFaceTracking を起動してからモジュールの準備ができるまで、2 分近くウィンドウが「応答なし」になることがあります。壊れてはいないので、そのまま待ってください
 - PC で UDP 8889 番の受信が許可されている必要があります。VRCFaceTracking の ModuleProcess には、たいてい最初から受信の許可が入っています
 
@@ -165,6 +169,13 @@ frameeyeosc は、VRCFaceTracking 用の ETVR Tracking Module が読む形式で
 cargo test --release
 cmake -G Ninja -S panel -B panel/build && ninja -C panel/build
 scripts/package.sh   # 両方入った dist/frameeyeosc-<version>-steamframe-aarch64.tar.gz を作る
+```
+
+目の処理を実データで調整するときは、アイトラッカーの生の値を記録してから再生します（記録中は何も送らないので、サービスと並べて動かせます）。再生すると、今の設定と、同じ設定から 0.4.0 の処理を外したものの指標を並べて出します。設定はいつもどおり `config.json` とオプションから読みます。記録は個人のデータなので、リポジトリに入れないでください。
+
+```sh
+frameeyeosc --record ~/eyes.csv              # Ctrl+C で止める
+frameeyeosc --replay ~/eyes.csv --blink-hold-ms 120 --replay-out ~/processed.csv   # 処理後の値を CSV にも書く
 ```
 
 ## ライセンス

@@ -59,8 +59,8 @@ To remove it: `./install.sh --uninstall` (removes the panel too; add `--purge` t
 
 - The left column always shows what frameeyeosc is doing: sending or paused, where it sends to, messages per second, both eyelids and the gaze (raw and sent), and a config error if there is one.
 - Basic: pause sending, VRChat or VRCFaceTracking (ETVR), target PC (automatic, or fixed to the PC it sends to now, so there's no IP to type in VR), port, language (Japanese / English), start with SteamVR, reset all, quit.
-- Gaze: smoothing on or off, light / medium / strong presets and the three filter values, deadzone, holding the gaze while blinking, per-eye gaze.
-- Eyelids: auto calibration and its learned values, per-eye scales, the four openness marks drawn over each eye's live openness (blink and open wide to set them), left/right sync, eyelid smoothing.
+- Gaze: smoothing on or off, light / medium / strong presets and the three filter values, deadzone, holding the gaze while blinking, per-eye gaze, skipping unreliable gaze, removing one-sample glitches.
+- Eyelids: auto calibration and its learned values, per-eye scales, the four openness marks drawn over each eye's live openness (blink and open wide to set them), left/right sync, keeping blinks visible (hold time and closing both eyes), eyelid smoothing.
 - Advanced: parameter prefix, file locations, options locked by the command line.
 
 The panel only writes `config.json` and reads the status file. To pick its default language, it also reads the `language` line of Steam's `~/.steam/registry.vdf` once at startup (read only). Closing it, quitting it, or not installing it doesn't stop frameeyeosc. It reads nothing and draws nothing while it isn't open on the dashboard. Its "Start with SteamVR" switch enables or disables its systemd user unit (`frameeyeosc-panel.service`). Build notes and debugging options are in [panel/README.md](panel/README.md) (Japanese).
@@ -80,18 +80,22 @@ Settings are in `~/.config/frameeyeosc/config.json`. The panel writes it, and yo
 | `host` | `--target` | `"auto"` | `"auto"` = the PC Steam Link is streaming from, else an IP address or host name without a port |
 | `port` | `--port`, `--target` | `null` | `null` = 9000 for `vrchat`, 8889 for `etvr` |
 | `prefix` | `--prefix` | `"/FT"` | Parameter name prefix; `""` for none |
-| `raw` | `--raw` | `false` | No smoothing |
+| `raw` | `--raw` | `false` | No smoothing, and none of the time-based steps (glitch removal, gaze holding, the quality check, blink hold) |
 | `gaze_min_cutoff` | `--gaze-min-cutoff` | `0.4` | Lower = steadier gaze at rest, more lag |
 | `gaze_beta` | `--gaze-beta` | `0.8` | Higher = follows fast eye movements with less lag |
 | `gaze_d_cutoff` | `--gaze-d-cutoff` | `0.5` | Lower = tracker noise loosens the gaze filter less |
 | `gaze_deadzone` | `--gaze-deadzone` | `0.03` | Gaze changes smaller than this are ignored (1.0 = 45°) |
 | `gaze_hold_below` | `--gaze-hold-below` | `0.5` | Hold the gaze while either eye's openness is below this; `0` turns it off |
 | `independent_eyes` | `--independent-eyes` | `false` | Send each eye's own gaze instead of the shared one |
+| `gaze_quality_limit` | `--gaze-quality-limit` | `0.03` | Ignore an eye's gaze while the Frame's own uncertainty (covariance) for it is above this: the other eye moves both, and if both are above it the gaze is held. Eyelids aren't affected. `0` turns it off. Provisional value |
+| `despike` | `--no-despike` | `true` | Remove one-sample glitches in gaze and openness (median of 3 samples; everything arrives ~11 ms later) |
 | `lid_min_cutoff` / `lid_beta` | `--lid-min-cutoff` / `--lid-beta` | `6.0` / `5.0` | Eyelid smoothing, the same way as for gaze |
 | `lid_closed` / `lid_open` / `lid_widen_start` / `lid_wide` | `--lid-closed` ... | `0.30` / `0.80` / `0.92` / `1.00` | How Frame eye openness maps onto closed / relaxed / widened |
 | `lid_scale_left` / `lid_scale_right` | `--lid-scale-left` / `--lid-scale-right` | `null` (learned) | Fixed per-eye multiplier instead of the learned one |
 | `lid_calibration` | `--no-lid-calibration` | `true` | Learn eyelid calibration |
 | `lid_sync` | `--lid-sync` | `0.4` | Evens out small left/right eyelid differences; larger ones (winks) pass through. `0` turns it off |
+| `blink_hold_ms` | `--blink-hold-ms` | `80` | Once an eye is closed, it is sent fully closed for at least this long, so short blinks reach other players. `0` turns it off |
+| `blink_sync_below` | `--blink-sync-below` | `0.35` | When one eye is closed and the other is below this (VRCFT scale), both are sent closed. Winks, with the other eye open, pass through. `0` turns it off |
 | `calibration_reset` | | `0` | Increase it to make the eyelid calibration start over |
 | `language` | | Steam's language | Panel language, `"ja"` or `"en"`. Without it, the panel is in Japanese if Steam is set to Japanese and in English otherwise |
 
@@ -118,7 +122,7 @@ Notes:
 
 - It sends six values: `EyeLeftX`, `EyeLeftY`, `EyeRightX`, `EyeRightY`, `EyeLidLeft`, `EyeLidRight`. `EyeX` / `EyeY` are left out, because receiving them puts the module into a single-eye mode that reads an eyelid value that isn't sent, and the eyelids freeze open.
 - The module treats eyelid 1.0 as a relaxed open eye, so widened eyes don't come through in this mode (values stop at 1.0).
-- The module smooths the eyelids itself. When you switch in the panel, it offers lighter eyelid smoothing on the frameeyeosc side.
+- The module smooths the eyelids itself. When you switch in the panel, it offers lighter eyelid smoothing on the frameeyeosc side. Because of that smoothing, a blink held closed for `blink_hold_ms` may not reach fully closed on the avatar; raise it (for example to 120) if short blinks still look half-closed.
 - After VRCFaceTracking starts, its window can show "Not Responding" for close to two minutes while the module loads. It isn't broken; wait.
 - The PC has to accept UDP 8889. VRCFaceTracking's ModuleProcess usually has an inbound firewall rule already.
 
@@ -165,6 +169,13 @@ Build and test on the headset (the binary must link against the headset's glibc,
 cargo test --release
 cmake -G Ninja -S panel -B panel/build && ninja -C panel/build
 scripts/package.sh   # builds dist/frameeyeosc-<version>-steamframe-aarch64.tar.gz with both
+```
+
+To tune the eye processing against real data, record the eye tracker's raw samples (nothing is sent while recording, so it can run next to the service), then replay the file. The replay prints a few numbers for the current settings next to the same settings with the 0.4.0 steps turned off; settings come from `config.json` and options as usual. Recordings are personal data, so keep them out of the repository.
+
+```sh
+frameeyeosc --record ~/eyes.csv              # stop with Ctrl+C
+frameeyeosc --replay ~/eyes.csv --blink-hold-ms 120 --replay-out ~/processed.csv   # also writes the processed values
 ```
 
 ## License
