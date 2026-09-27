@@ -63,7 +63,7 @@ sudo は要りません。全部ホームフォルダ（`~/.local/bin`、`~/.con
 - まぶた: 自動キャリブレーションと覚えた値、左右の倍率、左右の今の開き具合の上に重ねた 4 つの目盛り（目を閉じたり見開いたりしながら合わせる）、左右をそろえる強さ、まぶたのなめらかさ
 - 詳細: パラメーター名の頭、ファイルの場所、コマンドで固定中の項目
 
-パネルがするのは `config.json` を書くことと状態ファイルを読むことだけです。閉じても、終了しても、入れていなくても frameeyeosc は送り続けます。ダッシュボードで開いていない間は、何も読まず、何も描きません。「SteamVR と一緒に起動」は、パネルの systemd ユーザーサービス（`frameeyeosc-panel.service`）を有効 / 無効にします。ビルド方法や確認用のオプションは [panel/README.md](panel/README.md) にあります。
+パネルがするのは `config.json` を書くことと状態ファイルを読むことだけです。既定の言語を決めるために、起動時に 1 回だけ Steam の `~/.steam/registry.vdf` の `language` の行も読みます（読むだけ）。閉じても、終了しても、入れていなくても frameeyeosc は送り続けます。ダッシュボードで開いていない間は、何も読まず、何も描きません。「SteamVR と一緒に起動」は、パネルの systemd ユーザーサービス（`frameeyeosc-panel.service`）を有効 / 無効にします。ビルド方法や確認用のオプションは [panel/README.md](panel/README.md) にあります。
 
 ## 設定
 
@@ -93,7 +93,7 @@ sudo は要りません。全部ホームフォルダ（`~/.local/bin`、`~/.con
 | `lid_calibration` | `--no-lid-calibration` | `true` | まぶたを学習する |
 | `lid_sync` | `--lid-sync` | `0.4` | 左右のまぶたの小さな差を揃える。大きな差（ウインク）はそのまま。`0` で無効 |
 | `calibration_reset` | | `0` | 増やすと、まぶたの学習をやり直す |
-| `language` | | `"ja"` | パネルの言語。`"ja"` か `"en"` |
+| `language` | | Steam の言語 | パネルの言語。`"ja"` か `"en"`。書いていないときは、Steam の言語が日本語なら日本語、それ以外なら英語 |
 
 コマンドラインのオプションは、このファイルより優先されます。オプションは `~/.config/frameeyeosc/env` に書き、`systemctl --user restart frameeyeosc` で反映します:
 

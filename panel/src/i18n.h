@@ -8,6 +8,15 @@
 enum class Language { Ja, En };
 
 /**
+ * The Frame's system language, used while config.json has no language.
+ * Japanese if Steam's language setting (the "language" value in ~/.steam/registry.vdf, read only) is Japanese;
+ * if that can't be read, Japanese if LC_ALL / LC_MESSAGES / LANG is; English otherwise.
+ * Looked up once and remembered.
+ * @return the language
+ */
+Language systemLanguage();
+
+/**
  * All text of the panel. Fields ending in "Format" are printf formats.
  */
 struct UiText {

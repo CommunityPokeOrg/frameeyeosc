@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 (2026-09-27)
+
+- The panel now starts in English unless Steam is set to Japanese. It used to always start in Japanese. Once you pick a language in the panel, that choice is kept.
+
 ## 0.3.0 (2026-09-27)
 
 - Settings can now live in `~/.config/frameeyeosc/config.json`. It is checked once a second and changes apply without a restart. If the file is broken, the previous settings stay in use. Options in `env` still win over the file.

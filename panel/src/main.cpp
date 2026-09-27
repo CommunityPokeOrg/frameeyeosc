@@ -285,13 +285,14 @@ bool parseOptions(int argc, char** argv, Options& options) {
 }
 
 /**
- * The panel language from config.json ("ja" if missing or unknown).
+ * The panel language from config.json, or the Frame's system language if it has none (or an unknown one).
  * @param config the config
  * @return the language
  */
 Language configLanguage(const ConfigFile& config) {
-    Language language = Language::Ja;
-    parseLanguage(config.text(key::kLanguage), language);
+    Language language = systemLanguage();
+    const JsonValue* written = config.root.get(key::kLanguage);
+    if (written != nullptr && written->isString()) parseLanguage(written->text, language);
     return language;
 }
 

@@ -104,13 +104,17 @@ bool writeFileAtomically(const std::string& path, const std::string& text, std::
 }
 
 /**
- * A config object with every known key at its default, in the table's order.
+ * A config object with every known key at its default, in the table's order (except the language).
  * @return the object
  */
 JsonValue defaultObject() {
     JsonValue root;
     root.type = JsonValue::Type::Object;
-    for (const SettingSpec& spec : settingSpecs()) root.set(spec.key, defaultValue(spec));
+    for (const SettingSpec& spec : settingSpecs()) {
+        // Left out so the panel keeps following the system language until one is picked
+        if (std::string(spec.key) == key::kLanguage) continue;
+        root.set(spec.key, defaultValue(spec));
+    }
     return root;
 }
 

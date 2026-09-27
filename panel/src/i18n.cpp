@@ -1,6 +1,9 @@
 // The text tables.
 #include "i18n.h"
 
+#include <cstdlib>
+#include <fstream>
+
 namespace {
 
 /**
@@ -280,6 +283,59 @@ const UiText kJapanese = makeJapanese();
 const UiText kEnglish = makeEnglish();
 
 }  // namespace
+
+namespace {
+
+/**
+ * Read Steam's language setting: the first "language" value in ~/.steam/registry.vdf ("japanese" and so on).
+ * @return the value, or empty if it can't be read
+ */
+std::string steamLanguage() {
+    const char* home = std::getenv("HOME");
+    if (home == nullptr || home[0] == '\0') return "";
+    std::ifstream file(std::string(home) + "/.steam/registry.vdf");
+    std::string line;
+    while (std::getline(file, line)) {
+        // Format: <tab>"language"<tab>"japanese"
+        const std::string key = "\"language\"";
+        const size_t at = line.find(key);
+        if (at == std::string::npos) continue;
+        const size_t open = line.find('"', at + key.size());
+        const size_t close = open == std::string::npos ? open : line.find('"', open + 1);
+        if (close == std::string::npos) return "";
+        return line.substr(open + 1, close - open - 1);
+    }
+    return "";
+}
+
+/**
+ * Whether the locale (the first non-empty of LC_ALL, LC_MESSAGES, LANG) is Japanese.
+ * @return true if Japanese
+ */
+bool localeIsJapanese() {
+    for (const char* name : {"LC_ALL", "LC_MESSAGES", "LANG"}) {
+        const char* value = std::getenv(name);
+        if (value != nullptr && value[0] != '\0') return std::string(value).rfind("ja", 0) == 0;
+    }
+    return false;
+}
+
+/**
+ * Look up the system language (the body of systemLanguage).
+ * @return the language
+ */
+Language detectSystemLanguage() {
+    const std::string steam = steamLanguage();
+    if (!steam.empty()) return steam == "japanese" ? Language::Ja : Language::En;
+    return localeIsJapanese() ? Language::Ja : Language::En;
+}
+
+}  // namespace
+
+Language systemLanguage() {
+    static const Language cached = detectSystemLanguage();
+    return cached;
+}
 
 const UiText& uiText(Language language) {
     return language == Language::En ? kEnglish : kJapanese;

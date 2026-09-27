@@ -63,7 +63,7 @@ To remove it: `./install.sh --uninstall` (removes the panel too; add `--purge` t
 - Eyelids: auto calibration and its learned values, per-eye scales, the four openness marks drawn over each eye's live openness (blink and open wide to set them), left/right sync, eyelid smoothing.
 - Advanced: parameter prefix, file locations, options locked by the command line.
 
-The panel only writes `config.json` and reads the status file. Closing it, quitting it, or not installing it doesn't stop frameeyeosc. It reads nothing and draws nothing while it isn't open on the dashboard. Its "Start with SteamVR" switch enables or disables its systemd user unit (`frameeyeosc-panel.service`). Build notes and debugging options are in [panel/README.md](panel/README.md) (Japanese).
+The panel only writes `config.json` and reads the status file. To pick its default language, it also reads the `language` line of Steam's `~/.steam/registry.vdf` once at startup (read only). Closing it, quitting it, or not installing it doesn't stop frameeyeosc. It reads nothing and draws nothing while it isn't open on the dashboard. Its "Start with SteamVR" switch enables or disables its systemd user unit (`frameeyeosc-panel.service`). Build notes and debugging options are in [panel/README.md](panel/README.md) (Japanese).
 
 ## Settings
 
@@ -93,7 +93,7 @@ Settings are in `~/.config/frameeyeosc/config.json`. The panel writes it, and yo
 | `lid_calibration` | `--no-lid-calibration` | `true` | Learn eyelid calibration |
 | `lid_sync` | `--lid-sync` | `0.4` | Evens out small left/right eyelid differences; larger ones (winks) pass through. `0` turns it off |
 | `calibration_reset` | | `0` | Increase it to make the eyelid calibration start over |
-| `language` | | `"ja"` | Panel language, `"ja"` or `"en"` |
+| `language` | | Steam's language | Panel language, `"ja"` or `"en"`. Without it, the panel is in Japanese if Steam is set to Japanese and in English otherwise |
 
 Command-line options win over the file. They go in `~/.config/frameeyeosc/env` (then `systemctl --user restart frameeyeosc`):
 
