@@ -4,10 +4,10 @@
 
 Steadier eyes and fewer missed blinks. The ideas come from the README of [CyrusOtter/SteamFrameEye](https://github.com/CyrusOtter/SteamFrameEye).
 
-- An eye whose gaze the Frame itself marks as uncertain (`gaze_quality_limit`) no longer moves the gaze: the other eye moves both, or the gaze is held while both are uncertain. Eyelid calibration doesn't learn during that time. Eyelids are unchanged, so winks and closed eyes still come through.
-- A closed eye is sent fully closed for at least 80 ms (`blink_hold_ms`), so short blinks show up for other players.
+- A closed eye is sent fully closed for at least 80 ms (`blink_hold_ms`), so short blinks show up for other players. Longer blinks keep their own length.
 - One-sample glitches in gaze and eyelids are removed (`despike`). Everything arrives one sample (~11 ms) later.
 - When one eye is closed and the other nearly so, both are sent closed (`blink_sync_below`). Winks pass through.
+- Optional, off by default: an eye whose gaze the Frame itself marks as uncertain (`gaze_quality_limit`) can be kept from moving the gaze. The other eye moves both, or the gaze is held while both are uncertain, and eyelid calibration doesn't learn meanwhile. It's a safety net. On a well-fitted headset it measured no benefit, because the uncertainty only rises while the eyes are mostly shut, where the gaze is already held.
 - The panel has the four new settings: the quality check and glitch removal on the Gaze page, and the blink hold and closing both eyes in one row on the Eyelids page.
 - `--record FILE` writes the eye tracker's raw samples to a CSV file, and `--replay FILE` runs such a file through the processing and prints how the output behaved, next to the same settings with the steps above turned off.
 

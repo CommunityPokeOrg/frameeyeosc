@@ -136,7 +136,7 @@ bool readWholeFile(const std::string& path, std::string& text) {
 }  // namespace
 
 const std::vector<SettingSpec>& settingSpecs() {
-    // key, type, default, default text, min, max, step, decimals
+    // key, type, default, default text, min, max, step, decimals[, value "On" sets if the default is off]
     static const std::vector<SettingSpec> specs = {
         {key::kVersion, SettingType::Integer, 1, "", 1, 1, 1, 0},
         {key::kSending, SettingType::Bool, 1, "", 0, 1, 1, 0},
@@ -161,7 +161,7 @@ const std::vector<SettingSpec>& settingSpecs() {
         {key::kLidScaleRight, SettingType::NullableNumber, 0, "", 0.5, 2.0, 0.01, 2},
         {key::kLidCalibration, SettingType::Bool, 1, "", 0, 1, 1, 0},
         {key::kLidSync, SettingType::Number, 0.4, "", 0.0, 1.0, 0.05, 2},
-        {key::kGazeQualityLimit, SettingType::Number, 0.03, "", 0.005, 1.0, 0.005, 3},
+        {key::kGazeQualityLimit, SettingType::Number, 0.0, "", 0.005, 1.0, 0.005, 3, 0.03},
         {key::kBlinkHoldMs, SettingType::Number, 80, "", 0.0, 300.0, 10.0, 0},
         {key::kDespike, SettingType::Bool, 1, "", 0, 1, 1, 0},
         {key::kBlinkSyncBelow, SettingType::Number, 0.35, "", 0.0, 0.75, 0.05, 2},

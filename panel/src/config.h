@@ -29,6 +29,7 @@ struct SettingSpec {
     double max;               ///< largest value the panel writes
     double step;              ///< how much one press of − / ＋ changes the value
     int decimals;             ///< digits shown after the decimal point
+    double onNumber = 0;      ///< what "On" sets for a number that is off (0) by default
 };
 
 /** Screen font (Noto Sans CJK; found through fontconfig if the file is missing). */

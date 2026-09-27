@@ -583,7 +583,7 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
             const SettingSpec* spec = findSetting(hit.key);
             if (spec == nullptr) return;
             const std::string name = hit.key;
-            const double value = spec->defaultNumber;
+            const double value = spec->defaultNumber > 0 ? spec->defaultNumber : spec->onNumber;
             change = [name, value](JsonValue& root) { root.set(name, JsonValue::makeNumber(value)); };
             break;
         }

@@ -22,8 +22,11 @@ const LID_SHUT: f32 = 0.05;
 const BLINK_NEAR: f64 = 0.1;
 // Flicker is only measured this far from any sample where either eye is below BLINK_BELOW.
 const OPEN_CLEAR: f64 = 0.2;
-// Gaze jitter is the spread within windows this long.
+// Gaze jitter is the spread within windows this long...
 const JITTER_WINDOW: f64 = 0.3;
+// ...where the tracker's own combined gaze spreads less than this many degrees, so the eyes are still
+// and any movement in the output is jitter rather than the eyes looking somewhere else.
+const FIXATION_SPREAD: f64 = 1.0;
 // Gaze values of 1.0 are 45°.
 const GAZE_DEGREES: f32 = 45.0;
 
@@ -183,7 +186,8 @@ struct Metrics {
     blinks_shut: usize,
     // Median over all blinks of how long both sent eyelids stayed shut together, in ms.
     shut_ms: f64,
-    // Median spread of the sent combined gaze within JITTER_WINDOW windows with the eyes open, in degrees.
+    // Median spread of the sent combined gaze within JITTER_WINDOW windows with the eyes open and still,
+    // in degrees.
     jitter: f64,
     // 90th percentile of the sent combined gaze's change per sample around blinks, in degrees.
     blink_jump: f64,
@@ -278,8 +282,21 @@ fn metrics(samples: &[EyeData], sent: &[Sample]) -> Metrics {
     let blinks_shut = shut_ms.iter().filter(|ms| **ms > 0.0).count();
 
     let degrees = |sample: &Sample| [sample.gaze[4], sample.gaze[5]].map(|value| f64::from(value * GAZE_DEGREES));
+    let raw_degrees =
+        |sample: &Sample| [sample.raw_gaze[4], sample.raw_gaze[5]].map(|value| f64::from(value * GAZE_DEGREES));
+    let spread = |window: &[usize], gaze: &dyn Fn(&Sample) -> [f64; 2]| {
+        let points: Vec<[f64; 2]> = window.iter().map(|i| gaze(&sent[*i])).collect();
+        let count = points.len() as f64;
+        let variance: f64 = (0..2)
+            .map(|axis| {
+                let mean = points.iter().map(|point| point[axis]).sum::<f64>() / count;
+                points.iter().map(|point| (point[axis] - mean).powi(2)).sum::<f64>() / count
+            })
+            .sum();
+        variance.sqrt()
+    };
     let mut spreads = Vec::new();
-    let mut window: Vec<[f64; 2]> = Vec::new();
+    let mut window: Vec<usize> = Vec::new();
     let mut window_start = 0.0;
     for i in 0..n {
         let open = samples[i].openness.iter().all(|openness| *openness >= OPEN_ABOVE);
@@ -292,16 +309,11 @@ fn metrics(samples: &[EyeData], sent: &[Sample]) -> Metrics {
         if window.is_empty() {
             window_start = times[i];
         }
-        window.push(degrees(&sent[i]));
+        window.push(i);
         if times[i] - window_start >= JITTER_WINDOW {
-            let count = window.len() as f64;
-            let variance: f64 = (0..2)
-                .map(|axis| {
-                    let mean = window.iter().map(|gaze| gaze[axis]).sum::<f64>() / count;
-                    window.iter().map(|gaze| (gaze[axis] - mean).powi(2)).sum::<f64>() / count
-                })
-                .sum();
-            spreads.push(variance.sqrt());
+            if spread(&window, &raw_degrees) < FIXATION_SPREAD {
+                spreads.push(spread(&window, &degrees));
+            }
             window.clear();
         }
     }
@@ -451,6 +463,14 @@ mod tests {
         LidCalibration::load(None, Settings::default().lid_open)
     }
 
+    /// The defaults with the optional quality check turned on too, so every stage is exercised.
+    fn all_stages() -> Settings {
+        Settings {
+            gaze_quality_limit: 0.03,
+            ..Settings::default()
+        }
+    }
+
     fn run_with(settings: &Settings) -> Metrics {
         let samples = synthetic();
         metrics(&samples, &replay(&samples, settings, calibration()))
@@ -494,7 +514,7 @@ mod tests {
         let before = run_with(&without_new_stages(&Settings::default()));
         assert_eq!(before.blinks, 4, "{before:?}");
         assert!((before.unreliable[0], before.unreliable[1]) == (0.0, 0.0));
-        let after = run_with(&Settings::default());
+        let after = run_with(&all_stages());
         // Both eyes fail the quality check during the four blinks (5 samples each), and the left eye also
         // during its bad stretch (27 samples), out of 540.
         let failed = after.unreliable.map(|share| (share * 540.0).round());
@@ -504,13 +524,14 @@ mod tests {
     #[test]
     fn new_stages_close_every_blink_and_steady_the_gaze() {
         let before = run_with(&without_new_stages(&Settings::default()));
-        let after = run_with(&Settings::default());
+        let after = run_with(&all_stages());
         assert!(before.blinks_shut < before.blinks, "{before:?}");
         assert_eq!(after.blinks_shut, after.blinks, "{after:?}");
         // Held for --blink-hold-ms (80) from the last closed sample.
         assert!(after.shut_ms >= 80.0, "{after:?}");
         assert!(after.blink_jump < before.blink_jump, "{before:?} {after:?}");
-        assert!(after.jitter < before.jitter, "{before:?} {after:?}");
+        // The deadzone keeps both still while fixating; the left eye's wild stretch is not a fixation.
+        assert!(after.jitter <= before.jitter, "{before:?} {after:?}");
         assert!(after.flicker <= before.flicker, "{before:?} {after:?}");
     }
 

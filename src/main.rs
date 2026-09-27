@@ -174,8 +174,8 @@ struct Args {
     #[arg(long, default_value_t = 0.4)]
     lid_sync: f32,
     /// Ignore an eye's gaze while its covariance is above this; the other eye moves both,
-    /// or the gaze is held if both are above. 0 disables
-    #[arg(long, default_value_t = 0.03)]
+    /// or the gaze is held if both are above. An optional safety net; 0 disables
+    #[arg(long, default_value_t = 0.0)]
     gaze_quality_limit: f32,
     /// Keep a closed eyelid fully closed for at least this long, so short blinks reach other players. 0 disables
     #[arg(long, default_value_t = 80.0)]
@@ -278,8 +278,9 @@ struct Smoother {
     lids: [OneEuro; 2],
     // The previous two samples' gaze angles and openness, for the 3-sample median.
     recent: [Option<[f32; 8]>; 2],
-    // Sample time until which each eyelid is kept fully closed.
+    // Sample time until which each eyelid is kept fully closed, and whether it went out closed last time.
     shut_until: [f64; 2],
+    was_shut: [bool; 2],
     last_time: Option<f64>,
     // Left, right and combined gaze as last sent, to hold while the gaze is unreliable.
     last_gaze: [Option<[f32; 2]>; 3],
@@ -293,6 +294,7 @@ impl Smoother {
             lids: [OneEuro::new(settings.lid_min_cutoff, settings.lid_beta, LID_D_CUTOFF); 2],
             recent: [None; 2],
             shut_until: [f64::NEG_INFINITY; 2],
+            was_shut: [false; 2],
             last_time: None,
             last_gaze: [None; 3],
         }
@@ -360,21 +362,23 @@ impl Smoother {
         }
     }
 
-    /// Which eyelids go out fully closed: `closed` ones (at or past --lid-closed), both when one is closed
-    /// and the other nearly so, and each for --blink-hold-ms after that. Their filters restart from
-    /// closed, so the eye opens smoothly afterwards.
+    /// Which eyelids go out fully closed: `closed` ones (at or past --lid-closed), and both when one is
+    /// closed and the other nearly so. Once an eye goes out closed it stays so for at least
+    /// --blink-hold-ms, so a 30 ms blink is sent as 80 ms and a 200 ms one as 200 ms. Their filters
+    /// restart from closed, so the eye opens smoothly afterwards.
     fn hold_shut(&mut self, time: f64, closed: [bool; 2], lids: [f32; 2], settings: &Settings) -> [bool; 2] {
         let hold = f64::from(settings.blink_hold_ms) / 1000.0;
         let held = [0, 1].map(|eye| closed[eye] || time < self.shut_until[eye]);
         let shut = sync_blinks(held, lids, settings.blink_sync_below);
-        for eye in 0..2 {
-            if closed[eye] || (shut[eye] && !held[eye]) {
+        for (eye, shut) in shut.into_iter().enumerate() {
+            if shut && !self.was_shut[eye] {
                 self.shut_until[eye] = time + hold;
             }
-            if shut[eye] {
+            if shut {
                 self.lids[eye].value = Some(0.0);
             }
         }
+        self.was_shut = shut;
         shut
     }
 
@@ -383,6 +387,7 @@ impl Smoother {
         self.deadzones.iter_mut().for_each(Deadzone::reset);
         self.recent = [None; 2];
         self.shut_until = [f64::NEG_INFINITY; 2];
+        self.was_shut = [false; 2];
         self.last_time = None;
         self.last_gaze = [None; 3];
     }
@@ -1377,6 +1382,7 @@ mod tests {
     fn gaze_is_held_while_both_eyes_are_unreliable() {
         let settings = Settings {
             despike: false,
+            gaze_quality_limit: 0.03,
             ..settings()
         };
         let mut readings: Vec<EyeData> = (0..10).map(|i| reading(i, [0.2, 0.0], [0.8; 2])).collect();
@@ -1410,6 +1416,11 @@ mod tests {
         // 80 ms is 7.2 samples: closed at sample 10 and the seven after it.
         assert!(sent[10..18].iter().all(|sample| sample.lids == [0.0; 2]));
         assert!(sent[18].lids[0] > 0.0 && sent[18].lids[0] < 0.75);
+        // It is a minimum, not an extension: a blink longer than the hold opens as soon as it ends.
+        let long: Vec<(usize, [f32; 2])> = (10..30).map(|i| (i, [0.2; 2])).collect();
+        let sent = run(&settings, &openness_track(40, &long));
+        assert!(sent[10..30].iter().all(|sample| sample.lids == [0.0; 2]));
+        assert!(sent[30].lids[0] > 0.0);
         // Without the new stages the filters never quite get there.
         let sent = run(&without_new_stages(), &readings);
         assert!(sent.iter().all(|sample| sample.lids[0] > 0.2), "{:?}", sent[10].lids);

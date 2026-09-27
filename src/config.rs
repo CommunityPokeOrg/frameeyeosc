@@ -94,7 +94,7 @@ impl Default for Settings {
             lid_scale_right: None,
             lid_calibration: true,
             lid_sync: 0.4,
-            gaze_quality_limit: 0.03,
+            gaze_quality_limit: 0.0,
             blink_hold_ms: 80.0,
             despike: true,
             blink_sync_below: 0.35,
