@@ -2,11 +2,14 @@
 
 ## 0.5.0 (unreleased)
 
-Gaze calibration, for when the avatar's eyes look a little off (for example too far down).
+Fitting the eyes to you, for when the avatar's eyes look a little off (for example looking too far down, or eyelids that close when you look down).
 
-- New settings for where "straight ahead" is and how far the gaze moves from there: `gaze_offset_x` / `gaze_offset_y`, and `gaze_gain_x`, `gaze_gain_up` and `gaze_gain_down` (up and down separately). They apply to both eyes and the combined gaze, before smoothing. The defaults change nothing: the output is the same as 0.4.0's.
-- The panel has a new "Gaze fit" tab. "Center" shows a dot straight ahead and sets the zero point from where your eyes look. "5 points" also shows dots up, down, left and right and sets the three gains. The dot is its own small overlay, fixed to the headset 2 m ahead, and only shows while the dashboard is closed. The values can also be set by hand there, and "Reset" undoes the fit.
-- frameeyeosc averages the raw gaze for 2 seconds when the panel asks (`gaze_capture` in `config.json`), leaving out the first 0.5 s and samples with the eyes shut, and reports the result in the status file and as one line in the journal.
+- The panel has a new "Eye fit" tab with one button. After you close the dashboard, a dot appears straight ahead, up, down, left and right, and then it asks you to close your eyes for a moment. It takes about 30 seconds. The result shows on the tab, with "Fit again" and "Reset". "Re-center only" measures straight ahead again after you put the headset back on. The values can be changed by hand under "Fine-tune". The dot is its own small overlay, fixed to the headset 2 m ahead. It only shows while the dashboard is closed, and it is redrawn every frame while it is up.
+- Gaze: new settings for where "straight ahead" is and how far the gaze moves from there: `gaze_offset_x` / `gaze_offset_y`, and `gaze_gain_x`, `gaze_gain_up` and `gaze_gain_down`. They apply to both eyes and the combined gaze, before smoothing.
+- Eyelids: each eye's openness with the eyes shut and while looking up, straight ahead and down (`lid_fit_*`). The Frame reads an eye as less open when you look down, so a fitted eye is judged against what is normal for where you look and no longer closes when you only look down. Fitted eyes don't use the learned calibration or `lid_scale_*`. On a recording, the times an eye looking down was sent a third closed went from 35 to 5, and more blinks were sent fully closed (53 of 60, from 50).
+- frameeyeosc averages the raw gaze and each eye's openness for 2 seconds when the panel asks (`gaze_capture` in `config.json`), and reports the result in the status file and as one line in the journal.
+- `--replay` also reports the eyelid while looking down and the times it was sent closing, and reads a lid fit from a recording that has one.
+- With the defaults (nothing fitted), the output is the same as 0.4.0's.
 
 ## 0.4.0 (2026-09-27)
 
