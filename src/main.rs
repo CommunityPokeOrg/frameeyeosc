@@ -213,7 +213,7 @@ struct Args {
     gaze_gain_down: f32,
     /// Hold the sideways gaze when looking more than this many degrees down (fully 10° further down),
     /// where the Frame's x jumps; 0 disables
-    #[arg(long, default_value_t = 28.0)]
+    #[arg(long, default_value_t = 24.0)]
     gaze_down_hold_x_deg: f32,
     /// The left eye's own sideways zero point for per-eye gaze [default: --gaze-offset-x]
     #[arg(long, allow_negative_numbers = true)]
@@ -1815,7 +1815,10 @@ mod tests {
 
     #[test]
     fn looking_far_down_holds_the_sideways_gaze() {
-        let settings = settings();
+        let settings = Settings {
+            gaze_down_hold_x_deg: 28.0,
+            ..settings()
+        };
         let mut smoother = Smoother::new(&settings);
         let at = |down_deg: f32, x: f32| {
             let y = -down_deg / 45.0;

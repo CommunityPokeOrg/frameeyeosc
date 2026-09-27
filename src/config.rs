@@ -145,7 +145,7 @@ impl Default for Settings {
             gaze_gain_x: 1.0,
             gaze_gain_up: 1.0,
             gaze_gain_down: 1.0,
-            gaze_down_hold_x_deg: 28.0,
+            gaze_down_hold_x_deg: 24.0,
             gaze_offset_x_left: None,
             gaze_offset_x_right: None,
             gaze_gain_x_left: None,

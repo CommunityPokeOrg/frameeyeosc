@@ -35,8 +35,8 @@ const GAZE_DEGREES: f32 = 45.0;
 const DOWN_DEGREES: f32 = 15.0;
 const DOWN_OPEN_SHARE: f32 = 0.6;
 const DOWN_CLOSING: f32 = 0.5;
-// The sideways gaze is judged while the tracker's gaze is at least this far down (below the default
-// --gaze-down-hold-x-deg and its fade), where the Frame's x jumps.
+// The sideways gaze is judged while the tracker's gaze is at least this far down, where the Frame's x has
+// jumped (2026-09-28 recordings).
 const FAR_DOWN_DEGREES: f32 = 32.0;
 // Estimating a lid fit from a recording: where the live fit's 15° targets landed in the tracker's own
 // gaze (+15.8° and -17.8° on 2026-09-28), straight ahead within 3°, and each needs this many samples
