@@ -55,7 +55,7 @@ To remove it: `./install.sh --uninstall` (removes the panel too; add `--purge` t
 
 ### Updating from the panel (0.4.0 and later)
 
-The panel's Advanced page shows the installed version. At start and then at most once a day, the panel asks GitHub whether a newer release exists; "Check" asks right away. When one exists, "Update" downloads it, checks it against the release's `SHA256SUMS`, and runs its `install.sh` with the options of your last install (kept in `~/.config/frameeyeosc/install-args`). frameeyeosc and the panel restart on the new version. If anything fails before `install.sh` runs, nothing changes; the log is in `~/.cache/frameeyeosc/update.log`. Turn "Check for updates" off to stop the daily check (the "Check" button still works). The update itself only runs when you press the button.
+The panel's Advanced page shows the installed version. At start and then at most once a day, the panel asks GitHub whether a newer release exists; "Check now" asks right away. When one exists, "Update" downloads it, checks it against the release's `SHA256SUMS`, and runs its `install.sh` with the options of your last install (kept in `~/.config/frameeyeosc/install-args`). frameeyeosc and the panel restart on the new version. If anything fails before `install.sh` runs, nothing changes; the log is in `~/.cache/frameeyeosc/update.log`. Turn "Check for updates" off to stop the daily check (the "Check now" button still works). The update itself only runs when you press the button.
 
 ## Panel
 

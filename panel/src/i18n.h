@@ -164,38 +164,36 @@ struct UiText {
     const char* promptYes;
     const char* promptNo;
 
-    // Updates (the version row on the Advanced tab, the notice in the status column, the update prompt)
+    // Updates. The texts are vendor/frame-updater/strings.md word for word (same key names); rowVersion and
+    // checkedFormat are this panel's own (the label of the version row on the Advanced tab)
     const char* rowVersion;
-    const char* checkedFormat;        ///< "Checked %s" (time or date of the last answer from GitHub)
-    const char* upToDateFormat;       ///< "v%s · Up to date"
-    const char* availableFormat;      ///< "v%s is available"
-    const char* runningFormat;        ///< "Now v%s"
-    const char* checking;
-    const char* updateManual;         ///< the release can't be installed from the panel
-    const char* checkButton;
-    const char* updateButton;
-    const char* installingFormat;     ///< "Updating: %s" (a step below)
-    const char* installingHint;
-    const char* installedFormat;      ///< "v%s is installed"
-    const char* installedHint;
-    const char* installFailed;
-    const char* checkFailedFormat;    ///< "v%s · Couldn't check"
-    const char* retry;
-    const char* dismiss;
+    const char* checkedFormat;          ///< after the version under the row label: "・確認 %s" (time or date)
     const char* rowUpdateCheck;
     const char* hintUpdateCheck;
-    const char* updatePromptFormat;   ///< "Update to v%s?"
-    const char* updatePromptDetail1;
-    const char* updatePromptDetail2;
-    const char* updatePromptYes;
-    const char* updatePromptNo;
+    const char* updateUpToDateFormat;   ///< "Up to date (%s)"
+    const char* updateChecking;
+    const char* updateAvailableFormat;  ///< "Version %s is available"
+    const char* updateButton;
+    const char* updateManual;           ///< the release can't be installed from the panel
+    const char* updateConfirmFormat;    ///< "Update to %s?"
+    const char* updateConfirmHint;
+    const char* updateConfirmYes;
+    const char* updateConfirmNo;
+    const char* updateInstallingFormat; ///< "Updating: %s" (a step below)
+    const char* updateInstalledFormat;  ///< "%s is installed. Reopen to use it"
+    const char* updateInstallFailed;    ///< followed by the reason
+    const char* updateCheckFailed;      ///< followed by the reason
+    const char* updateCheckNow;
+    const char* updateRetry;
+    const char* updateDismiss;
+    const char* updateLogHint;
     // Install steps (UpdateStatus::step)
     const char* stepStart;
     const char* stepDownload;
     const char* stepVerify;
     const char* stepExtract;
     const char* stepInstall;
-    // Why a check or an install failed (UpdateStatus::error; see frame-updater's strings.md)
+    // Why a check or an install failed (UpdateStatus::error)
     const char* reasonNetwork;
     const char* reasonRateLimited;
     const char* reasonNotFound;
@@ -215,8 +213,8 @@ struct UiText {
     const char* reasonDetachFailed;
     const char* reasonInterrupted;
     const char* reasonIo;
-    const char* reasonUpdater;        ///< the updater itself didn't run (usage, script-failed, spawn-failed)
-    const char* reasonOther;
+    const char* reasonUpdater;          ///< usage, script-failed, spawn-failed
+    const char* reasonOther;            ///< any other code
 };
 
 /**

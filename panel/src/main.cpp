@@ -782,11 +782,16 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
             std::fprintf(stderr, "[update] check now\n");
             if (updater != nullptr) updater->checkNow();
             return;
-        case PanelAction::UpdateInstall:
-            if (model.update.state == frame_updater::UpdateState::Available && model.update.installable) {
-                panel.showUpdatePrompt(model.update.latest);
+        case PanelAction::UpdateInstall: {
+            // "Update", or "Try again" after a failed install
+            const frame_updater::UpdateStatus& u = model.update;
+            if (u.state == frame_updater::UpdateState::Available && u.installable) {
+                panel.showUpdatePrompt(u.latest);
+            } else if (u.state == frame_updater::UpdateState::InstallFailed) {
+                panel.showUpdatePrompt(u.version.empty() ? u.latest : u.version);
             }
             return;
+        }
         case PanelAction::UpdateConfirm:
             std::fprintf(stderr, "[update] installing %s (log: %s)\n", model.update.latest.c_str(),
                          updater != nullptr ? updater->logPath().c_str() : "-");

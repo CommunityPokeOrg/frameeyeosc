@@ -38,6 +38,7 @@ constexpr double kRowH = 64;
 constexpr double kRowGap = 2;
 constexpr double kCaptionRowH = 84;
 constexpr double kControlH = 52;
+constexpr double kUpdateRowH = 104;  ///< the version row (its texts may take four lines)
 /** The raw openness range drawn in the lid mark bars. */
 constexpr double kLidScaleMax = 1.2;
 
@@ -863,24 +864,30 @@ void EyePanel::drawUpdateNotice(const Pen& pen, const UiText& t, const frame_upd
                                 double x1) {
     std::string text;
     switch (u.state) {
-        case frame_updater::UpdateState::Available: text = formatText(t.availableFormat, bareVersion(u.latest)); break;
-        case frame_updater::UpdateState::Installing:
-            text = formatText(t.installingFormat, updateStepText(t, u.step));
+        case frame_updater::UpdateState::Available:
+            text = formatText(t.updateAvailableFormat, bareVersion(u.latest));
             break;
-        case frame_updater::UpdateState::Installed: text = formatText(t.installedFormat, bareVersion(u.version)); break;
+        case frame_updater::UpdateState::Installing:
+            text = formatText(t.updateInstallingFormat, updateStepText(t, u.step));
+            break;
+        case frame_updater::UpdateState::Installed:
+            text = formatText(t.updateInstalledFormat, bareVersion(u.version));
+            break;
         default: return;
     }
     // Opens the Advanced tab, where the version row is
     const PanelHit hit {PanelAction::Tab, nullptr, static_cast<int>(PanelTab::Advanced)};
     const bool usable = tab_ != PanelTab::Advanced;
-    const double y = 618;
-    const double h = 44;
+    const double size = 16;
+    const std::vector<std::string> lines = wrapText(pen, text, size, true, x1 - x0 - 58, 2);
+    const double h = lines.size() > 1 ? 54 : 42;
+    const double y = 670 - h;  // below the gaze box, above the card's bottom edge
     const int pointer = usable ? pointerState(hit) : 0;
-    fillRounded(pen, x0, y, x1 - x0, h, h / 2, pointer > 0 ? kControlHover : kAccentTint);
-    strokeRounded(pen, x0, y, x1 - x0, h, h / 2, kAccent, 2);
+    fillRounded(pen, x0, y, x1 - x0, h, 22, pointer > 0 ? kControlHover : kAccentTint);
+    strokeRounded(pen, x0, y, x1 - x0, h, 22, kAccent, 2);
     drawDot(pen.cr, x0 + 22, y + h / 2, 6, kAccent);
-    const double size = fitSize(pen, text, 16, 11, x1 - x0 - 50, true);
-    pen.text(x0 + 38, centerBaseline(y, h, size), text, size, kText, true);
+    const double top = y + (h - lines.size() * 20) / 2;
+    for (size_t i = 0; i < lines.size(); ++i) pen.text(x0 + 38, top + 15 + i * 20, lines[i], size, kText, true);
     addButton(hit, x0, y, x1 - x0, h, usable);
 }
 
@@ -1322,35 +1329,38 @@ void EyePanel::drawAdvanced(const Pen& pen, const UiText& t, const PanelModel& m
     y += kRowH + 30;
     // Version, new release check and install
     drawUpdateRow(pen, t, m.update, y);
-    y += kRowH + kRowGap;
+    y += kUpdateRowH + kRowGap;
     {
-        drawRowLabel(pen, t, y, kRowH, t.rowUpdateCheck, t.hintUpdateCheck, false);
+        // The hint is long, so it goes under the switch (like the prefix example) rather than under the title
+        drawRowLabel(pen, t, y, kRowH, t.rowUpdateCheck, "", false);
         drawSegmented(pen, kControlX, y + cy, 300, kControlH,
                       {{t.on, {PanelAction::SetBool, key::kUpdateCheck, 1}},
                        {t.off, {PanelAction::SetBool, key::kUpdateCheck, 0}}},
                       v.flag(key::kUpdateCheck) ? 0 : 1, 20);
+        pen.text(kControlX + 4, y + kRowH + 18, t.hintUpdateCheck, fitSize(pen, t.hintUpdateCheck, 15, 11, kControlW, false),
+                 kTextMuted);
     }
-    y += kRowH + 14;
+    y += kRowH + 30;
     /**
      * A read-only row: title on the left, text on the right.
      */
     const auto infoRow = [&](const std::string& title, const std::string& hint, const std::string& value,
                              bool keepEnd) {
-        drawRowLabel(pen, t, y, 48, title, hint, false);
-        pen.text(kControlX, centerBaseline(y, 48, 16), ellipsize(pen, value, 16, false, kControlW, keepEnd), 16,
+        drawRowLabel(pen, t, y, 44, title, hint, false);
+        pen.text(kControlX, centerBaseline(y, 44, 16), ellipsize(pen, value, 16, false, kControlW, keepEnd), 16,
                  kText);
     };
     // File locations
     infoRow(t.rowConfigPath, "", m.configPath, true);
     if (s.running && !s.configPath.empty() && s.configPath != m.configPath) {
         const std::string warning = t.configPathMismatch + s.configPath;
-        pen.text(kControlX, y + 47, ellipsize(pen, warning, 14, true, kControlW, true), 14, kDanger, true);
+        pen.text(kControlX, y + 43, ellipsize(pen, warning, 14, true, kControlW, true), 14, kDanger, true);
     }
-    y += 52;
+    y += 44;
     infoRow(t.rowCalibrationPath, "", s.running && !s.calibrationPath.empty() ? s.calibrationPath : "—", true);
-    y += 52;
+    y += 44;
     infoRow(t.rowStatusPath, "", m.statusPath, true);
-    y += 52;
+    y += 44;
     // frameeyeosc process
     {
         std::string text = t.notRunning;
@@ -1368,7 +1378,7 @@ void EyePanel::drawAdvanced(const Pen& pen, const UiText& t, const PanelModel& m
         }
         infoRow(t.rowCore, "", text, false);
     }
-    y += 52;
+    y += 44;
     // Locked by the command line, with the values in effect
     {
         std::vector<std::string> items;
@@ -1404,85 +1414,114 @@ void EyePanel::drawAdvanced(const Pen& pen, const UiText& t, const PanelModel& m
 
 void EyePanel::drawUpdateRow(const Pen& pen, const UiText& t, const frame_updater::UpdateStatus& u, double y) {
     using frame_updater::UpdateState;
+    const double h = kUpdateRowH;
     const std::string current = bareVersion(u.current);
-    drawRowLabel(pen, t, y, kRowH, t.rowVersion, u.checkedAt > 0 ? formatText(t.checkedFormat, checkedText(u.checkedAt)) : "",
-                 false);
-    std::string main = "v" + current;
-    std::string detail;
-    bool detailIsError = false;
-    PanelHit hit {PanelAction::UpdateCheck, nullptr, 0};
-    const char* label = t.checkButton;
-    bool accent = false;
+    std::string hint = "v" + current;
+    if (u.checkedAt > 0) hint += formatText(t.checkedFormat, checkedText(u.checkedAt));
+    drawRowLabel(pen, t, y, h, t.rowVersion, hint, false);
+
+    /** A button at the right end of the row. */
+    struct RowButton {
+        PanelHit hit;
+        const char* label;
+        bool accent;
+    };
+    const PanelHit check {PanelAction::UpdateCheck, nullptr, 0};
+    const PanelHit dismiss {PanelAction::UpdateDismiss, nullptr, 0};
+    const PanelHit install {PanelAction::UpdateInstall, nullptr, 0};
+    std::string primary;    // bold
+    std::string secondary;  // muted
+    bool error = false;     // primary in red
+    std::vector<RowButton> buttons;
     switch (u.state) {
-        case UpdateState::Unknown: break;
-        case UpdateState::UpToDate: main = formatText(t.upToDateFormat, current); break;
+        case UpdateState::Unknown:
+            if (u.checking) primary = t.updateChecking;
+            buttons.push_back({check, t.updateCheckNow, false});
+            break;
+        case UpdateState::UpToDate:
+            primary = formatText(t.updateUpToDateFormat, current);
+            buttons.push_back({check, t.updateCheckNow, false});
+            break;
         case UpdateState::Available:
-            main = formatText(t.availableFormat, bareVersion(u.latest));
+            primary = formatText(t.updateAvailableFormat, bareVersion(u.latest));
             if (u.installable) {
-                detail = formatText(t.runningFormat, current);
-                hit = {PanelAction::UpdateInstall, nullptr, 0};
-                label = t.updateButton;
-                accent = true;
+                buttons.push_back({install, t.updateButton, true});
             } else {
-                detail = t.updateManual;
+                secondary = t.updateManual;
+                buttons.push_back({check, t.updateCheckNow, false});
             }
             break;
         case UpdateState::Installing:
-            main = formatText(t.installingFormat, updateStepText(t, u.step));
-            detail = t.installingHint;
-            hit = {};
+            primary = formatText(t.updateInstallingFormat, updateStepText(t, u.step));
             break;
         case UpdateState::Installed:
-            main = formatText(t.installedFormat, bareVersion(u.version));
-            detail = t.installedHint;
-            hit = {PanelAction::UpdateDismiss, nullptr, 0};
-            label = t.dismiss;
+            primary = formatText(t.updateInstalledFormat, bareVersion(u.version));
+            buttons.push_back({dismiss, t.updateDismiss, false});
             break;
         case UpdateState::CheckFailed:
-            main = formatText(t.checkFailedFormat, current);
-            detail = updateReasonText(t, u.error);
-            detailIsError = true;
+            primary = std::string(t.updateCheckFailed) + " " + updateReasonText(t, u.error);
+            error = true;
+            buttons.push_back({check, t.updateCheckNow, false});
             break;
         case UpdateState::InstallFailed:
-            // Closing it brings back the check result, with "Update" to try again
-            main = t.installFailed;
-            detail = updateReasonText(t, u.error);
-            detailIsError = true;
-            hit = {PanelAction::UpdateDismiss, nullptr, 0};
-            label = t.dismiss;
+            primary = std::string(t.updateInstallFailed) + " " + updateReasonText(t, u.error);
+            secondary = t.updateLogHint;
+            error = true;
+            buttons.push_back({install, t.updateRetry, false});
+            buttons.push_back({dismiss, t.updateDismiss, false});
             break;
     }
-    if (u.checking && u.state != UpdateState::Installing) {
-        detail = t.checking;
-        detailIsError = false;
+    // A check running over an earlier answer: the answer stays, with a note under it
+    if (u.checking && u.state != UpdateState::Unknown && u.state != UpdateState::Installing) {
+        secondary = t.updateChecking;
     }
 
-    const double bw = 150;
-    const double bx = kInnerRight - bw;
-    const double by = y + (kRowH - kControlH) / 2;
-    const double textW = bx - 16 - kControlX;
-    if (detail.empty()) {
-        const double size = fitSize(pen, main, 19, 13, textW, true);
-        pen.text(kControlX, centerBaseline(y, kRowH, size), main, size, kText, true);
-    } else {
-        pen.text(kControlX, y + kRowH / 2 - 3, main, fitSize(pen, main, 19, 13, textW, true), kText, true);
-        pen.text(kControlX, y + kRowH / 2 + 19, detail, fitSize(pen, detail, 15, 11, textW, detailIsError),
-                 detailIsError ? kDanger : kTextMuted, detailIsError);
+    // Buttons at the right end; two are stacked so the texts keep their width
+    const double gap = 8;
+    const double bw = 170;
+    const double bh = buttons.size() > 1 ? (h - gap) / 2 : kControlH;
+    const double left = kInnerRight - bw - 12;
+    for (size_t i = 0; i < buttons.size(); ++i) {
+        const RowButton& b = buttons[i];
+        const double bx = kInnerRight - bw;
+        const double by = buttons.size() > 1 ? y + i * (bh + gap) : y + (h - bh) / 2;
+        // A check can't be started while one runs
+        const bool usable = !(b.hit.action == PanelAction::UpdateCheck && u.checking);
+        const int pointer = usable ? pointerState(b.hit) : 0;
+        if (b.accent) {
+            fillRounded(pen, bx, by, bw, bh, bh / 2, pointer == 2 ? kAccentPressed : kAccent);
+        } else {
+            fillRounded(pen, bx, by, bw, bh, bh / 2, pointer > 0 ? kControlHover : kControl);
+            strokeRounded(pen, bx, by, bw, bh, bh / 2, usable ? kBorder : kDivider, 2);
+        }
+        const double size = fitSize(pen, b.label, 19, 12, bw - 20, true);
+        const Color labelColor = b.accent ? kOnAccent : (usable ? kText : kTextDisabled);
+        textCentered(pen, bx + bw / 2, centerBaseline(by, bh, size), b.label, size, labelColor, true);
+        addButton(b.hit, bx, by, bw, bh, usable);
     }
-    if (hit.action == PanelAction::None) return;
-    // A check can't be started while one runs
-    const bool usable = !(hit.action == PanelAction::UpdateCheck && u.checking);
-    const int pointer = usable ? pointerState(hit) : 0;
-    if (accent) {
-        fillRounded(pen, bx, by, bw, kControlH, kControlH / 2, pointer == 2 ? kAccentPressed : kAccent);
-    } else {
-        fillRounded(pen, bx, by, bw, kControlH, kControlH / 2, pointer > 0 ? kControlHover : kControl);
-        strokeRounded(pen, bx, by, bw, kControlH, kControlH / 2, usable ? kBorder : kDivider, 2);
+
+    // The texts, wrapped to at most four lines and centered in the row
+    const double textW = (buttons.empty() ? kInnerRight : left) - kControlX;
+    const double primarySize = 17;
+    const double secondarySize = 14;
+    const size_t maxLines = 4;
+    const std::vector<std::string> primaryLines =
+        primary.empty() ? std::vector<std::string>() : wrapText(pen, primary, primarySize, true, textW, secondary.empty() ? 4 : 3);
+    const std::vector<std::string> secondaryLines =
+        secondary.empty() || primaryLines.size() >= maxLines
+            ? std::vector<std::string>()
+            : wrapText(pen, secondary, secondarySize, false, textW, maxLines - primaryLines.size());
+    const double primaryStep = 22;
+    const double secondaryStep = 20;
+    double baseline = y + (h - primaryLines.size() * primaryStep - secondaryLines.size() * secondaryStep) / 2;
+    for (const std::string& line : primaryLines) {
+        baseline += primaryStep;
+        pen.text(kControlX, baseline - 6, line, primarySize, error ? kDanger : kText, true);
     }
-    const double size = fitSize(pen, label, 19, 12, bw - 24, true);
-    const Color labelColor = accent ? kOnAccent : (usable ? kText : kTextDisabled);
-    textCentered(pen, bx + bw / 2, centerBaseline(by, kControlH, size), label, size, labelColor, true);
-    addButton(hit, bx, by, bw, kControlH, usable);
+    for (const std::string& line : secondaryLines) {
+        baseline += secondaryStep;
+        pen.text(kControlX, baseline - 5, line, secondarySize, kTextMuted);
+    }
 }
 
 void EyePanel::drawPrompt(const Pen& pen, const UiText& t) {
@@ -1498,12 +1537,17 @@ void EyePanel::drawPrompt(const Pen& pen, const UiText& t) {
     const double x = (kWidth - w) / 2;
     const double y = (kHeight - h) / 2;
     drawCard(pen, x, y, w, h, 24, kCard, kAccent, 2);
-    const std::string title = update ? formatText(t.updatePromptFormat, updatePromptVersion_)
+    const std::string title = update ? formatText(t.updateConfirmFormat, updatePromptVersion_)
                                      : (etvr ? t.promptEtvr : t.promptVrchat);
     const double titleSize = fitSize(pen, title, 24, 16, w - 60, true);
     textCentered(pen, x + w / 2, y + 62, title, titleSize, kText, true);
-    const std::string detail1 = update ? t.updatePromptDetail1 : (etvr ? t.promptEtvrDetail1 : t.promptVrchatDetail1);
-    const std::string detail2 = update ? t.updatePromptDetail2 : (etvr ? t.promptEtvrDetail2 : t.promptVrchatDetail2);
+    std::string detail1 = etvr ? t.promptEtvrDetail1 : t.promptVrchatDetail1;
+    std::string detail2 = etvr ? t.promptEtvrDetail2 : t.promptVrchatDetail2;
+    if (update) {
+        const std::vector<std::string> lines = wrapText(pen, t.updateConfirmHint, 17, false, w - 60, 2);
+        detail1 = lines.empty() ? "" : lines[0];
+        detail2 = lines.size() > 1 ? lines[1] : "";
+    }
     textCentered(pen, x + w / 2, y + 108, detail1, fitSize(pen, detail1, 17, 12, w - 60, false), kTextMuted, false);
     if (!detail2.empty()) {
         textCentered(pen, x + w / 2, y + 136, detail2, fitSize(pen, detail2, 17, 12, w - 60, false), kTextMuted,
@@ -1518,7 +1562,7 @@ void EyePanel::drawPrompt(const Pen& pen, const UiText& t) {
         if (update) hit = {yes ? PanelAction::UpdateConfirm : PanelAction::UpdateCancel, nullptr, 0};
         const double bx = yes ? x + w / 2 - bw - 12 : x + w / 2 + 12;
         const int pointer = pointerState(hit);
-        const std::string label = update ? (yes ? t.updatePromptYes : t.updatePromptNo) : (yes ? t.promptYes : t.promptNo);
+        const std::string label = update ? (yes ? t.updateConfirmYes : t.updateConfirmNo) : (yes ? t.promptYes : t.promptNo);
         if (yes) {
             fillRounded(pen, bx, by, bw, kControlH + 4, (kControlH + 4) / 2, pointer == 2 ? kAccentPressed : kAccent);
         } else {
