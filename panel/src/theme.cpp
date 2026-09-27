@@ -111,6 +111,10 @@ const std::vector<ContrastPair>& contrastPairs() {
         {"target seconds (disc)", kTextMuted, kBg, ContrastKind::Text},
         {"target words (disc)", kText, kBg, ContrastKind::Text},
         {"target countdown (disc)", kAccent, kBg, ContrastKind::Text},
+        // The debug gaze dots (each on its own dark edge, shown over the scene)
+        {"debug gaze dot, combined (dark edge)", kDotBoth, kBg, ContrastKind::Ui},
+        {"debug gaze dot, left eye (dark edge)", kDotLeft, kBg, ContrastKind::Ui},
+        {"debug gaze dot, right eye (dark edge)", kDotRight, kBg, ContrastKind::Ui},
     };
     return pairs;
 }

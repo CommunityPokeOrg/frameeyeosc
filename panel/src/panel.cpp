@@ -1700,9 +1700,9 @@ void EyePanel::drawAdvanced(const Pen& pen, const UiText& t, const PanelModel& m
         std::string path = prefix;
         while (!path.empty() && path.back() == '/') path.pop_back();
         const std::string example = std::string(t.prefixExample) + "/avatar/parameters" + path + "/v2/EyeLeftX";
-        pen.text(kControlX + 4, y + kRowH + 18, example, fitSize(pen, example, 15, 11, kControlW, false), kTextMuted);
+        pen.text(kControlX + 4, y + kRowH + 16, example, fitSize(pen, example, 15, 11, kControlW, false), kTextMuted);
     }
-    y += kRowH + 30;
+    y += kRowH + 24;
     // Version, new release check and install
     drawUpdateRow(pen, t, m.update, y);
     y += kUpdateRowH + kRowGap;
@@ -1713,30 +1713,42 @@ void EyePanel::drawAdvanced(const Pen& pen, const UiText& t, const PanelModel& m
                       {{t.on, {PanelAction::SetBool, key::kUpdateCheck, 1}},
                        {t.off, {PanelAction::SetBool, key::kUpdateCheck, 0}}},
                       v.flag(key::kUpdateCheck) ? 0 : 1, 20);
-        pen.text(kControlX + 4, y + kRowH + 18, t.hintUpdateCheck, fitSize(pen, t.hintUpdateCheck, 15, 11, kControlW, false),
+        pen.text(kControlX + 4, y + kRowH + 16, t.hintUpdateCheck, fitSize(pen, t.hintUpdateCheck, 15, 11, kControlW, false),
                  kTextMuted);
     }
-    y += kRowH + 30;
+    y += kRowH + 24;
+    // The debug gaze dots (a head-locked dot where the sent gaze points)
+    {
+        const double h = 56;
+        const bool locked = v.locked(key::kGazeDebugDots);
+        drawRowLabel(pen, t, y, h, t.rowGazeDots, t.hintGazeDots, locked);
+        drawSegmented(pen, kControlX, y + (h - kControlH) / 2, 300, kControlH,
+                      {{t.on, {PanelAction::SetBool, key::kGazeDebugDots, 1}},
+                       {t.off, {PanelAction::SetBool, key::kGazeDebugDots, 0}}},
+                      v.flag(key::kGazeDebugDots) ? 0 : 1, 20, locked);
+        y += h + kRowGap;
+    }
+    const double infoH = 38;
     /**
      * A read-only row: title on the left, text on the right.
      */
     const auto infoRow = [&](const std::string& title, const std::string& hint, const std::string& value,
                              bool keepEnd) {
-        drawRowLabel(pen, t, y, 44, title, hint, false);
-        pen.text(kControlX, centerBaseline(y, 44, 16), ellipsize(pen, value, 16, false, kControlW, keepEnd), 16,
+        drawRowLabel(pen, t, y, infoH, title, hint, false);
+        pen.text(kControlX, centerBaseline(y, infoH, 16), ellipsize(pen, value, 16, false, kControlW, keepEnd), 16,
                  kText);
     };
     // File locations
     infoRow(t.rowConfigPath, "", m.configPath, true);
     if (s.running && !s.configPath.empty() && s.configPath != m.configPath) {
         const std::string warning = t.configPathMismatch + s.configPath;
-        pen.text(kControlX, y + 43, ellipsize(pen, warning, 14, true, kControlW, true), 14, kDanger, true);
+        pen.text(kControlX, y + infoH - 1, ellipsize(pen, warning, 14, true, kControlW, true), 14, kDanger, true);
     }
-    y += 44;
+    y += infoH;
     infoRow(t.rowCalibrationPath, "", s.running && !s.calibrationPath.empty() ? s.calibrationPath : "—", true);
-    y += 44;
+    y += infoH;
     infoRow(t.rowStatusPath, "", m.statusPath, true);
-    y += 44;
+    y += infoH;
     // frameeyeosc process
     {
         std::string text = t.notRunning;
@@ -1754,7 +1766,7 @@ void EyePanel::drawAdvanced(const Pen& pen, const UiText& t, const PanelModel& m
         }
         infoRow(t.rowCore, "", text, false);
     }
-    y += 44;
+    y += infoH;
     // Locked by the command line, with the values in effect
     {
         std::vector<std::string> items;
@@ -1783,8 +1795,8 @@ void EyePanel::drawAdvanced(const Pen& pen, const UiText& t, const PanelModel& m
                 lines.push_back(ellipsize(pen, item, 16, false, kControlW, false));
             }
         }
-        if (lines.size() > 3) lines.resize(3);
-        for (size_t i = 0; i < lines.size(); ++i) pen.text(kControlX, y + 34 + i * 24, lines[i], 16, kText);
+        if (lines.size() > 2) lines.resize(2);
+        for (size_t i = 0; i < lines.size(); ++i) pen.text(kControlX, y + 32 + i * 24, lines[i], 16, kText);
     }
 }
 

@@ -236,6 +236,8 @@ struct UiText {
     // checkedFormat are this panel's own (the label of the version row on the Advanced tab)
     const char* rowVersion;
     const char* checkedFormat;          ///< after the version under the row label: "・確認 %s" (time or date)
+    const char* rowGazeDots;         ///< the debug gaze dots switch
+    const char* hintGazeDots;
     const char* rowUpdateCheck;
     const char* hintUpdateCheck;
     const char* updateUpToDateFormat;   ///< "Up to date (%s)"

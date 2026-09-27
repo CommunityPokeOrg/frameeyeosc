@@ -32,6 +32,9 @@ constexpr const char* kTargetName = "Eye target";
 // 2 m ahead (gaze_fit::kTargetDistanceM) and 0.3 m wide (about 8.6 degrees)
 constexpr double kTargetDistanceM = gaze_fit::kTargetDistanceM;
 constexpr float kTargetWidthM = 0.3f;
+// The debug gaze dots: small overlays of their own; 3.5 cm at 2 m is about 1 degree
+constexpr const char* kDotKeys[2] = {"sasaken.frameeyeosc-panel.dot0", "sasaken.frameeyeosc-panel.dot1"};
+constexpr float kDotWidthM = 0.035f;
 // IPDs outside this range (m) are taken as a failed read
 constexpr double kIpdMin = 0.045;
 constexpr double kIpdMax = 0.085;
@@ -59,6 +62,23 @@ vr::HmdMatrix34_t headRelativeTransform(double yawDeg, double pitchDeg, double d
         // The overlay sits at rotation * (0, 0, -distance)
         m.m[row][3] = static_cast<float>(-distance * rotation[row][2]);
     }
+    return m;
+}
+
+/**
+ * The same turn as headRelativeTransform, at a given position instead of straight along it.
+ * @param yawDeg degrees to the right
+ * @param pitchDeg degrees up
+ * @param x position right (m)
+ * @param y position up (m)
+ * @param z position back (m)
+ * @return the transform
+ */
+vr::HmdMatrix34_t poseTransform(double yawDeg, double pitchDeg, double x, double y, double z) {
+    vr::HmdMatrix34_t m = headRelativeTransform(yawDeg, pitchDeg, 0.0);
+    m.m[0][3] = static_cast<float>(x);
+    m.m[1][3] = static_cast<float>(y);
+    m.m[2][3] = static_cast<float>(z);
     return m;
 }
 
@@ -206,9 +226,19 @@ void VrOverlay::shutdown() {
         logShutdownStep("HideOverlay(target)", overlay->HideOverlay(targetHandle_));
         logShutdownStep("ClearOverlayTexture(target)", overlay->ClearOverlayTexture(targetHandle_));
     }
+    for (uint64_t handle : dotHandles_) {
+        if (handle == 0) continue;
+        logShutdownStep("HideOverlay(dot)", overlay->HideOverlay(handle));
+        logShutdownStep("ClearOverlayTexture(dot)", overlay->ClearOverlayTexture(handle));
+    }
     // 2) Destroy the overlays (the thumbnail goes away along with the panel)
     if (dashboardHandle_ != 0) logShutdownStep("DestroyOverlay(panel)", overlay->DestroyOverlay(dashboardHandle_));
     if (targetHandle_ != 0) logShutdownStep("DestroyOverlay(target)", overlay->DestroyOverlay(targetHandle_));
+    for (uint64_t& handle : dotHandles_) {
+        if (handle != 0) logShutdownStep("DestroyOverlay(dot)", overlay->DestroyOverlay(handle));
+        handle = 0;
+    }
+    dotShown_[0] = dotShown_[1] = false;
     dashboardHandle_ = 0;
     thumbnailHandle_ = 0;
     targetHandle_ = 0;
@@ -225,6 +255,7 @@ void VrOverlay::shutdown() {
     std::fprintf(stderr, "[VR] shutdown: VR_Shutdown done\n");
 
     // 5) Destroy the Vulkan images and device
+    for (OverlayTexture& texture : dotTextures_) texture.destroy();
     targetTexture_.destroy();
     thumbnailTexture_.destroy();
     panelTexture_.destroy();
@@ -354,6 +385,48 @@ void VrOverlay::hideTarget() {
     if (!connected_ || targetHandle_ == 0 || !targetShown_) return;
     checkOverlay("HideOverlay(target)", vr::VROverlay()->HideOverlay(targetHandle_));
     targetShown_ = false;
+}
+
+bool VrOverlay::showDot(int index, double x, double y, double z, double yawDeg, double pitchDeg, const uint8_t* rgba,
+                        int size, bool newImage) {
+    if (!connected_ || dotFailed_ || index < 0 || index > 1) return false;
+    vr::IVROverlay* overlay = vr::VROverlay();
+    std::string message;
+    uint64_t& handle = dotHandles_[index];
+    if (handle == 0) {
+        vr::VROverlayHandle_t created = vr::k_ulOverlayHandleInvalid;
+        const vr::EVROverlayError error = overlay->CreateOverlay(kDotKeys[index], "Eye gaze dot", &created);
+        std::fprintf(stderr, "[VR] CreateOverlay(%s) -> %s\n", kDotKeys[index], overlayErrorName(error));
+        if (error != vr::VROverlayError_None || !dotTextures_[index].create(vulkan_, size, size, message)) {
+            if (!message.empty()) std::fprintf(stderr, "[Vulkan] can't create a dot texture: %s\n", message.c_str());
+            if (error == vr::VROverlayError_None) overlay->DestroyOverlay(created);
+            dotFailed_ = true;
+            return false;
+        }
+        handle = created;
+        checkOverlay("SetOverlayWidthInMeters(dot)", overlay->SetOverlayWidthInMeters(handle, kDotWidthM));
+        newImage = true;
+    }
+    if (newImage && !dotTextures_[index].update(handle, rgba, message)) {
+        std::fprintf(stderr, "[VR] can't send a dot: %s\n", message.c_str());
+        return false;
+    }
+    const vr::HmdMatrix34_t transform = poseTransform(yawDeg, pitchDeg, x, y, z);
+    if (overlay->SetOverlayTransformTrackedDeviceRelative(handle, vr::k_unTrackedDeviceIndex_Hmd, &transform) !=
+        vr::VROverlayError_None) {
+        return false;
+    }
+    if (!dotShown_[index]) {
+        if (!checkOverlay("ShowOverlay(dot)", overlay->ShowOverlay(handle))) return false;
+        dotShown_[index] = true;
+    }
+    return true;
+}
+
+void VrOverlay::hideDot(int index) {
+    if (!connected_ || index < 0 || index > 1 || dotHandles_[index] == 0 || !dotShown_[index]) return;
+    checkOverlay("HideOverlay(dot)", vr::VROverlay()->HideOverlay(dotHandles_[index]));
+    dotShown_[index] = false;
 }
 
 bool VrOverlay::submitThumbnail(const uint8_t* rgba, int size) {

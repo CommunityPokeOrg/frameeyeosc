@@ -31,6 +31,7 @@ add_executable(frameeyeosc-panel
   src/command.cpp
   src/config.cpp
   src/draw.cpp
+  src/gaze_dots.cpp
   src/gaze_fit.cpp
   src/i18n.cpp
   src/json.cpp
@@ -67,3 +68,9 @@ target_include_directories(gaze-fit-test PRIVATE src)
 target_compile_options(gaze-fit-test PRIVATE -Wall -Wextra)
 enable_testing()
 add_test(NAME gaze-fit COMMAND gaze-fit-test)
+
+# The debug gaze dots' packet, geometry and socket, tested without OpenVR: panel/build/gaze-dots-test
+add_executable(gaze-dots-test tests/gaze_dots_test.cpp src/gaze_dots.cpp src/gaze_fit.cpp src/status.cpp src/json.cpp)
+target_include_directories(gaze-dots-test PRIVATE src)
+target_compile_options(gaze-dots-test PRIVATE -Wall -Wextra)
+add_test(NAME gaze-dots COMMAND gaze-dots-test)

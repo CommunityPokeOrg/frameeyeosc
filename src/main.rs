@@ -2,6 +2,7 @@
 
 mod capture;
 mod config;
+mod dots;
 mod replay;
 mod status;
 
@@ -1254,6 +1255,8 @@ struct Bridge {
     // The gaze capture the panel asked for, while it runs, and the latest one's result.
     capture: Option<Capture>,
     capture_result: Option<CaptureResult>,
+    // The panel's debug gaze dots (only while gaze_debug_dots is on).
+    dots: dots::DotStream,
 }
 
 impl Bridge {
@@ -1317,6 +1320,12 @@ impl Bridge {
         {
             self.sent.pop_front();
         }
+        let dot = dots::DotSample {
+            time: data.sample_time,
+            gaze: sample.gaze,
+            independent: self.settings.independent_eyes,
+        };
+        self.dots.send(self.settings.gaze_debug_dots, &dot);
         if let Some(capture) = &mut self.capture {
             let gaze = [sample.raw_gaze[4], sample.raw_gaze[5]];
             let eye_x = [sample.raw_gaze[0], sample.raw_gaze[2]];
@@ -1470,6 +1479,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         sent: VecDeque::new(),
         capture: None,
         capture_result: None,
+        dots: dots::DotStream::new(status::status_path().parent().unwrap_or(Path::new("/tmp"))),
     };
     let mut status_file = StatusFile::new(status::status_path());
     let mut source = EyeSource::open()?;

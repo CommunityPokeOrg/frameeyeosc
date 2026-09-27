@@ -81,3 +81,22 @@ void renderTarget(const FontSet& fonts, gaze_fit::TargetStyle style, const std::
     cairo_destroy(cr);
     cairo_surface_destroy(surface);
 }
+
+void renderGazeDot(DotKind kind, std::vector<uint8_t>& rgba, const std::string& pngPath) {
+    const int size = kDotImageSize;
+    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, size, size);
+    cairo_t* cr = cairo_create(surface);
+    const double c = size / 2.0;
+    const Color fill = kind == DotKind::Left ? kDotLeft : (kind == DotKind::Right ? kDotRight : kDotBoth);
+    cairo_set_source_rgb(cr, kBg.r, kBg.g, kBg.b);
+    cairo_arc(cr, c, c, size * 0.46, 0, 2 * M_PI);
+    cairo_fill(cr);
+    cairo_set_source_rgb(cr, fill.r, fill.g, fill.b);
+    cairo_arc(cr, c, c, size * 0.34, 0, 2 * M_PI);
+    cairo_fill(cr);
+    cairo_surface_flush(surface);
+    surfaceToRgba(surface, rgba);
+    if (!pngPath.empty()) cairo_surface_write_to_png(surface, pngPath.c_str());
+    cairo_destroy(cr);
+    cairo_surface_destroy(surface);
+}

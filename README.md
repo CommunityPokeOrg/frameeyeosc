@@ -78,7 +78,7 @@ From 0.4.0 on, the panel's "Update" button does the update. The panel's Advanced
 - Gaze: smoothing on or off, light / medium / strong presets and the three filter values, deadzone, holding the gaze while blinking, per-eye gaze, skipping unreliable gaze, removing one-sample glitches.
 - Eye fit: one button that fits your gaze and eyelids in about 30 seconds (see [Eye fit](#eye-fit)), re-centering the gaze only, the result with "Reset", and the values by hand under "Fine-tune".
 - Eyelids: auto calibration and its learned values, per-eye scales, the four openness marks drawn over each eye's live openness (blink and open wide to set them), left/right sync, keeping blinks visible (hold time and closing both eyes), eyelid smoothing.
-- Advanced: parameter prefix, the version with checking for and installing updates, file locations, options locked by the command line.
+- Advanced: parameter prefix, the version with checking for and installing updates, showing gaze dots (debug), file locations, options locked by the command line.
 
 The panel writes `config.json` and reads the status file. To pick its default language, it also reads the `language` line of Steam's `~/.steam/registry.vdf` once at startup (read only). For updates it runs `~/.local/share/frameeyeosc/frame-update.sh` (see above). Closing it, quitting it, or not installing it doesn't stop frameeyeosc. While it isn't open on the dashboard it draws nothing. Besides running the update check, the only thing it reads then is the update state file (`~/.cache/frameeyeosc/update-state.json`), about twice a second. The exception is an eye fit: then it also reads the status file and shows the dot with the dashboard closed, until the fit is over. Its "Start with SteamVR" switch enables or disables its systemd user unit (`frameeyeosc-panel.service`). Build notes and debugging options are in [panel/README.md](panel/README.md) (Japanese).
 
@@ -117,6 +117,7 @@ Settings are in `~/.config/frameeyeosc/config.json`. The panel writes it, and yo
 | `gaze_gain_x` / `gaze_gain_up` / `gaze_gain_down` | `--gaze-gain-x` / `--gaze-gain-up` / `--gaze-gain-down` | `1.0` | How far the gaze moves from there, sideways, up and down, from 0.5 to 2. Set by the eye fit |
 | `gaze_offset_x_left` / `_right`, `gaze_gain_x_left` / `_right` | `--gaze-offset-x-left` ... | `null` | Each eye's own sideways zero point and gain, used for the per-eye gaze (`independent_eyes`). Set by the eye fit so that each eye points where it really has to at 2 m (they turn in a little); `null` = use `gaze_offset_x` / `gaze_gain_x`. The up/down gaze is shared by both eyes on the Frame, so there is no per-eye one |
 | `gaze_down_hold_x_deg` | `--gaze-down-hold-x-deg` | `24` | Looking far down, the Frame's sideways gaze jumps (about 19° to the right). Below this many degrees down, the sideways gaze (both eyes and combined) fades into its value from just before, fully held 10° further down. The angle is the tracker's own, before the zero point and gains. Up and down are not affected. `0` turns it off |
+| `gaze_debug_dots` | | `false` | Debug: show a small dot 2 m ahead where the gaze being sent points (one per eye, from each eye, with `independent_eyes`: left cyan, right orange), so you can see what the avatar gets. frameeyeosc then passes every processed sample to the panel over a Unix socket in its status folder; nothing leaves the headset, and nothing is passed while it's off. Hidden during an eye fit |
 | `lid_fit_closed_left` ... `lid_fit_down_right` | | `null` | Each eye's Frame openness with the eyes shut, and open while looking up, straight ahead and down (`closed` / `up` / `open` / `down`, `_left` / `_right`). Set by the eye fit; `null` = not fitted. A fitted eye uses these instead of the learned calibration and `lid_scale_*`, and doesn't close when you look down |
 | `calibration_reset` | | `0` | Increase it to make the eyelid calibration start over |
 | `language` | | Steam's language | Panel language, `"ja"` or `"en"`. Without it, the panel is in Japanese if Steam is set to Japanese and in English otherwise |
@@ -198,6 +199,7 @@ Eyelid calibration is automatic. For the first 20 seconds after you put the head
 
   No eye data is stored, except that each eye fit measurement (an average gaze direction, how much it spread, and each eye's average openness) is logged as one line to the systemd journal, and the eyelid readings of a fit are kept in `config.json`. The latest eye values are in the status file, which is in memory, readable only by you, and overwritten ten times a second; no history is kept.
 - The OSC messages are unencrypted, so other devices on the same network could read them.
+- With "Show gaze dots" on, the gaze being sent also goes to the panel over a Unix socket (`gaze-dots.sock` in the status folder). It stays on the headset and isn't stored.
 
 ## Disclaimer
 

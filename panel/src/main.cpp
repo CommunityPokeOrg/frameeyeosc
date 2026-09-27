@@ -3,6 +3,7 @@
 #include "autostart.h"
 #include "config.h"
 #include "draw.h"
+#include "gaze_dots.h"
 #include "gaze_fit.h"
 #include "i18n.h"
 #include "model.h"
@@ -59,6 +60,8 @@ struct Options {
     int thumbnailSize = 256;
     std::string targetPngPath;    ///< --target-png: the eye fit's target image
     std::string targetStyle = "dot";
+    std::string dotPngPath;       ///< --dot-png: a debug gaze dot image
+    std::string dotKind = "both";
     int targetSeconds = 3;
     double targetProgress = 0.7;
     int targetBench = 0;          ///< --target-bench N: time drawing the target N times
@@ -153,6 +156,8 @@ void printUsage() {
         "  --dump-png PATH       Without OpenVR: draw the panel to a PNG (from the real files) and exit\n"
         "  --thumbnail-png PATH  Draw the dashboard thumbnail (the launcher icon) to a PNG\n"
         "      --thumbnail-size N  Its edge length (default 256)\n"
+        "  --dot-png PATH        Draw a debug gaze dot to a PNG\n"
+        "      --dot-kind both|left|right  Which one (default both)\n"
         "  --target-png PATH     Draw the eye fit's target (the head-locked dot) to a PNG\n"
         "      --target-style dot|close|keep|open  The dot, or the eyes-shut step (words from --language)\n"
         "      --target-seconds N  The countdown on it (default 3; 0 = none)\n"
@@ -213,6 +218,15 @@ bool parseOptions(int argc, char** argv, Options& options) {
         } else if (arg == "--target-png" && hasNext) {
             options.mode = Options::Mode::DumpPng;
             options.targetPngPath = argv[++i];
+        } else if (arg == "--dot-png" && hasNext) {
+            options.mode = Options::Mode::DumpPng;
+            options.dotPngPath = argv[++i];
+        } else if (arg == "--dot-kind" && hasNext) {
+            options.dotKind = argv[++i];
+            if (options.dotKind != "both" && options.dotKind != "left" && options.dotKind != "right") {
+                std::fprintf(stderr, "--dot-kind must be both, left or right: %s\n", options.dotKind.c_str());
+                return false;
+            }
         } else if (arg == "--target-style" && hasNext) {
             options.targetStyle = argv[++i];
             if (options.targetStyle != "dot" && options.targetStyle != "close" && options.targetStyle != "keep" &&
@@ -666,6 +680,14 @@ int runDumpPng(const Options& options) {
             return 1;
         }
         std::printf("Wrote %s (%dx%d)\n", options.pngPath.c_str(), panel.width(), panel.height());
+    }
+    if (!options.dotPngPath.empty()) {
+        const DotKind kind = options.dotKind == "left"    ? DotKind::Left
+                             : options.dotKind == "right" ? DotKind::Right
+                                                          : DotKind::Both;
+        std::vector<uint8_t> rgba;
+        renderGazeDot(kind, rgba, options.dotPngPath);
+        std::printf("Wrote %s (%dx%d)\n", options.dotPngPath.c_str(), kDotImageSize, kDotImageSize);
     }
     if (!options.targetPngPath.empty()) {
         Language language = Language::Ja;
@@ -1295,6 +1317,15 @@ int runOverlay(const Options& options) {
     int targetFrames = 0;           // drawn since the target came up, to log the frame rate
     double targetShownAt = 0.0;
     std::string lastFitState;
+    // The debug gaze dots: their socket, the three dot images (drawn once), which image each overlay has
+    gaze_dots::Receiver dots;
+    std::vector<uint8_t> dotImages[3];
+    for (int kind = 0; kind < 3; ++kind) renderGazeDot(static_cast<DotKind>(kind), dotImages[kind]);
+    int dotImageShown[2] = {-1, -1};
+    bool dotsVisible[2] = {false, false};
+    bool dotsOpenFailed = false;
+    double lastDotAt = 0.0;
+    double dotIpd = gaze_fit::kDefaultIpdM;
     uint64_t drawnAutostart = autostart.snapshot(model.autostart);
     uint64_t drawnUpdate = 0;
     std::string lastSignature;
@@ -1434,6 +1465,58 @@ int runOverlay(const Options& options) {
             }
         }
 
+        // The debug gaze dots: while the switch is on (and no eye fit runs), move a dot to where the gaze frameeyeosc
+        // sends points, as each sample arrives. Only the transform changes; each dot's image is sent once
+        {
+            const bool wanted = model.config.flag(key::kGazeDebugDots) && !fit.active();
+            const auto hideDots = [&]() {
+                for (int i = 0; i < 2; ++i) {
+                    vr.hideDot(i);
+                    dotsVisible[i] = false;
+                }
+            };
+            if (wanted && !dots.isOpen() && !dotsOpenFailed) {
+                const size_t slash = model.statusPath.find_last_of('/');
+                const std::string dir = slash == std::string::npos ? "." : model.statusPath.substr(0, slash);
+                std::string error;
+                if (dots.open(dir + "/" + gaze_dots::kSocketName, error)) {
+                    dotIpd = vr.userIpdMeters();
+                    std::fprintf(stderr, "[dots] listening in %s (IPD %.1f mm)\n", dir.c_str(), dotIpd * 1000);
+                } else {
+                    std::fprintf(stderr, "[dots] %s\n", error.c_str());
+                    dotsOpenFailed = true;
+                }
+            } else if (!wanted && (dots.isOpen() || dotsOpenFailed)) {
+                if (dots.isOpen()) std::fprintf(stderr, "[dots] off\n");
+                dots.close();
+                hideDots();
+                dotsOpenFailed = false;
+            }
+            gaze_dots::Packet packet;
+            if (dots.isOpen() && dots.poll(packet)) {
+                lastDotAt = nowSeconds();
+                const auto place = [&](int index, int eye, DotKind kind, float x, float y) {
+                    const gaze_dots::Pose pose = gaze_dots::dotPose(x, y, eye, dotIpd);
+                    const int image = static_cast<int>(kind);
+                    dotsVisible[index] = vr.showDot(index, pose.position.x, pose.position.y, pose.position.z,
+                                                    pose.yawDeg, pose.pitchDeg, dotImages[image].data(),
+                                                    kDotImageSize, dotImageShown[index] != image);
+                    if (dotsVisible[index]) dotImageShown[index] = image;
+                };
+                if (packet.independent) {
+                    place(0, -1, DotKind::Left, packet.gaze[0], packet.gaze[1]);
+                    place(1, 1, DotKind::Right, packet.gaze[2], packet.gaze[3]);
+                } else {
+                    place(0, 0, DotKind::Both, packet.gaze[4], packet.gaze[5]);
+                    vr.hideDot(1);
+                    dotsVisible[1] = false;
+                }
+            } else if ((dotsVisible[0] || dotsVisible[1]) && nowSeconds() - lastDotAt > gaze_dots::kStaleSec) {
+                // No samples (frameeyeosc stopped, or the eyes aren't tracked): no stale dots
+                hideDots();
+            }
+        }
+
         // Draw only while visible, and only when something changed
         if (visible && (dirty || !wasVisible)) {
             panel.render(model);
@@ -1445,7 +1528,9 @@ int runOverlay(const Options& options) {
             }
         }
         wasVisible = visible;
-        sleepInterruptible(fit.active() ? kFitPollSec : (visible ? kPanelPollSec : kClosedPollSec));
+        // Every display frame while the fit's target or the debug dots are up
+        const bool everyFrame = fit.active() || dots.isOpen();
+        sleepInterruptible(everyFrame ? kFitPollSec : (visible ? kPanelPollSec : kClosedPollSec));
     }
 
     // The same shutdown for SIGTERM / SIGINT, SteamVR quitting, vrserver gone, "close" and "Quit"

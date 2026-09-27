@@ -47,6 +47,10 @@ constexpr Color kOnAccent = hexColor(0x0d1117);       ///< text on an accent fil
 constexpr double kAccentTintAlpha = 0.20;             ///< light accent fill and glow
 constexpr Color kAccentTint = blendColor(kAccent, kCard, kAccentTintAlpha);  ///< light accent fill on a card
 // ---- States (never by color alone; there is always a symbol or a word) ----
+/** The debug gaze dots: combined, left eye (light cyan) and right eye (a darker orange), told apart by lightness too */
+constexpr Color kDotBoth = hexColor(0xe6edf3);
+constexpr Color kDotLeft = hexColor(0x6ee2ff);
+constexpr Color kDotRight = hexColor(0xd9701c);
 constexpr Color kSuccess = hexColor(0x3fb950);    ///< sending
 constexpr Color kSuccessTint = blendColor(kSuccess, kCard, 0.15);
 constexpr Color kDanger = hexColor(0xf85149);     ///< errors, not running

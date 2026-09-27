@@ -111,6 +111,30 @@ public:
     void hideTarget();
 
     /**
+     * Show debug gaze dot `index` (0 or 1): an overlay of its own, fixed to the headset at a pose (head space,
+     * m and degrees). Created the first time it is needed. Only the transform changes from frame to frame; the
+     * image is sent when `newImage` is true (or the dot is new).
+     * @param index 0 or 1
+     * @param x right (m)
+     * @param y up (m)
+     * @param z back (m; ahead is negative)
+     * @param yawDeg turned right, facing back toward the eyes
+     * @param pitchDeg turned up
+     * @param rgba the image, non-premultiplied RGBA
+     * @param size its edge length (px)
+     * @param newImage the image changed since the last call
+     * @return true if it is shown
+     */
+    bool showDot(int index, double x, double y, double z, double yawDeg, double pitchDeg, const uint8_t* rgba, int size,
+                 bool newImage);
+
+    /**
+     * Hide a debug gaze dot.
+     * @param index 0 or 1
+     */
+    void hideDot(int index);
+
+    /**
      * Send the dashboard thumbnail image (once, right after connecting).
      * @param rgba non-premultiplied RGBA
      * @param size side length in px
@@ -158,6 +182,9 @@ private:
     double targetYaw_ = 0.0;
     double targetPitch_ = 0.0;
     bool targetFailed_ = false;     ///< creating it failed; not tried again
+    uint64_t dotHandles_[2] = {0, 0};  ///< the debug gaze dots (0 until first needed)
+    bool dotShown_[2] = {false, false};
+    bool dotFailed_ = false;          ///< creating one failed; not tried again
     int panelHeight_ = 0;
     int vrserverPid_ = -1;
     std::string lastPanelError_;
@@ -166,6 +193,7 @@ private:
     OverlayTexture panelTexture_;
     OverlayTexture thumbnailTexture_;
     OverlayTexture targetTexture_;
+    OverlayTexture dotTextures_[2];
 
     /**
      * Scan /proc once to find the vrserver PID.

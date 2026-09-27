@@ -90,6 +90,8 @@ pub struct Settings {
     pub gaze_offset_x_right: Option<f32>,
     pub gaze_gain_x_left: Option<f32>,
     pub gaze_gain_x_right: Option<f32>,
+    /// Stream each sample's sent gaze to the panel, which shows it as dots (debug). Not a command-line option.
+    pub gaze_debug_dots: bool,
     /// Each eye's Frame openness measured by the panel's eye fit: eyes shut, and open while looking
     /// up, straight ahead and down. None until fitted; see `lid_fit`. Not command-line options.
     pub lid_fit_closed_left: Option<f32>,
@@ -150,6 +152,7 @@ impl Default for Settings {
             gaze_offset_x_right: None,
             gaze_gain_x_left: None,
             gaze_gain_x_right: None,
+            gaze_debug_dots: false,
             lid_fit_closed_left: None,
             lid_fit_closed_right: None,
             lid_fit_up_left: None,

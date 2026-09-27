@@ -26,3 +26,18 @@ constexpr int kTargetImageSize = 256;
  */
 void renderTarget(const FontSet& fonts, gaze_fit::TargetStyle style, const std::string& label, int seconds,
                   double progress, std::vector<uint8_t>& rgba, const std::string& pngPath = "");
+
+/** The debug gaze dot image's edge length (px). */
+constexpr int kDotImageSize = 64;
+
+/** Which debug gaze dot. */
+enum class DotKind { Both, Left, Right };
+
+/**
+ * Draw a debug gaze dot: a filled circle with a dark edge (combined: light gray, left eye: light cyan, right eye:
+ * darker orange).
+ * @param kind which dot
+ * @param rgba where to write un-premultiplied RGBA (kDotImageSize squared)
+ * @param pngPath also save a PNG here if not empty
+ */
+void renderGazeDot(DotKind kind, std::vector<uint8_t>& rgba, const std::string& pngPath = "");

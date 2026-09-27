@@ -75,6 +75,7 @@ constexpr const char* kGazeOffsetXLeft = "gaze_offset_x_left";
 constexpr const char* kGazeOffsetXRight = "gaze_offset_x_right";
 constexpr const char* kGazeGainXLeft = "gaze_gain_x_left";
 constexpr const char* kGazeGainXRight = "gaze_gain_x_right";
+constexpr const char* kGazeDebugDots = "gaze_debug_dots";
 constexpr const char* kLidFitClosedLeft = "lid_fit_closed_left";
 constexpr const char* kLidFitClosedRight = "lid_fit_closed_right";
 constexpr const char* kLidFitUpLeft = "lid_fit_up_left";
