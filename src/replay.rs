@@ -223,6 +223,10 @@ struct Metrics {
     lid_ahead: f64,
     // Median |sent combined x| in degrees while looking FAR_DOWN_DEGREES down or more.
     far_down_x: f64,
+    // In the same fixation windows as `jitter`: the median spread of each eye's sent gaze, and the
+    // median left minus right sent x (vergence; positive when the eyes turn toward each other), in degrees.
+    eye_jitter: f64,
+    vergence: f64,
 }
 
 fn median(values: &mut [f64]) -> f64 {
@@ -323,7 +327,12 @@ fn metrics(samples: &[EyeData], sent: &[Sample]) -> Metrics {
             .sum();
         variance.sqrt()
     };
+    let eye_degrees = |eye: usize| {
+        move |sample: &Sample| [sample.gaze[eye * 2], sample.gaze[eye * 2 + 1]].map(|value| f64::from(value * GAZE_DEGREES))
+    };
     let mut spreads = Vec::new();
+    let mut eye_spreads = Vec::new();
+    let mut vergences = Vec::new();
     let mut window: Vec<usize> = Vec::new();
     let mut window_start = 0.0;
     for i in 0..n {
@@ -341,6 +350,9 @@ fn metrics(samples: &[EyeData], sent: &[Sample]) -> Metrics {
         if times[i] - window_start >= JITTER_WINDOW {
             if spread(&window, &raw_degrees) < FIXATION_SPREAD {
                 spreads.push(spread(&window, &degrees));
+                eye_spreads.push(spread(&window, &eye_degrees(0)));
+                eye_spreads.push(spread(&window, &eye_degrees(1)));
+                vergences.extend(window.iter().map(|i| f64::from((sent[*i].gaze[0] - sent[*i].gaze[2]) * GAZE_DEGREES)));
             }
             window.clear();
         }
@@ -417,6 +429,8 @@ fn metrics(samples: &[EyeData], sent: &[Sample]) -> Metrics {
         lid_down,
         lid_ahead,
         far_down_x,
+        eye_jitter: median(&mut eye_spreads),
+        vergence: median(&mut vergences),
     }
 }
 
@@ -526,6 +540,8 @@ fn report(input: &Path, samples: &[EyeData], skipped: usize, settings: &Settings
     let lids = |m: &Metrics| format!("{:.2} / {:.2}", m.lid_down, m.lid_ahead);
     row(&mut text, "eyelid looking down / ahead (median)", lids(before), lids(after));
     row(&mut text, "closing while looking down (stretches)", before.down_closes.to_string(), after.down_closes.to_string());
+    row(&mut text, "each eye's jitter while fixating (deg)", format!("{:.3}", before.eye_jitter), format!("{:.3}", after.eye_jitter));
+    row(&mut text, "left - right while fixating (median deg)", format!("{:+.2}", before.vergence), format!("{:+.2}", after.vergence));
     let far = |m: &Metrics| format!("{:.1}", m.far_down_x);
     row(&mut text, "sideways gaze looking 32°+ down (median deg)", far(before), far(after));
     match estimate_lid_fit(samples) {

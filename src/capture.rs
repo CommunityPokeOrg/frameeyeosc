@@ -34,6 +34,9 @@ pub struct CaptureResult {
     pub x: Option<f32>,
     pub y: Option<f32>,
     pub spread: Option<f32>,
+    /// Each eye's own sideways gaze averages (left, right); None like x.
+    pub x_left: Option<f32>,
+    pub x_right: Option<f32>,
     /// Each eye's average openness; None without samples.
     pub openness: Option<[f32; 2]>,
     /// Samples that went into the average.
@@ -48,6 +51,7 @@ pub struct Capture {
     first_time: Option<f64>,
     sum: [f64; 2],
     sum_squares: [f64; 2],
+    eye_x: [f64; 2],
     openness: [f64; 2],
     samples: u32,
 }
@@ -61,24 +65,29 @@ impl Capture {
             first_time: None,
             sum: [0.0; 2],
             sum_squares: [0.0; 2],
+            eye_x: [0.0; 2],
             openness: [0.0; 2],
             samples: 0,
         }
     }
 
-    /// Take one sample's combined raw gaze and openness; `usable` is false while the eyes are shut
-    /// or the gaze is held (ignored by the eyes-shut capture). Returns true once the capture is over.
-    pub fn add(&mut self, time: f64, gaze: [f32; 2], openness: [f32; 2], usable: bool) -> bool {
+    /// Take one sample's combined raw gaze, each eye's raw x and openness; `usable` is false while the
+    /// eyes are shut or the gaze is held (ignored by the eyes-shut capture). Returns true once the
+    /// capture is over.
+    pub fn add(&mut self, time: f64, gaze: [f32; 2], eye_x: [f32; 2], openness: [f32; 2], usable: bool) -> bool {
         let elapsed = time - *self.first_time.get_or_insert(time);
         if elapsed >= LENGTH {
             return true;
         }
-        let finite = gaze.iter().chain(&openness).all(|value| value.is_finite());
+        let finite = gaze.iter().chain(&eye_x).chain(&openness).all(|value| value.is_finite());
         if elapsed >= SKIP && (usable || self.closed) && finite {
             for ((sum, squares), value) in self.sum.iter_mut().zip(&mut self.sum_squares).zip(gaze) {
                 let value = f64::from(value);
                 *sum += value;
                 *squares += value * value;
+            }
+            for (sum, value) in self.eye_x.iter_mut().zip(eye_x) {
+                *sum += f64::from(value);
             }
             for (sum, value) in self.openness.iter_mut().zip(openness) {
                 *sum += f64::from(value);
@@ -108,6 +117,8 @@ impl Capture {
             x: gaze.then_some(mean[0] as f32),
             y: gaze.then_some(mean[1] as f32),
             spread: gaze.then_some(variance.sqrt() as f32),
+            x_left: gaze.then_some((self.eye_x[0] / count) as f32),
+            x_right: gaze.then_some((self.eye_x[1] / count) as f32),
             openness: known.then(|| self.openness.map(|sum| (sum / count) as f32)),
             samples: if state == CaptureState::Done { self.samples } else { 0 },
         }
@@ -120,8 +131,10 @@ impl CaptureResult {
         let Some([left, right]) = self.openness else {
             return format!("Gaze capture {} ({}): no usable samples", self.id, self.target);
         };
-        let gaze = match (self.x, self.y, self.spread) {
-            (Some(x), Some(y), Some(spread)) => format!("x {x:+.4}, y {y:+.4}, spread {spread:.4}, "),
+        let gaze = match (self.x, self.y, self.spread, self.x_left, self.x_right) {
+            (Some(x), Some(y), Some(spread), Some(left), Some(right)) => {
+                format!("x {x:+.4}, y {y:+.4}, spread {spread:.4}, eye x L {left:+.4} R {right:+.4}, ")
+            }
             _ => String::new(),
         };
         format!(
@@ -159,7 +172,7 @@ mod tests {
             };
             let blinking = (90..100).contains(&i);
             let (gaze, openness) = if blinking { ([-1.0, -1.0], [0.1, 0.1]) } else { (gaze, [0.9, 0.8]) };
-            over = capture.add(time, gaze, openness, !blinking);
+            over = capture.add(time, gaze, [gaze[0] + 0.02, gaze[0] - 0.02], openness, !blinking);
             if over {
                 break;
             }
@@ -172,6 +185,7 @@ mod tests {
         assert!((result.x.unwrap() - 0.10).abs() < 1e-3 && (result.y.unwrap() - 0.30).abs() < 1e-3);
         let [left, right] = result.openness.unwrap();
         assert!((left - 0.9).abs() < 1e-4 && (right - 0.8).abs() < 1e-4);
+        assert!((result.x_left.unwrap() - 0.12).abs() < 1e-3 && (result.x_right.unwrap() - 0.08).abs() < 1e-3);
         let spread = result.spread.unwrap();
         // Each axis is off by 0.01 either way.
         assert!((spread - 0.0002_f32.sqrt()).abs() < 1e-4, "{spread}");
@@ -184,7 +198,7 @@ mod tests {
     fn nothing_usable_reports_no_average() {
         let mut capture = capture();
         for i in 0..200 {
-            if capture.add(f64::from(i) / 90.0, [0.0, 0.0], [0.2, 0.2], false) {
+            if capture.add(f64::from(i) / 90.0, [0.0, 0.0], [0.0, 0.0], [0.2, 0.2], false) {
                 break;
             }
         }
@@ -203,13 +217,13 @@ mod tests {
         });
         for i in 0..200 {
             // The gaze is held (not usable) all along, as it is with the eyes shut.
-            if capture.add(f64::from(i) / 90.0, [0.5, -0.5], [0.15, 0.26], false) {
+            if capture.add(f64::from(i) / 90.0, [0.5, -0.5], [0.5, 0.5], [0.15, 0.26], false) {
                 break;
             }
         }
         let result = capture.result(CaptureState::Done);
         assert!(result.samples >= 134, "{}", result.samples);
-        assert_eq!((result.x, result.y, result.spread), (None, None, None));
+        assert_eq!((result.x, result.y, result.spread, result.x_left), (None, None, None, None));
         let [left, right] = result.openness.unwrap();
         assert!((left - 0.15).abs() < 1e-4 && (right - 0.26).abs() < 1e-4);
         assert_eq!(result.log_line(), format!("Gaze capture 9 (closed): openness L 0.150 R 0.260 from {} samples", result.samples));

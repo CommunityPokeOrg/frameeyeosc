@@ -83,6 +83,13 @@ pub struct Settings {
     /// Degrees below straight ahead (the tracker's own, before the zero point and gains) from where the
     /// sideways gaze is held; 0 disables. See `Smoother::hold_down_x`.
     pub gaze_down_hold_x_deg: f32,
+    /// Each eye's own sideways zero point and gain, for the per-eye gaze (--independent-eyes). None
+    /// uses gaze_offset_x / gaze_gain_x. The Frame shares the up/down gaze between the eyes, so there
+    /// is no per-eye y.
+    pub gaze_offset_x_left: Option<f32>,
+    pub gaze_offset_x_right: Option<f32>,
+    pub gaze_gain_x_left: Option<f32>,
+    pub gaze_gain_x_right: Option<f32>,
     /// Each eye's Frame openness measured by the panel's eye fit: eyes shut, and open while looking
     /// up, straight ahead and down. None until fitted; see `lid_fit`. Not command-line options.
     pub lid_fit_closed_left: Option<f32>,
@@ -139,6 +146,10 @@ impl Default for Settings {
             gaze_gain_up: 1.0,
             gaze_gain_down: 1.0,
             gaze_down_hold_x_deg: 28.0,
+            gaze_offset_x_left: None,
+            gaze_offset_x_right: None,
+            gaze_gain_x_left: None,
+            gaze_gain_x_right: None,
             lid_fit_closed_left: None,
             lid_fit_closed_right: None,
             lid_fit_up_left: None,
@@ -220,11 +231,14 @@ impl Settings {
             self.gaze_down_hold_x_deg,
         ];
         let scales = [self.lid_scale_left, self.lid_scale_right];
+        let eye_offsets = [self.gaze_offset_x_left, self.gaze_offset_x_right];
+        let eye_gains = [self.gaze_gain_x_left, self.gaze_gain_x_right];
         let lid_fit = self.lid_fit_readings();
         let fitted = lid_fit.iter().flatten().flatten();
         if !numbers
             .iter()
             .chain(scales.iter().flatten())
+            .chain(eye_offsets.iter().chain(&eye_gains).flatten())
             .chain(fitted.clone())
             .all(|value| value.is_finite())
         {
@@ -268,6 +282,12 @@ impl Settings {
         }
         if !(GAZE_OFFSET_RANGE.contains(&self.gaze_offset_x) && GAZE_OFFSET_RANGE.contains(&self.gaze_offset_y)) {
             return Err("gaze_offset_x/y must be between -0.5 and 0.5".into());
+        }
+        if !eye_offsets.iter().flatten().all(|offset| GAZE_OFFSET_RANGE.contains(offset)) {
+            return Err("gaze_offset_x_left/right must be between -0.5 and 0.5".into());
+        }
+        if !eye_gains.iter().flatten().all(|gain| GAZE_GAIN_RANGE.contains(gain)) {
+            return Err("gaze_gain_x_left/right must be between 0.5 and 2".into());
         }
         let gains = [self.gaze_gain_x, self.gaze_gain_up, self.gaze_gain_down];
         if !gains.iter().all(|gain| GAZE_GAIN_RANGE.contains(gain)) {
@@ -433,7 +453,11 @@ pub fn apply_args(settings: &mut Settings, args: &Args, given: &HashSet<String>)
         gaze_gain_x,
         gaze_gain_up,
         gaze_gain_down,
-        gaze_down_hold_x_deg
+        gaze_down_hold_x_deg,
+        gaze_offset_x_left,
+        gaze_offset_x_right,
+        gaze_gain_x_left,
+        gaze_gain_x_right
     );
     // "/" alone means no prefix, like "".
     let prefix = settings.prefix.trim_end_matches('/');
@@ -655,6 +679,9 @@ mod tests {
         assert!(merged(r#"{"gaze_offset_x": 0.5, "gaze_gain_down": 0.5}"#, &[]).is_ok());
         assert!(merged(r#"{"gaze_down_hold_x_deg": -1}"#, &[]).is_err());
         assert!(merged(r#"{"gaze_down_hold_x_deg": 0}"#, &[]).is_ok());
+        assert!(merged(r#"{"gaze_offset_x_left": 0.6}"#, &[]).is_err());
+        assert!(merged(r#"{"gaze_gain_x_right": 3}"#, &[]).is_err());
+        assert!(merged(r#"{"gaze_offset_x_left": -0.02, "gaze_gain_x_right": 1.1}"#, &[]).is_ok());
         let fitted = r#""lid_fit_closed_left": 0.15, "lid_fit_up_left": 0.93, "lid_fit_open_left": 0.92,
             "lid_fit_down_left": 0.78"#;
         assert!(merged(&format!("{{{fitted}}}"), &[]).is_ok());

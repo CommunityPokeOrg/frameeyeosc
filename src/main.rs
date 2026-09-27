@@ -215,6 +215,18 @@ struct Args {
     /// where the Frame's x jumps; 0 disables
     #[arg(long, default_value_t = 28.0)]
     gaze_down_hold_x_deg: f32,
+    /// The left eye's own sideways zero point for per-eye gaze [default: --gaze-offset-x]
+    #[arg(long, allow_negative_numbers = true)]
+    gaze_offset_x_left: Option<f32>,
+    /// The right eye's own sideways zero point for per-eye gaze [default: --gaze-offset-x]
+    #[arg(long, allow_negative_numbers = true)]
+    gaze_offset_x_right: Option<f32>,
+    /// The left eye's own sideways gain for per-eye gaze [default: --gaze-gain-x]
+    #[arg(long)]
+    gaze_gain_x_left: Option<f32>,
+    /// The right eye's own sideways gain for per-eye gaze [default: --gaze-gain-x]
+    #[arg(long)]
+    gaze_gain_x_right: Option<f32>,
     /// Settings file, re-read while running; options given here win over it
     /// [default: ~/.config/frameeyeosc/config.json]
     #[arg(long)]
@@ -1019,12 +1031,18 @@ fn gaze_angles([x, y, z]: [f32; 3]) -> [f32; 2] {
 }
 
 /// Move each gaze pair's zero point to --gaze-offset-x/y and scale how far it goes from there;
-/// up and down have their own gains. The defaults leave the gaze exactly as it is.
+/// up and down have their own gains, and each eye's x may have its own zero point and gain (the
+/// combined x always uses the shared ones). The defaults leave the gaze exactly as it is.
 fn correct_gaze(angles: [f32; 6], settings: &Settings) -> [f32; 6] {
+    let eye_offsets = [settings.gaze_offset_x_left, settings.gaze_offset_x_right];
+    let eye_gains = [settings.gaze_gain_x_left, settings.gaze_gain_x_right];
     std::array::from_fn(|i| {
         let value = angles[i];
         let corrected = if i % 2 == 0 {
-            (value - settings.gaze_offset_x) * settings.gaze_gain_x
+            let eye = i / 2;
+            let offset = eye_offsets.get(eye).copied().flatten().unwrap_or(settings.gaze_offset_x);
+            let gain = eye_gains.get(eye).copied().flatten().unwrap_or(settings.gaze_gain_x);
+            (value - offset) * gain
         } else {
             let from_center = value - settings.gaze_offset_y;
             let gain = if from_center >= 0.0 {
@@ -1301,7 +1319,8 @@ impl Bridge {
         }
         if let Some(capture) = &mut self.capture {
             let gaze = [sample.raw_gaze[4], sample.raw_gaze[5]];
-            if capture.add(data.sample_time, gaze, data.openness, !sample.gaze_held) {
+            let eye_x = [sample.raw_gaze[0], sample.raw_gaze[2]];
+            if capture.add(data.sample_time, gaze, eye_x, data.openness, !sample.gaze_held) {
                 self.finish_capture();
             }
         }
@@ -1767,6 +1786,31 @@ mod tests {
         assert!(!sent[9].gaze_held && sent[10].gaze_held && !sent[12].gaze_held);
         let raw = run(&Settings { raw: true, ..settings() }, &readings);
         assert!(raw[10].gaze_held && !raw[12].gaze_held);
+    }
+
+    #[test]
+    fn each_eye_may_have_its_own_sideways_fit() {
+        let angles = [0.2, 0.1, -0.2, 0.1, 0.0, 0.1];
+        let per_eye = Settings {
+            gaze_offset_x: 0.01,
+            gaze_gain_x: 2.0,
+            gaze_offset_x_left: Some(0.1),
+            gaze_gain_x_right: Some(0.5),
+            ..settings()
+        };
+        let corrected = correct_gaze(angles, &per_eye);
+        // Left: its own offset, the shared gain; right: the shared offset, its own gain; combined: shared.
+        let expected = [0.2, 0.1, -0.105, 0.1, -0.02, 0.1];
+        for (value, expected) in corrected.iter().zip(expected) {
+            assert!((value - expected).abs() < 1e-6, "{corrected:?}");
+        }
+        // Unset per-eye values change nothing.
+        let shared = Settings {
+            gaze_offset_x: 0.01,
+            gaze_gain_x: 2.0,
+            ..settings()
+        };
+        assert_eq!(correct_gaze(angles, &shared)[0], (0.2 - 0.01) * 2.0);
     }
 
     #[test]
