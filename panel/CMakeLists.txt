@@ -31,11 +31,13 @@ add_executable(frameeyeosc-panel
   src/command.cpp
   src/config.cpp
   src/draw.cpp
+  src/gaze_fit.cpp
   src/i18n.cpp
   src/json.cpp
   src/model.cpp
   src/panel.cpp
   src/status.cpp
+  src/target.cpp
   src/theme.cpp
   src/vk_texture.cpp
   src/vr_overlay.cpp
@@ -58,3 +60,10 @@ set_target_properties(frameeyeosc-panel PROPERTIES
 )
 
 install(TARGETS frameeyeosc-panel RUNTIME DESTINATION bin)
+
+# The gaze fit's logic, tested without OpenVR: panel/build/gaze-fit-test (or ctest)
+add_executable(gaze-fit-test tests/gaze_fit_test.cpp src/gaze_fit.cpp src/status.cpp src/json.cpp)
+target_include_directories(gaze-fit-test PRIVATE src)
+target_compile_options(gaze-fit-test PRIVATE -Wall -Wextra)
+enable_testing()
+add_test(NAME gaze-fit COMMAND gaze-fit-test)

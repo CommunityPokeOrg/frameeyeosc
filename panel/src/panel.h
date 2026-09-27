@@ -43,6 +43,10 @@ enum class PanelAction {
     UpdateConfirm,     ///< install it (the prompt closes itself)
     UpdateCancel,
     UpdateDismiss,     ///< close the "installed" / "failed" message
+    FitCenter,         ///< gaze fit: set the zero point from the center dot (the caller starts the session)
+    FitFive,           ///< gaze fit: zero point and gains from five dots
+    FitStop,           ///< gaze fit: stop waiting for the dashboard to close
+    FitReset,          ///< gaze_offset_x/y = 0, gaze_gain_x/up/down = 1
 };
 
 /** A button: its action, the config key it changes and an argument. */
@@ -57,8 +61,8 @@ struct PanelHit {
     bool operator!=(const PanelHit& other) const { return !(*this == other); }
 };
 
-/** The tabs. */
-enum class PanelTab { Basic, Gaze, Lids, Advanced };
+/** The tabs, in the order they are shown. */
+enum class PanelTab { Basic, Gaze, GazeFit, Lids, Advanced };
 
 /**
  * Draws the panel image and finds the button under the laser pointer.
@@ -253,6 +257,30 @@ private:
      * @param view the settings shown
      */
     void drawGaze(const Pen& pen, const UiText& t, const SettingsView& view);
+
+    /**
+     * The Gaze fit tab: calibrating the gaze zero point and gains, and setting them by hand.
+     * @param pen drawing tools
+     * @param t texts
+     * @param model the model
+     * @param view the settings shown
+     */
+    void drawGazeFit(const Pen& pen, const UiText& t, const PanelModel& model, const SettingsView& view);
+
+    /**
+     * A plain button (or an accent one) with a centered label.
+     * @param pen drawing tools
+     * @param x left
+     * @param y top
+     * @param w width
+     * @param h height
+     * @param label the label
+     * @param hit what it does
+     * @param usable whether it can be pressed
+     * @param accent accent fill
+     */
+    void drawButton(const Pen& pen, double x, double y, double w, double h, const std::string& label,
+                    const PanelHit& hit, bool usable, bool accent);
 
     /**
      * The Eyelids tab.

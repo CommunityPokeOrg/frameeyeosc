@@ -51,6 +51,7 @@ struct UiText {
     // Tabs
     const char* tabBasic;
     const char* tabGaze;
+    const char* tabGazeFit;
     const char* tabLids;
     const char* tabAdvanced;
 
@@ -111,6 +112,49 @@ struct UiText {
     const char* hintQuality;
     const char* rowDespike;
     const char* hintDespike;
+
+    // Gaze fit tab
+    const char* rowFit;
+    const char* hintFit;
+    const char* fitCenter;           ///< button: set the zero point from the center dot
+    const char* fitFive;             ///< button: five dots
+    const char* fitStop;
+    const char* fitIntro;            ///< before any run
+    const char* fitNeedsRunning;
+    const char* fitLocked;
+    const char* fitWaiting;          ///< "Close the dashboard to start"
+    const char* fitWaitingCenter;
+    const char* fitWaitingFive;
+    const char* fitRunningFormat;    ///< "Measuring: %s (%d of %d)"
+    const char* fitRetryFormat;      ///< appended: ", try %d"
+    const char* fitDoneCenter;
+    const char* fitDoneFive;
+    const char* fitDoneCenterFormat; ///< the two zero points
+    const char* fitDoneFormat;       ///< the zero points and the three gains
+    const char* fitFailed;
+    const char* failCancelled;
+    const char* failWaitTimedOut;
+    const char* failNotRunning;
+    const char* failNoResult;
+    const char* failUnsteadyFormat;  ///< %s = the point
+    const char* failNoMovementFormat;
+    const char* failWrite;
+    const char* pointCenter;
+    const char* pointUp;
+    const char* pointDown;
+    const char* pointLeft;
+    const char* pointRight;
+    const char* rowOffset;
+    const char* hintOffset;
+    const char* rowGain;
+    const char* hintGain;
+    const char* capLeftRight;
+    const char* capUpDown;
+    const char* capUp;
+    const char* capDown;
+    const char* rowFitReset;
+    const char* hintFitReset;
+    const char* fitReset;
 
     // Lids tab
     const char* rowCalibration;

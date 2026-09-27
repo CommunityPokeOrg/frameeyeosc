@@ -10,6 +10,7 @@
 
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -24,6 +25,38 @@ constexpr const char* kDashboardName = "Eye";
 constexpr float kDashboardWidthM = 2.8f;
 // On shutdown, how long to wait after clearing the overlay before VR_Shutdown (about 36 frames at 90Hz)
 constexpr int kShutdownWaitMs = 400;
+// The gaze fit's target: an ordinary (not dashboard) overlay fixed to the headset
+constexpr const char* kTargetKey = "sasaken.frameeyeosc-panel.target";
+constexpr const char* kTargetName = "Eye target";
+// 2 m ahead and 0.3 m wide (about 8.6 degrees), so the eyes point about where the head-relative direction says
+constexpr double kTargetDistanceM = 2.0;
+constexpr float kTargetWidthM = 0.3f;
+
+/**
+ * The transform that puts an overlay `distance` ahead of the headset, turned `yawDeg` right and `pitchDeg` up,
+ * facing the eyes. OpenVR's head space has +X right, +Y up and -Z ahead.
+ * @param yawDeg degrees to the right
+ * @param pitchDeg degrees up
+ * @param distance meters
+ * @return the transform
+ */
+vr::HmdMatrix34_t headRelativeTransform(double yawDeg, double pitchDeg, double distance) {
+    // Rotate about +Y by -yaw (to the right), then about +X by pitch (up)
+    const double yaw = -yawDeg * M_PI / 180.0;
+    const double pitch = pitchDeg * M_PI / 180.0;
+    const double cy = std::cos(yaw);
+    const double sy = std::sin(yaw);
+    const double cp = std::cos(pitch);
+    const double sp = std::sin(pitch);
+    const double rotation[3][3] = {{cy, sy * sp, sy * cp}, {0.0, cp, -sp}, {-sy, cy * sp, cy * cp}};
+    vr::HmdMatrix34_t m {};
+    for (int row = 0; row < 3; ++row) {
+        for (int col = 0; col < 3; ++col) m.m[row][col] = static_cast<float>(rotation[row][col]);
+        // The overlay sits at rotation * (0, 0, -distance)
+        m.m[row][3] = static_cast<float>(-distance * rotation[row][2]);
+    }
+    return m;
+}
 
 /**
  * Return the overlay error name.
@@ -165,10 +198,18 @@ void VrOverlay::shutdown() {
         logShutdownStep("ClearOverlayTexture(panel)", overlay->ClearOverlayTexture(dashboardHandle_));
         logShutdownStep("ClearOverlayTexture(thumbnail)", overlay->ClearOverlayTexture(thumbnailHandle_));
     }
-    // 2) Destroy the overlay (the thumbnail goes away along with the panel)
+    if (targetHandle_ != 0) {
+        logShutdownStep("HideOverlay(target)", overlay->HideOverlay(targetHandle_));
+        logShutdownStep("ClearOverlayTexture(target)", overlay->ClearOverlayTexture(targetHandle_));
+    }
+    // 2) Destroy the overlays (the thumbnail goes away along with the panel)
     if (dashboardHandle_ != 0) logShutdownStep("DestroyOverlay(panel)", overlay->DestroyOverlay(dashboardHandle_));
+    if (targetHandle_ != 0) logShutdownStep("DestroyOverlay(target)", overlay->DestroyOverlay(targetHandle_));
     dashboardHandle_ = 0;
     thumbnailHandle_ = 0;
+    targetHandle_ = 0;
+    targetShown_ = false;
+    targetPlaced_ = false;
 
     // 3) Wait a few compositor frames for it to drop the cleared texture
     std::this_thread::sleep_for(std::chrono::milliseconds(kShutdownWaitMs));
@@ -180,6 +221,7 @@ void VrOverlay::shutdown() {
     std::fprintf(stderr, "[VR] shutdown: VR_Shutdown done\n");
 
     // 5) Destroy the Vulkan images and device
+    targetTexture_.destroy();
     thumbnailTexture_.destroy();
     panelTexture_.destroy();
     vulkan_.destroy();
@@ -244,6 +286,57 @@ void VrOverlay::showPanel() {
     // No return value; whether it actually opened shows up later via IsOverlayVisible / VREvent_OverlayShown
     vr::VROverlay()->ShowDashboard(kDashboardKey);
     std::fprintf(stderr, "[VR] called ShowDashboard(%s)\n", kDashboardKey);
+}
+
+bool VrOverlay::dashboardVisible() const {
+    return connected_ && vr::VROverlay()->IsDashboardVisible();
+}
+
+bool VrOverlay::showTarget(double yawDeg, double pitchDeg, const uint8_t* rgba, int size) {
+    if (!connected_ || targetFailed_) return false;
+    vr::IVROverlay* overlay = vr::VROverlay();
+    std::string message;
+    if (targetHandle_ == 0) {
+        vr::VROverlayHandle_t handle = vr::k_ulOverlayHandleInvalid;
+        const vr::EVROverlayError error = overlay->CreateOverlay(kTargetKey, kTargetName, &handle);
+        std::fprintf(stderr, "[VR] CreateOverlay(%s) -> %s\n", kTargetKey, overlayErrorName(error));
+        if (error != vr::VROverlayError_None) {
+            targetFailed_ = true;
+            return false;
+        }
+        targetHandle_ = handle;
+        checkOverlay("SetOverlayWidthInMeters(target)", overlay->SetOverlayWidthInMeters(handle, kTargetWidthM));
+        if (!targetTexture_.create(vulkan_, size, size, message)) {
+            std::fprintf(stderr, "[Vulkan] can't create the target texture: %s\n", message.c_str());
+            targetFailed_ = true;
+            return false;
+        }
+    }
+    if (!targetTexture_.update(targetHandle_, rgba, message)) {
+        std::fprintf(stderr, "[VR] can't send the target: %s\n", message.c_str());
+        return false;
+    }
+    if (!targetPlaced_ || targetYaw_ != yawDeg || targetPitch_ != pitchDeg) {
+        const vr::HmdMatrix34_t transform = headRelativeTransform(yawDeg, pitchDeg, kTargetDistanceM);
+        const vr::EVROverlayError error =
+            overlay->SetOverlayTransformTrackedDeviceRelative(targetHandle_, vr::k_unTrackedDeviceIndex_Hmd, &transform);
+        if (!checkOverlay("SetOverlayTransformTrackedDeviceRelative(target)", error)) return false;
+        targetYaw_ = yawDeg;
+        targetPitch_ = pitchDeg;
+        targetPlaced_ = true;
+        std::fprintf(stderr, "[VR] target at %.0f deg right, %.0f deg up\n", yawDeg, pitchDeg);
+    }
+    if (!targetShown_) {
+        if (!checkOverlay("ShowOverlay(target)", overlay->ShowOverlay(targetHandle_))) return false;
+        targetShown_ = true;
+    }
+    return true;
+}
+
+void VrOverlay::hideTarget() {
+    if (!connected_ || targetHandle_ == 0 || !targetShown_) return;
+    checkOverlay("HideOverlay(target)", vr::VROverlay()->HideOverlay(targetHandle_));
+    targetShown_ = false;
 }
 
 bool VrOverlay::submitThumbnail(const uint8_t* rgba, int size) {

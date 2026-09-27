@@ -18,6 +18,7 @@ sh vendor/frame-updater/verify.sh
 "$cargo" build --release
 cmake -G Ninja -S panel -B panel/build -DCMAKE_BUILD_TYPE=Release
 ninja -C panel/build
+panel/build/gaze-fit-test
 
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT

@@ -4,6 +4,7 @@
 
 #include "autostart.h"
 #include "config.h"
+#include "gaze_fit.h"
 #include "i18n.h"
 #include "status.h"
 #include "update_check.h"
@@ -22,6 +23,7 @@ struct PanelModel {
     bool panelErrorBroken = false;  ///< that failure was because config.json is broken
     Language language = Language::Ja;
     frame_updater::UpdateStatus update;  ///< new-release check and install (see frame-updater)
+    gaze_fit::View fit;          ///< the gaze fit session (Gaze fit tab)
 };
 
 /**

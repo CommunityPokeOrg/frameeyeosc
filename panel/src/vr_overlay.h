@@ -1,4 +1,4 @@
-// Connection to OpenVR, and the dashboard panel (plus its thumbnail).
+// Connection to OpenVR, the dashboard panel (plus its thumbnail), and the gaze fit's head-locked target.
 #pragma once
 
 #include "vk_texture.h"
@@ -24,7 +24,8 @@ struct VrEvents {
 
 /**
  * Wraps the connection to OpenVR as an overlay app.
- * Never changes SteamVR settings; only creates and shows a dashboard panel.
+ * Never changes SteamVR settings; only creates and shows a dashboard panel, and during a gaze fit a small target
+ * overlay fixed to the headset.
  * Images are sent as Vulkan textures via SetOverlayTexture rather than SetOverlayRaw.
  */
 class VrOverlay {
@@ -83,6 +84,27 @@ public:
     void showPanel();
 
     /**
+     * Whether the SteamVR dashboard is open (showing any overlay, not only this panel).
+     * @return true if open
+     */
+    bool dashboardVisible() const;
+
+    /**
+     * Show the gaze fit's target: an overlay of its own (not on the dashboard), fixed to the headset 2 m ahead in
+     * the given direction. Created the first time it is needed and kept, hidden, until shutdown. The caller only
+     * shows it while the dashboard is closed.
+     * @param yawDeg degrees to the right of straight ahead
+     * @param pitchDeg degrees up
+     * @param rgba the image, non-premultiplied RGBA
+     * @param size its edge length (px)
+     * @return true if it is shown
+     */
+    bool showTarget(double yawDeg, double pitchDeg, const uint8_t* rgba, int size);
+
+    /** Hide the target (nothing happens if it was never created). */
+    void hideTarget();
+
+    /**
      * Send the dashboard thumbnail image (once, right after connecting).
      * @param rgba non-premultiplied RGBA
      * @param size side length in px
@@ -124,6 +146,12 @@ private:
     bool connected_ = false;
     uint64_t dashboardHandle_ = 0;  ///< vr::VROverlayHandle_t (the dashboard panel)
     uint64_t thumbnailHandle_ = 0;  ///< the dashboard thumbnail
+    uint64_t targetHandle_ = 0;     ///< the gaze fit's target (0 until first needed)
+    bool targetShown_ = false;
+    bool targetPlaced_ = false;     ///< its transform was set, to targetYaw_ / targetPitch_
+    double targetYaw_ = 0.0;
+    double targetPitch_ = 0.0;
+    bool targetFailed_ = false;     ///< creating it failed; not tried again
     int panelHeight_ = 0;
     int vrserverPid_ = -1;
     std::string lastPanelError_;
@@ -131,6 +159,7 @@ private:
     VulkanContext vulkan_;
     OverlayTexture panelTexture_;
     OverlayTexture thumbnailTexture_;
+    OverlayTexture targetTexture_;
 
     /**
      * Scan /proc once to find the vrserver PID.

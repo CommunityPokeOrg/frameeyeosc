@@ -15,6 +15,19 @@ struct Pair {
     bool valid() const;
 };
 
+/** The latest gaze capture frameeyeosc reports (asked for by the panel's gaze fit). */
+struct GazeCaptureStatus {
+    bool present = false;
+    long long id = 0;
+    std::string target;
+    bool done = false;        ///< finished ("done"), else still capturing ("running")
+    bool hasAverage = false;  ///< x, y and spread are there (done with samples)
+    double x = 0.0;           ///< raw combined gaze, before the zero point and gains
+    double y = 0.0;
+    double spread = 0.0;
+    int samples = 0;
+};
+
 /** What the panel knows about frameeyeosc from status.json. */
 struct EyeStatus {
     bool present = false;   ///< the file was read and parsed
@@ -50,6 +63,7 @@ struct EyeStatus {
     std::string configError;          ///< one line from frameeyeosc; empty if none
     std::vector<std::string> locked;  ///< config keys set on the command line
     JsonValue effective;              ///< the settings in effect (config keys)
+    GazeCaptureStatus capture;        ///< the latest gaze capture
 
     /**
      * Whether a config key is set on frameeyeosc's command line (only trusted while it runs).

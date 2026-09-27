@@ -146,6 +146,26 @@ EyeStatus parseStatus(const std::string& text, double now, bool checkPid) {
     if (const JsonValue* effective = root.get("effective"); effective != nullptr && effective->isObject()) {
         status.effective = *effective;
     }
+    if (const JsonValue* capture = root.get("gaze_capture"); capture != nullptr && capture->isObject()) {
+        const JsonValue* id = capture->get("id");
+        if (id != nullptr && id->isNumber()) {
+            GazeCaptureStatus& c = status.capture;
+            c.present = true;
+            c.id = static_cast<long long>(id->number);
+            c.target = readText(*capture, "target");
+            c.done = readText(*capture, "state") == "done";
+            c.samples = static_cast<int>(readNumber(*capture, "samples", 0));
+            const double x = readNumber(*capture, "x", NAN);
+            const double y = readNumber(*capture, "y", NAN);
+            const double spread = readNumber(*capture, "spread", NAN);
+            c.hasAverage = std::isfinite(x) && std::isfinite(y) && std::isfinite(spread);
+            if (c.hasAverage) {
+                c.x = x;
+                c.y = y;
+                c.spread = spread;
+            }
+        }
+    }
 
     const bool fresh = std::fabs(now - status.time) < kStaleSec;
     bool alive = true;

@@ -42,6 +42,7 @@ UiText makeJapanese() {
 
     t.tabBasic = "基本";
     t.tabGaze = "視線";
+    t.tabGazeFit = "視線合わせ";
     t.tabLids = "まぶた";
     t.tabAdvanced = "詳細";
 
@@ -99,6 +100,48 @@ UiText makeJapanese() {
     t.hintQuality = "この値より不確かな目は無視";
     t.rowDespike = "一瞬の途切れを消す";
     t.hintDespike = "視線とまぶた。約 11 ms 遅れる";
+
+    t.rowFit = "点を見て合わせる";
+    t.hintFit = "頭は動かさず、目だけで見る";
+    t.fitCenter = "正面を合わせる";
+    t.fitFive = "5 点で合わせる";
+    t.fitStop = "やめる";
+    t.fitIntro = "点が出たら、動くか消えるまで見続けてください。正面は約 3 秒、5 点は約 20 秒です";
+    t.fitNeedsRunning = "frameeyeosc が動いているときに使えます";
+    t.fitLocked = "正面の位置か動く幅がコマンドで固定されているので使えません";
+    t.fitWaiting = "ダッシュボードを閉じると始まります";
+    t.fitWaitingCenter = "正面に点が出ます。ダッシュボードを開くと止まります";
+    t.fitWaitingFive = "正面・上・下・左・右の順に点が出ます。ダッシュボードを開くと止まります";
+    t.fitRunningFormat = "測っています: %s（%d / %d）";
+    t.fitRetryFormat = "・%d 回目";
+    t.fitDoneCenter = "正面を合わせました";
+    t.fitDoneFive = "5 点で合わせました";
+    t.fitDoneCenterFormat = "正面 左右 %s・上下 %s";
+    t.fitDoneFormat = "正面 左右 %s・上下 %s／幅 左右 %s・上 %s・下 %s";
+    t.fitFailed = "合わせられませんでした";
+    t.failCancelled = "止めました（ダッシュボードを開くと止まります）";
+    t.failWaitTimedOut = "1 分のうちにダッシュボードが閉じられませんでした";
+    t.failNotRunning = "frameeyeosc が動いていません";
+    t.failNoResult = "frameeyeosc から結果が届きませんでした";
+    t.failUnsteadyFormat = "%s の点で視線が落ち着きませんでした（目を閉じていたかも）";
+    t.failNoMovementFormat = "%s の点で視線がほとんど動きませんでした";
+    t.failWrite = "設定ファイルに書けませんでした";
+    t.pointCenter = "正面";
+    t.pointUp = "上";
+    t.pointDown = "下";
+    t.pointLeft = "左";
+    t.pointRight = "右";
+    t.rowOffset = "正面の位置";
+    t.hintOffset = "＋ は右・上";
+    t.rowGain = "動く幅";
+    t.hintGain = "大きいほどよく動く";
+    t.capLeftRight = "左右";
+    t.capUpDown = "上下";
+    t.capUp = "上";
+    t.capDown = "下";
+    t.rowFitReset = "合わせる前に戻す";
+    t.hintFitReset = "正面 0・幅 1.00";
+    t.fitReset = "元に戻す";
 
     t.rowCalibration = "自動キャリブレーション";
     t.learnedFormat = "覚えた値 左 %s・右 %s";
@@ -234,6 +277,7 @@ UiText makeEnglish() {
 
     t.tabBasic = "Basic";
     t.tabGaze = "Gaze";
+    t.tabGazeFit = "Gaze fit";
     t.tabLids = "Eyelids";
     t.tabAdvanced = "Advanced";
 
@@ -291,6 +335,49 @@ UiText makeEnglish() {
     t.hintQuality = "Ignores an eye less sure than this";
     t.rowDespike = "Remove glitches";
     t.hintDespike = "Gaze and lids, ~11 ms later";
+
+    t.rowFit = "Look at the dot";
+    t.hintFit = "Keep your head still";
+    t.fitCenter = "Center";
+    t.fitFive = "5 points";
+    t.fitStop = "Stop";
+    t.fitIntro = "When the dot appears, keep looking at it until it moves or disappears. Center takes about 3 s, "
+                 "five points about 20 s.";
+    t.fitNeedsRunning = "Works while frameeyeosc is running";
+    t.fitLocked = "Not available: the gaze center or range is locked by the command line";
+    t.fitWaiting = "Close the dashboard to start";
+    t.fitWaitingCenter = "The dot appears straight ahead. Opening the dashboard stops it.";
+    t.fitWaitingFive = "The dot appears straight ahead, then up, down, left and right. Opening the dashboard stops it.";
+    t.fitRunningFormat = "Measuring: %s (%d of %d)";
+    t.fitRetryFormat = ", try %d";
+    t.fitDoneCenter = "Center is set";
+    t.fitDoneFive = "Fitted with five points";
+    t.fitDoneCenterFormat = "Center L-R %s, U-D %s";
+    t.fitDoneFormat = "Center L-R %s, U-D %s; range L-R %s, up %s, down %s";
+    t.fitFailed = "Could not calibrate";
+    t.failCancelled = "Stopped (opening the dashboard stops it)";
+    t.failWaitTimedOut = "The dashboard wasn't closed within a minute";
+    t.failNotRunning = "frameeyeosc is not running";
+    t.failNoResult = "No answer from frameeyeosc";
+    t.failUnsteadyFormat = "The gaze wasn't steady at the %s dot (eyes closed?)";
+    t.failNoMovementFormat = "The gaze hardly moved toward the %s dot";
+    t.failWrite = "Couldn't write the settings file";
+    t.pointCenter = "center";
+    t.pointUp = "up";
+    t.pointDown = "down";
+    t.pointLeft = "left";
+    t.pointRight = "right";
+    t.rowOffset = "Straight ahead";
+    t.hintOffset = "+ is right / up";
+    t.rowGain = "Range";
+    t.hintGain = "Higher moves further";
+    t.capLeftRight = "Left-right";
+    t.capUpDown = "Up-down";
+    t.capUp = "Up";
+    t.capDown = "Down";
+    t.rowFitReset = "Undo the fit";
+    t.hintFitReset = "Center 0, range 1.00";
+    t.fitReset = "Reset";
 
     t.rowCalibration = "Auto calibration";
     t.learnedFormat = "Learned L %s / R %s";

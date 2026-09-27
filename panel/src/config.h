@@ -65,6 +65,13 @@ constexpr const char* kGazeQualityLimit = "gaze_quality_limit";
 constexpr const char* kBlinkHoldMs = "blink_hold_ms";
 constexpr const char* kDespike = "despike";
 constexpr const char* kBlinkSyncBelow = "blink_sync_below";
+constexpr const char* kGazeOffsetX = "gaze_offset_x";
+constexpr const char* kGazeOffsetY = "gaze_offset_y";
+constexpr const char* kGazeGainX = "gaze_gain_x";
+constexpr const char* kGazeGainUp = "gaze_gain_up";
+constexpr const char* kGazeGainDown = "gaze_gain_down";
+/** A request, not a setting: {"id": N, "target": "center"} asks frameeyeosc to average the gaze (gaze fit). */
+constexpr const char* kGazeCapture = "gaze_capture";
 constexpr const char* kCalibrationReset = "calibration_reset";
 constexpr const char* kLanguage = "language";
 constexpr const char* kUpdateCheck = "update_check";  ///< panel only: look for a new release on GitHub
