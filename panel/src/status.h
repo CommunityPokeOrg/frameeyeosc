@@ -25,6 +25,8 @@ struct GazeCaptureStatus {
     double x = 0.0;           ///< raw combined gaze, before the zero point and gains
     double y = 0.0;
     double spread = 0.0;
+    bool hasEyeX = false;      ///< xEye is there (done with samples, not the eyes-shut step)
+    double xEye[2] = {0.0, 0.0};  ///< each eye's own raw sideways gaze, left / right
     bool hasOpenness = false;  ///< openness is there (done with samples)
     double openness[2] = {0.0, 0.0};  ///< each eye's average Frame openness, before any scale
     int samples = 0;

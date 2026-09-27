@@ -1,6 +1,7 @@
 // Implementation of the OpenVR connection and overlay.
 #include "vr_overlay.h"
 
+#include "gaze_fit.h"
 #include "openvr.h"
 
 #include <dirent.h>
@@ -28,9 +29,12 @@ constexpr int kShutdownWaitMs = 400;
 // The eye fit's target: an ordinary (not dashboard) overlay fixed to the headset
 constexpr const char* kTargetKey = "sasaken.frameeyeosc-panel.target";
 constexpr const char* kTargetName = "Eye target";
-// 2 m ahead and 0.3 m wide (about 8.6 degrees), so the eyes point about where the head-relative direction says
-constexpr double kTargetDistanceM = 2.0;
+// 2 m ahead (gaze_fit::kTargetDistanceM) and 0.3 m wide (about 8.6 degrees)
+constexpr double kTargetDistanceM = gaze_fit::kTargetDistanceM;
 constexpr float kTargetWidthM = 0.3f;
+// IPDs outside this range (m) are taken as a failed read
+constexpr double kIpdMin = 0.045;
+constexpr double kIpdMax = 0.085;
 
 /**
  * The transform that puts an overlay `distance` ahead of the headset, turned `yawDeg` right and `pitchDeg` up,
@@ -290,6 +294,19 @@ void VrOverlay::showPanel() {
 
 bool VrOverlay::dashboardVisible() const {
     return connected_ && vr::VROverlay()->IsDashboardVisible();
+}
+
+double VrOverlay::userIpdMeters() const {
+    if (!connected_) return gaze_fit::kDefaultIpdM;
+    vr::ETrackedPropertyError error = vr::TrackedProp_Success;
+    const float ipd = vr::VRSystem()->GetFloatTrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd,
+                                                                    vr::Prop_UserIpdMeters_Float, &error);
+    if (error != vr::TrackedProp_Success || !(ipd >= kIpdMin && ipd <= kIpdMax)) {
+        std::fprintf(stderr, "[VR] no usable IPD from SteamVR (%s, %.4f); using %.3f m\n",
+                     vr::VRSystem()->GetPropErrorNameFromEnum(error), ipd, gaze_fit::kDefaultIpdM);
+        return gaze_fit::kDefaultIpdM;
+    }
+    return ipd;
 }
 
 bool VrOverlay::showTarget(double yawDeg, double pitchDeg, const uint8_t* rgba, int size) {

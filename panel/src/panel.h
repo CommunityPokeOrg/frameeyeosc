@@ -48,6 +48,7 @@ enum class PanelAction {
     FitStop,           ///< eye fit: stop waiting for the dashboard to close
     FitReset,          ///< gaze_offset_x/y = 0, gaze_gain_x/up/down = 1, lid_fit_* = null
     FitDetails,        ///< open / close "Fine-tune" (handled inside the panel)
+    FitDetailsPage,    ///< show arg (0 gaze, 1 eyelids) under "Fine-tune" (handled inside the panel)
 };
 
 /** A button: its action, the config key it changes and an argument. */
@@ -155,6 +156,12 @@ public:
     void setFitDetails(bool open) { fitDetails_ = open; }
 
     /**
+     * Which values "Fine-tune" shows.
+     * @param page 0 = gaze, 1 = eyelids
+     */
+    void setFitDetailsPage(int page) { fitDetailsPage_ = page; }
+
+    /**
      * The image as un-premultiplied RGBA for OpenVR.
      * @return width() * height() * 4 bytes
      */
@@ -201,6 +208,7 @@ private:
     PanelHit pressed_;
     PanelTab tab_ = PanelTab::Basic;
     bool fitDetails_ = false;  ///< "Fine-tune" is open on the Eye fit tab
+    int fitDetailsPage_ = 0;   ///< what "Fine-tune" shows: 0 = gaze, 1 = eyelids
     bool quitArmed_ = false;
     double quitArmedUntil_ = 0.0;
     bool resetArmed_ = false;
@@ -275,6 +283,31 @@ private:
      * @param view the settings shown
      */
     void drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& model, const SettingsView& view);
+
+    /**
+     * "Fine-tune" on the Eye fit tab, gaze page: the zero point, the gains, the far-down hold and each eye's own
+     * sideways values.
+     * @param pen drawing tools
+     * @param t texts
+     * @param view the settings shown
+     * @param saved the fit in config.json
+     * @param busy a fit is running (nothing can be changed)
+     * @param y top
+     */
+    void drawEyeFitGaze(const Pen& pen, const UiText& t, const SettingsView& view, const FitInConfig& saved, bool busy,
+                        double y);
+
+    /**
+     * "Fine-tune" on the Eye fit tab, eyelid page: each eye's four lid readings.
+     * @param pen drawing tools
+     * @param t texts
+     * @param view the settings shown
+     * @param saved the fit in config.json
+     * @param busy a fit is running (nothing can be changed)
+     * @param y top
+     */
+    void drawEyeFitLids(const Pen& pen, const UiText& t, const SettingsView& view, const FitInConfig& saved, bool busy,
+                        double y);
 
     /**
      * A plain button (or an accent one) with a centered label.

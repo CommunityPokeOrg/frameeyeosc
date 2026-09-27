@@ -1,7 +1,9 @@
 // The shared rules of the panel.
 #include "model.h"
 
+#include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <cstdio>
 #include <limits>
 
@@ -130,6 +132,16 @@ FitInConfig fitInConfig(const SettingsView& view) {
         v.lidDown[eye] = readings[3];
     }
     v.hasLids = fit.lidsFitted[0] && fit.lidsFitted[1];
+    const double eyeX[4] = {view.number(key::kGazeOffsetXLeft), view.number(key::kGazeOffsetXRight),
+                            view.number(key::kGazeGainXLeft), view.number(key::kGazeGainXRight)};
+    fit.eyeXFitted = std::all_of(std::begin(eyeX), std::end(eyeX), [](double value) { return std::isfinite(value); });
+    if (fit.eyeXFitted) {
+        v.hasEyeX = true;
+        v.eyeOffsetX[0] = eyeX[0];
+        v.eyeOffsetX[1] = eyeX[1];
+        v.eyeGainX[0] = eyeX[2];
+        v.eyeGainX[1] = eyeX[3];
+    }
     return fit;
 }
 

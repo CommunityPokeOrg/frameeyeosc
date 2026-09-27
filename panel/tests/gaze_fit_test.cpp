@@ -148,6 +148,55 @@ void testFit() {
     CHECK(near(v.gainUp, kGainMin) && near(v.offsetX, kOffsetLimit));
 }
 
+/**
+ * Each eye's raw x that frameeyeosc would report for a point, for an eye whose tracker reads (angle / gain + offset).
+ * @param m the capture to add it to
+ * @param yawDeg the target
+ * @param gains each eye's gain
+ * @param offsets each eye's offset
+ */
+void withEyes(Measured& m, double yawDeg, const double gains[2], const double offsets[2]) {
+    m.hasEyeX = true;
+    for (int eye = 0; eye < 2; ++eye) m.xEye[eye] = eyeAngle(yawDeg, eye, kDefaultIpdM) / gains[eye] + offsets[eye];
+}
+
+void testEyes() {
+    // Seen from between the eyes the target is straight ahead; the left eye turns right to see it, the right left
+    const double left = eyeAngle(0.0, 0, 0.063);
+    const double right = eyeAngle(0.0, 1, 0.063);
+    CHECK(left > 0 && near(left, -right));
+    CHECK(std::fabs(left * kFullScaleDeg - std::atan2(0.0315, 2.0) * 180 / M_PI) < 1e-9);
+    CHECK(eyeAngle(kSideDeg, 0, 0.063) > eyeAngle(kSideDeg, 1, 0.063));
+    CHECK(near(eyeAngle(kSideDeg, 0, 0.0), kSideDeg / kFullScaleDeg));
+
+    const double gains[2] = {0.95, 0.9};
+    const double offsets[2] = {0.03, -0.01};
+    Measured points[kPointCount];
+    fivePoints(points);
+    withEyes(points[static_cast<int>(Point::Center)], 0.0, gains, offsets);
+    withEyes(points[static_cast<int>(Point::Left)], -kSideDeg, gains, offsets);
+    withEyes(points[static_cast<int>(Point::Right)], kSideDeg, gains, offsets);
+    Values v;
+    CHECK(fitEyes(points, kDefaultIpdM, v) && v.hasEyeX);
+    CHECK(near(v.eyeGainX[0], 0.95) && near(v.eyeGainX[1], 0.9));
+    CHECK(std::fabs(v.eyeOffsetX[0] - 0.03) < 0.0011 && std::fabs(v.eyeOffsetX[1] + 0.01) < 0.0011);
+
+    // Re-centering moves each eye's zero point and keeps its gain
+    Measured moved = points[static_cast<int>(Point::Center)];
+    for (double& x : moved.xEye) x += 0.05;
+    const Values centered = fitCenter(moved, v, kDefaultIpdM);
+    CHECK(std::fabs(centered.eyeOffsetX[0] - 0.08) < 0.0011 && near(centered.eyeGainX[1], 0.9));
+
+    // Without per-eye x (an older frameeyeosc) nothing is fitted and nothing fails
+    Measured plain[kPointCount];
+    fivePoints(plain);
+    Values none;
+    CHECK(fitEyes(plain, kDefaultIpdM, none) && !none.hasEyeX);
+    // An eye that went the wrong way between the side targets fails
+    points[static_cast<int>(Point::Right)].xEye[1] = points[static_cast<int>(Point::Left)].xEye[1] - 0.1;
+    CHECK(!fitEyes(points, kDefaultIpdM, v));
+}
+
 void testCenterAndUsable() {
     Values current;
     current.gainX = 1.3;
@@ -389,6 +438,7 @@ void testFailures() {
  */
 int main() {
     testFit();
+    testEyes();
     testCenterAndUsable();
     testFullSession();
     testCenterSession();

@@ -91,6 +91,7 @@ private:
 /** The eye fit as config.json holds it (shown on the Eye fit tab even when frameeyeosc is not running). */
 struct FitInConfig {
     bool gazeFitted = false;              ///< the zero point or a gain is not the default
+    bool eyeXFitted = false;              ///< each eye's own sideways zero point and gain are set
     bool lidsFitted[2] = {false, false};  ///< all four readings of that eye are set
     gaze_fit::Values values;              ///< hasLids when both eyes are fitted
 };

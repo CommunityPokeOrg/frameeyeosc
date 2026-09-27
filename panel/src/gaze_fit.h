@@ -29,6 +29,10 @@ constexpr double kSideDeg = 20.0;
 constexpr double kUpDownDeg = 15.0;
 /** The gaze angle that frameeyeosc sends as 1.0. */
 constexpr double kFullScaleDeg = 45.0;
+/** How far ahead the targets are shown (m). Each eye's own angle to a target depends on it. */
+constexpr double kTargetDistanceM = 2.0;
+/** The distance between the eyes when SteamVR doesn't say (m). */
+constexpr double kDefaultIpdM = 0.063;
 /** A capture is used when it has at least this many samples (of about 135 in the 1.5 s frameeyeosc averages)... */
 constexpr int kMinSamples = 45;
 /** ...and its gaze spreads no more than this (on the -1..1 scale; 0.06 is about 2.7°). */
@@ -87,6 +91,8 @@ struct Measured {
     double x = 0.0;
     double y = 0.0;
     double spread = 0.0;
+    bool hasEyeX = false;         ///< xEye is set
+    double xEye[2] = {0.0, 0.0};  ///< each eye's own raw sideways gaze, left / right
     double openness[2] = {0.0, 0.0};  ///< left, right
     bool hasOpenness = false;
     int samples = 0;
@@ -114,6 +120,9 @@ struct Values {
     double gainX = 1.0;
     double gainUp = 1.0;
     double gainDown = 1.0;
+    bool hasEyeX = false;  ///< each eye's own sideways zero point and gain below are set
+    double eyeOffsetX[2] = {0.0, 0.0};  ///< left, right
+    double eyeGainX[2] = {1.0, 1.0};
     bool hasLids = false;  ///< the eyelid readings below are set
     double lidClosed[2] = {0.0, 0.0};  ///< left, right
     double lidUp[2] = {0.0, 0.0};
@@ -122,12 +131,35 @@ struct Values {
 };
 
 /**
- * The zero point from the center capture; everything else stays as it is.
+ * Where an eye really looks, on the -1..1 scale, to see a target that is `yawDeg` right of straight ahead at
+ * kTargetDistanceM: its angle from that eye, not from between the eyes. +x is right. The left eye sits ipd/2 to
+ * the left, so it turns right a little to see a target straight ahead, and the right eye turns left.
+ * @param yawDeg the target's angle from between the eyes
+ * @param eye 0 = left, 1 = right
+ * @param ipd the distance between the eyes (m)
+ * @return the angle (1.0 = 45°)
+ */
+double eyeAngle(double yawDeg, int eye, double ipd);
+
+/**
+ * Each eye's own sideways zero point and gain, so that after them the eye points at each target the way it
+ * really had to (see eyeAngle). Needs every gaze point's per-eye x; otherwise nothing is set.
+ * @param points the captures, indexed by Point
+ * @param ipd the distance between the eyes (m)
+ * @param out where they go (hasEyeX set when fitted)
+ * @return false if an eye did not move far enough the right way between the side targets
+ */
+bool fitEyes(const Measured points[kPointCount], double ipd, Values& out);
+
+/**
+ * The zero point from the center capture; everything else stays as it is. Each eye's own zero point moves too
+ * when there is one, keeping its gain.
  * @param center the center capture
  * @param current the settings now
+ * @param ipd the distance between the eyes (m)
  * @return the new settings (rounded, within range)
  */
-Values fitCenter(const Measured& center, const Values& current);
+Values fitCenter(const Measured& center, const Values& current, double ipd = kDefaultIpdM);
 
 /**
  * The zero point and the three gains from the five gaze captures. Each gain makes the target angle come out as
@@ -217,8 +249,9 @@ public:
      * @param mode the whole fit, or re-centering only
      * @param current the settings now (kept where the mode does not change them)
      * @param now monotonic seconds
+     * @param ipd the distance between the eyes (m), for each eye's own angle to the targets
      */
-    void start(Mode mode, const Values& current, double now);
+    void start(Mode mode, const Values& current, double now, double ipd = kDefaultIpdM);
 
     /** Stop ("Stop" pressed). */
     void cancel();
@@ -254,6 +287,7 @@ private:
     Failure failure_ = Failure::None;
     Values current_;
     Values result_;
+    double ipd_ = kDefaultIpdM;
     Measured measured_[kPointCount];
     int index_ = 0;
     int attempt_ = 1;

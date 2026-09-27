@@ -90,6 +90,12 @@ public:
     bool dashboardVisible() const;
 
     /**
+     * The distance between the eyes that SteamVR uses (Prop_UserIpdMeters_Float of the headset).
+     * @return meters, or gaze_fit::kDefaultIpdM when SteamVR doesn't say or the value looks wrong
+     */
+    double userIpdMeters() const;
+
+    /**
      * Show the eye fit's target: an overlay of its own (not on the dashboard), fixed to the headset 2 m ahead in
      * the given direction. Created the first time it is needed and kept, hidden, until shutdown. The caller only
      * shows it while the dashboard is closed.

@@ -85,10 +85,45 @@ bool usableClosed(const Measured& closed, const Measured& center) {
     return true;
 }
 
-Values fitCenter(const Measured& center, const Values& current) {
+double eyeAngle(double yawDeg, int eye, double ipd) {
+    const double yaw = yawDeg * M_PI / 180.0;
+    // The target seen from the eye: the left eye is at -ipd/2, so the target is ipd/2 further right of it
+    const double side = kTargetDistanceM * std::sin(yaw) + (eye == 0 ? ipd / 2 : -ipd / 2);
+    return std::atan2(side, kTargetDistanceM * std::cos(yaw)) * 180.0 / M_PI / kFullScaleDeg;
+}
+
+bool fitEyes(const Measured points[kPointCount], double ipd, Values& out) {
+    const Point used[3] = {Point::Center, Point::Left, Point::Right};
+    for (Point point : used) {
+        if (!at(points, point).hasEyeX) return true;  // an older frameeyeosc: nothing to fit, not a failure
+    }
+    Values fitted = out;
+    for (int eye = 0; eye < 2; ++eye) {
+        const double center = at(points, Point::Center).xEye[eye];
+        const double left = at(points, Point::Left).xEye[eye];
+        const double right = at(points, Point::Right).xEye[eye];
+        const double expectedCenter = eyeAngle(0.0, eye, ipd);
+        const double expectedSpan = eyeAngle(kSideDeg, eye, ipd) - eyeAngle(-kSideDeg, eye, ipd);
+        if (!(right - left >= kMinMoveFraction * expectedSpan)) return false;
+        // (x - offset) * gain: the span sets the gain, and the center then lands on the eye's own angle
+        const double gain = gainSetting(expectedSpan / (right - left));
+        fitted.eyeGainX[eye] = gain;
+        fitted.eyeOffsetX[eye] = offsetSetting(center - expectedCenter / gain);
+    }
+    fitted.hasEyeX = true;
+    out = fitted;
+    return true;
+}
+
+Values fitCenter(const Measured& center, const Values& current, double ipd) {
     Values values = current;
     values.offsetX = offsetSetting(center.x);
     values.offsetY = offsetSetting(center.y);
+    if (current.hasEyeX && center.hasEyeX) {
+        for (int eye = 0; eye < 2; ++eye) {
+            values.eyeOffsetX[eye] = offsetSetting(center.xEye[eye] - eyeAngle(0.0, eye, ipd) / current.eyeGainX[eye]);
+        }
+    }
     return values;
 }
 
@@ -139,11 +174,12 @@ bool fitLids(const Measured points[kPointCount], Values& out) {
     return true;
 }
 
-void Session::start(Mode mode, const Values& current, double now) {
+void Session::start(Mode mode, const Values& current, double now, double ipd) {
     *this = Session();
     phase_ = Phase::Waiting;
     mode_ = mode;
     current_ = current;
+    ipd_ = ipd;
     startedAt_ = now;
 }
 
@@ -198,6 +234,11 @@ void Session::next(double now, Actions& actions) {
             fail(Failure::NoMovement);
             return;
         }
+        if (!fitEyes(measured_, ipd_, gaze)) {
+            index_ = static_cast<int>(Point::Right);
+            fail(Failure::NoMovement);
+            return;
+        }
     }
     phase_ = Phase::Settling;
     phaseAt_ = now;
@@ -205,12 +246,19 @@ void Session::next(double now, Actions& actions) {
 
 void Session::finish(Actions& actions) {
     if (mode_ == Mode::Center) {
-        result_ = fitCenter(measured_[static_cast<int>(Point::Center)], current_);
+        result_ = fitCenter(measured_[static_cast<int>(Point::Center)], current_, ipd_);
     } else {
         result_ = current_;
         Point failed = Point::Center;
         if (!fitGaze(measured_, result_, failed)) {
             index_ = static_cast<int>(failed);
+            fail(Failure::NoMovement);
+            return;
+        }
+        // Each eye's own sideways fit replaces the one before; without per-eye data there is none
+        result_.hasEyeX = false;
+        if (!fitEyes(measured_, ipd_, result_)) {
+            index_ = static_cast<int>(Point::Right);
             fail(Failure::NoMovement);
             return;
         }
@@ -270,6 +318,9 @@ Actions Session::tick(double now, bool dashboardOpen, const EyeStatus& status) {
                 measured.y = capture.y;
                 measured.spread = capture.spread;
             }
+            measured.hasEyeX = capture.hasEyeX;
+            measured.xEye[0] = capture.xEye[0];
+            measured.xEye[1] = capture.xEye[1];
             measured.hasOpenness = capture.hasOpenness;
             measured.openness[0] = capture.openness[0];
             measured.openness[1] = capture.openness[1];

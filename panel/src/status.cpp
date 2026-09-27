@@ -169,6 +169,13 @@ EyeStatus parseStatus(const std::string& text, double now, bool checkPid) {
                 c.y = y;
                 c.spread = spread;
             }
+            const double xLeft = readNumber(*capture, "x_left", NAN);
+            const double xRight = readNumber(*capture, "x_right", NAN);
+            c.hasEyeX = std::isfinite(xLeft) && std::isfinite(xRight);
+            if (c.hasEyeX) {
+                c.xEye[0] = xLeft;
+                c.xEye[1] = xRight;
+            }
             const Pair openness = readPair(capture->get("openness"));
             c.hasOpenness = openness.valid();
             if (c.hasOpenness) {

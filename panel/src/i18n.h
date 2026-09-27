@@ -135,6 +135,7 @@ struct UiText {
     const char* fitGazeCenterFormat; ///< "Gaze center: L-R %s, U-D %s"
     const char* fitGazeRangeFormat;  ///< "Gaze range: L-R %s, up %s, down %s"
     const char* fitGazeNone;
+    const char* fitEyeXFormat;       ///< "Each eye: L %s x%s, R %s x%s" (zero point, gain)
     const char* fitLidFormat;        ///< "Eyelid %s: open %s, closed %s, looking down %s"
     const char* fitLidsNone;
     const char* fitFailed;
@@ -166,6 +167,10 @@ struct UiText {
     const char* capUpDown;
     const char* capUp;
     const char* capDown;
+    const char* detailsGaze;         ///< "Fine-tune" pages
+    const char* detailsLids;
+    const char* rowEyeX;             ///< each eye's own sideways zero point and gain
+    const char* hintEyeX;
     const char* rowDownHold;         ///< holding the sideways gaze when looking far down
     const char* hintDownHold;
     const char* downHoldFormat;      ///< "Below %s°"

@@ -95,7 +95,7 @@ UiText makeJapanese() {
     t.rowHold = "まばたき中は視線を止める";
     t.hintHold = "この値より閉じたら止める";
     t.rowIndependent = "左右の目を別々に動かす";
-    t.hintIndependent = "Frame ではぶれやすい";
+    t.hintIndependent = "目を合わせてから使うと自然";
     t.rowQuality = "不確かな視線を使わない";
     t.hintQuality = "この値より不確かな目は無視";
     t.rowDespike = "一瞬の途切れを消す";
@@ -122,6 +122,7 @@ UiText makeJapanese() {
     t.fitGazeCenterFormat = "視線の正面: 左右 %s・上下 %s";
     t.fitGazeRangeFormat = "視線の幅: 左右 %s・上 %s・下 %s";
     t.fitGazeNone = "視線: 合わせていません";
+    t.fitEyeXFormat = "目ごとの左右: 左 %s・×%s　右 %s・×%s";
     t.fitLidFormat = "まぶた %s: 開 %s・閉 %s・下を見ると %s";
     t.fitLidsNone = "まぶた: 合わせていません（自動で覚えています）";
     t.fitFailed = "合わせられませんでした";
@@ -153,6 +154,10 @@ UiText makeJapanese() {
     t.capUpDown = "上下";
     t.capUp = "上";
     t.capDown = "下";
+    t.detailsGaze = "視線";
+    t.detailsLids = "まぶた";
+    t.rowEyeX = "目ごとの左右";
+    t.hintEyeX = "左右の目を別々に動かすときに使う";
     t.rowDownHold = "真下で左右を止める";
     t.hintDownHold = "0 = オフ";
     t.downHoldFormat = "%s° より下";
@@ -349,7 +354,7 @@ UiText makeEnglish() {
     t.rowHold = "Hold gaze while blinking";
     t.hintHold = "Holds below this openness";
     t.rowIndependent = "Move eyes separately";
-    t.hintIndependent = "Jittery on the Frame";
+    t.hintIndependent = "Natural after an Eye fit";
     t.rowQuality = "Skip unreliable gaze";
     t.hintQuality = "Ignores an eye less sure than this";
     t.rowDespike = "Remove glitches";
@@ -379,6 +384,7 @@ UiText makeEnglish() {
     t.fitGazeCenterFormat = "Gaze center: L-R %s, U-D %s";
     t.fitGazeRangeFormat = "Gaze range: L-R %s, up %s, down %s";
     t.fitGazeNone = "Gaze: not fitted";
+    t.fitEyeXFormat = "Each eye sideways: L %s x%s, R %s x%s";
     t.fitLidFormat = "Eyelid %s: open %s, closed %s, looking down %s";
     t.fitLidsNone = "Eyelids: not fitted (learned automatically)";
     t.fitFailed = "Could not fit";
@@ -410,6 +416,10 @@ UiText makeEnglish() {
     t.capUpDown = "Up-down";
     t.capUp = "Up";
     t.capDown = "Down";
+    t.detailsGaze = "Gaze";
+    t.detailsLids = "Eyelids";
+    t.rowEyeX = "Each eye sideways";
+    t.hintEyeX = "Used when the eyes move separately";
     t.rowDownHold = "Hold sideways far down";
     t.hintDownHold = "0 = off";
     t.downHoldFormat = "Below %s°";
