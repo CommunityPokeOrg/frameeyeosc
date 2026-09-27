@@ -1,9 +1,11 @@
 //! Steam Frame 0.5.0 eye bridge using the private version-4 shared-memory ABI.
 
+mod capture;
 mod config;
 mod replay;
 mod status;
 
+use capture::{Capture, CaptureResult, CaptureState};
 use clap::{CommandFactory, FromArgMatches, Parser};
 use config::{Config, OutputKind, Reload, Settings};
 use memmap2::{MmapMut, MmapOptions};
@@ -186,6 +188,21 @@ struct Args {
     /// Close both eyes when one is closed and the other is below this (VRCFT units); winks pass. 0 disables
     #[arg(long, default_value_t = 0.35)]
     blink_sync_below: f32,
+    /// Gaze that counts as straight ahead, left/right (-0.5..0.5 on the -1..1 scale; 1.0 = 45°)
+    #[arg(long, default_value_t = 0.0, allow_negative_numbers = true)]
+    gaze_offset_x: f32,
+    /// Gaze that counts as straight ahead, up/down (-0.5..0.5)
+    #[arg(long, default_value_t = 0.0, allow_negative_numbers = true)]
+    gaze_offset_y: f32,
+    /// How far the gaze goes left and right, from --gaze-offset-x (0.5..2)
+    #[arg(long, default_value_t = 1.0)]
+    gaze_gain_x: f32,
+    /// How far the gaze goes up, from --gaze-offset-y (0.5..2)
+    #[arg(long, default_value_t = 1.0)]
+    gaze_gain_up: f32,
+    /// How far the gaze goes down, from --gaze-offset-y (0.5..2)
+    #[arg(long, default_value_t = 1.0)]
+    gaze_gain_down: f32,
     /// Settings file, re-read while running; options given here win over it
     /// [default: ~/.config/frameeyeosc/config.json]
     #[arg(long)]
@@ -904,7 +921,7 @@ fn connected_udp_peer(table: &str, inodes: &HashSet<u64>) -> Option<IpAddr> {
 
 /// /proc/net writes addresses as 32-bit words in host (little-endian) byte order, in hex.
 fn parse_proc_ip(hex: &str) -> Option<IpAddr> {
-    if hex.len() % 8 != 0 {
+    if !hex.len().is_multiple_of(8) {
         return None;
     }
     let words = (0..hex.len() / 8)
@@ -933,6 +950,26 @@ fn gaze_angles([x, y, z]: [f32; 3]) -> [f32; 2] {
     ]
 }
 
+/// Move each gaze pair's zero point to --gaze-offset-x/y and scale how far it goes from there;
+/// up and down have their own gains. The defaults leave the gaze exactly as it is.
+fn correct_gaze(angles: [f32; 6], settings: &Settings) -> [f32; 6] {
+    std::array::from_fn(|i| {
+        let value = angles[i];
+        let corrected = if i % 2 == 0 {
+            (value - settings.gaze_offset_x) * settings.gaze_gain_x
+        } else {
+            let from_center = value - settings.gaze_offset_y;
+            let gain = if from_center >= 0.0 {
+                settings.gaze_gain_up
+            } else {
+                settings.gaze_gain_down
+            };
+            from_center * gain
+        };
+        corrected.clamp(-1.0, 1.0)
+    })
+}
+
 /// One eye-server sample worked through the eyelid mapping and the filters.
 struct Sample {
     openness: [f32; 2],
@@ -946,6 +983,8 @@ struct Sample {
     lids: [f32; 2],
     // Whether each eye's gaze passed the quality check.
     reliable: [bool; 2],
+    // Whether the combined gaze was held (eyes mostly shut, or both eyes unreliable).
+    gaze_held: bool,
 }
 
 /// Per-eye multipliers on Frame openness: the fixed ones, else the learned ones, else 1.
@@ -983,23 +1022,26 @@ fn process(settings: &Settings, smoother: &mut Smoother, scales: [f32; 2], data:
     let [x, y] = gaze_angles(data.fixation_point);
     let [left, right] = data.gaze.map(gaze_angles);
     let raw_gaze = [left[0], left[1], right[0], right[1], x, y];
+    // Before anything else, so the filters see the gaze the way it will be sent.
+    let corrected = correct_gaze(raw_gaze, settings);
     let scale = |openness: [f32; 2]| [0, 1].map(|eye| openness[eye] * scales[eye]);
     let openness_scaled = scale(data.openness);
     let reliable = gaze_quality(data, settings.gaze_quality_limit);
     let blink_stages = settings.blink_hold_ms > 0.0 || settings.blink_sync_below > 0.0;
-    let (gaze, lids) = if settings.raw {
-        let gaze = choose_gaze(raw_gaze, [true; 2], settings.independent_eyes);
+    let (gaze, lids, gaze_held) = if settings.raw {
+        let gaze = choose_gaze(corrected, [true; 2], settings.independent_eyes);
         let mapped = openness_scaled.map(|openness| lid_to_vrcft(openness, settings));
         let shut = sync_blinks(mapped.map(|lid| lid <= 0.0), mapped, settings.blink_sync_below);
         let mut lids = sync_lids(mapped, settings.lid_sync);
         if blink_stages {
             shut_lids(&mut lids, shut);
         }
-        (gaze, lids)
+        let shut_eyes = data.openness.iter().any(|openness| *openness < settings.gaze_hold_below);
+        (gaze, lids, shut_eyes)
     } else {
         let dt = smoother.advance(data.sample_time);
         let readings: [f32; 8] =
-            std::array::from_fn(|i| if i < 6 { raw_gaze[i] } else { data.openness[i - 6] });
+            std::array::from_fn(|i| if i < 6 { corrected[i] } else { data.openness[i - 6] });
         // Fed even while off, so turning it on does not start from an empty history.
         let despiked = smoother.despike(readings);
         let readings = if settings.despike { despiked } else { readings };
@@ -1023,7 +1065,7 @@ fn process(settings: &Settings, smoother: &mut Smoother, scales: [f32; 2], data:
             let shut = smoother.hold_shut(data.sample_time, mapped.map(|lid| lid <= 0.0), mapped, settings);
             shut_lids(&mut lids, shut);
         }
-        (gaze, lids)
+        (gaze, lids, hold[2])
     };
     Sample {
         openness: data.openness,
@@ -1032,6 +1074,7 @@ fn process(settings: &Settings, smoother: &mut Smoother, scales: [f32; 2], data:
         gaze,
         lids,
         reliable,
+        gaze_held,
     }
 }
 
@@ -1114,6 +1157,9 @@ struct Bridge {
     latest: Option<Sample>,
     // When the samples of the last RATE_WINDOW went out.
     sent: VecDeque<Instant>,
+    // The gaze capture the panel asked for, while it runs, and the latest one's result.
+    capture: Option<Capture>,
+    capture_result: Option<CaptureResult>,
 }
 
 impl Bridge {
@@ -1122,7 +1168,14 @@ impl Bridge {
         let Reload {
             settings,
             reset_calibration,
+            gaze_capture,
         } = reload;
+        if let Some(request) = gaze_capture {
+            eprintln!("Gaze capture {} ({}) asked for", request.id, request.target);
+            let capture = Capture::new(request);
+            self.capture_result = Some(capture.result(CaptureState::Running));
+            self.capture = Some(capture);
+        }
         let stream = vrchat_stream(&self.settings);
         if self.active_since.is_some() && stream.is_some() && stream != vrchat_stream(&settings) {
             send_inactive(&self.output, &self.settings.prefix)?;
@@ -1170,8 +1223,29 @@ impl Bridge {
         {
             self.sent.pop_front();
         }
+        if let Some(capture) = &mut self.capture {
+            let gaze = [sample.raw_gaze[4], sample.raw_gaze[5]];
+            if capture.add(data.sample_time, gaze, !sample.gaze_held) {
+                self.finish_capture();
+            }
+        }
         self.latest = Some(sample);
         Ok(())
+    }
+
+    /// End the running gaze capture, if it has waited too long for samples.
+    fn check_capture(&mut self) {
+        if self.capture.as_ref().is_some_and(Capture::timed_out) {
+            self.finish_capture();
+        }
+    }
+
+    fn finish_capture(&mut self) {
+        if let Some(capture) = self.capture.take() {
+            let result = capture.result(CaptureState::Done);
+            eprintln!("{}", result.log_line());
+            self.capture_result = Some(result);
+        }
     }
 
     fn on_lost(&mut self, reason: &str) -> Result<(), Box<dyn Error>> {
@@ -1231,6 +1305,7 @@ impl Bridge {
             config_error: self.config.error.as_deref(),
             locked: &self.config.locked,
             effective: settings,
+            gaze_capture: self.capture_result.as_ref(),
         }
     }
 }
@@ -1296,6 +1371,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         last_data: None,
         latest: None,
         sent: VecDeque::new(),
+        capture: None,
+        capture_result: None,
     };
     let mut status_file = StatusFile::new(status::status_path());
     let mut source = EyeSource::open()?;
@@ -1328,6 +1405,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             },
             _ => {}
         }
+        bridge.check_capture();
         if status_file.due() {
             status_file.write(&bridge.status());
         }
@@ -1490,6 +1568,53 @@ mod tests {
         let sent = run(&raw, &openness_track(20, &[(10, [0.2; 2])]));
         assert_eq!(sent[10].lids, [0.0; 2]);
         assert_eq!(sent[11].lids, [0.75; 2]);
+    }
+
+    #[test]
+    fn gaze_correction_moves_the_zero_point_and_scales_each_direction() {
+        let angles = [0.2, 0.3, -0.2, -0.3, 0.1, -0.1];
+        assert_eq!(correct_gaze(angles, &settings()), angles);
+        let fitted = Settings {
+            gaze_offset_x: 0.1,
+            gaze_offset_y: -0.1,
+            gaze_gain_x: 2.0,
+            gaze_gain_up: 1.5,
+            gaze_gain_down: 0.5,
+            ..settings()
+        };
+        let corrected = correct_gaze(angles, &fitted);
+        let expected = [0.2, 0.6, -0.6, -0.1, 0.0, 0.0];
+        for (value, expected) in corrected.iter().zip(expected) {
+            assert!((value - expected).abs() < 1e-6, "{corrected:?}");
+        }
+        // Still within -1..1.
+        assert_eq!(correct_gaze([1.0, 1.0, -1.0, -1.0, 0.0, 0.0], &fitted)[..4], [1.0, 1.0, -1.0, -0.45]);
+    }
+
+    #[test]
+    fn corrected_gaze_is_sent_and_raw_gaze_reported() {
+        let fitted = Settings {
+            gaze_offset_y: -0.1,
+            gaze_deadzone: 0.0,
+            despike: false,
+            ..settings()
+        };
+        let readings: Vec<EyeData> = (0..200).map(|i| reading(i, [0.0, 0.0], [0.8; 2])).collect();
+        let sent = run(&fitted, &readings);
+        let last = &sent[199];
+        assert_eq!(last.raw_gaze[5], 0.0);
+        assert!((last.gaze[5] - 0.1).abs() < 1e-3, "{:?}", last.gaze);
+        let raw = run(&Settings { raw: true, ..fitted }, &readings);
+        assert!((raw[0].gaze[5] - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn samples_say_when_the_gaze_is_held() {
+        let readings = openness_track(20, &[(10, [0.2; 2]), (11, [0.2; 2])]);
+        let sent = run(&without_new_stages(), &readings);
+        assert!(!sent[9].gaze_held && sent[10].gaze_held && !sent[12].gaze_held);
+        let raw = run(&Settings { raw: true, ..settings() }, &readings);
+        assert!(raw[10].gaze_held && !raw[12].gaze_held);
     }
 
     #[test]
@@ -1662,6 +1787,7 @@ mod tests {
             gaze: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
             lids: [0.375, 0.75],
             reliable: [true; 2],
+            gaze_held: false,
         }
     }
 

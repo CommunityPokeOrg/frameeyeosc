@@ -1,5 +1,6 @@
 //! status.json, which the panel reads to show what is being sent and where.
 
+use crate::capture::CaptureResult;
 use crate::config::{OutputKind, Settings};
 use serde::Serialize;
 use std::fs::{self, DirBuilder};
@@ -31,6 +32,8 @@ pub struct Status<'a> {
     pub config_error: Option<&'a str>,
     pub locked: &'a [&'static str],
     pub effective: &'a Settings,
+    /// The latest gaze capture the panel asked for.
+    pub gaze_capture: Option<&'a CaptureResult>,
 }
 
 /// Readings from the Frame: gaze in -1..1 before smoothing, openness before and after the per-eye scale.

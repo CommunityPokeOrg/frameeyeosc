@@ -14,6 +14,11 @@ use std::time::{Duration, Instant};
 
 // How often the config file's modification time is checked.
 const CHECK_INTERVAL: Duration = Duration::from_secs(1);
+// Allowed gaze zero points and gains (the panel's steppers stay inside these too).
+const GAZE_OFFSET_RANGE: std::ops::RangeInclusive<f32> = -0.5..=0.5;
+const GAZE_GAIN_RANGE: std::ops::RangeInclusive<f32> = 0.5..=2.0;
+// A gaze capture's target name is only echoed back, so it is kept short.
+const MAX_TARGET_CHARS: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
@@ -67,6 +72,12 @@ pub struct Settings {
     pub blink_hold_ms: f32,
     pub despike: bool,
     pub blink_sync_below: f32,
+    /// Gaze zero point and how far the gaze goes, on the -1..1 scale (see `correct_gaze`).
+    pub gaze_offset_x: f32,
+    pub gaze_offset_y: f32,
+    pub gaze_gain_x: f32,
+    pub gaze_gain_up: f32,
+    pub gaze_gain_down: f32,
 }
 
 impl Default for Settings {
@@ -98,6 +109,11 @@ impl Default for Settings {
             blink_hold_ms: 80.0,
             despike: true,
             blink_sync_below: 0.35,
+            gaze_offset_x: 0.0,
+            gaze_offset_y: 0.0,
+            gaze_gain_x: 1.0,
+            gaze_gain_up: 1.0,
+            gaze_gain_down: 1.0,
         }
     }
 }
@@ -124,6 +140,11 @@ impl Settings {
             self.gaze_quality_limit,
             self.blink_hold_ms,
             self.blink_sync_below,
+            self.gaze_offset_x,
+            self.gaze_offset_y,
+            self.gaze_gain_x,
+            self.gaze_gain_up,
+            self.gaze_gain_down,
         ];
         let scales = [self.lid_scale_left, self.lid_scale_right];
         if !numbers.iter().chain(scales.iter().flatten()).all(|value| value.is_finite()) {
@@ -165,8 +186,24 @@ impl Settings {
         if self.gaze_quality_limit < 0.0 || self.blink_hold_ms < 0.0 || self.blink_sync_below < 0.0 {
             return Err("gaze_quality_limit, blink_hold_ms and blink_sync_below must be non-negative".into());
         }
+        if !(GAZE_OFFSET_RANGE.contains(&self.gaze_offset_x) && GAZE_OFFSET_RANGE.contains(&self.gaze_offset_y)) {
+            return Err("gaze_offset_x/y must be between -0.5 and 0.5".into());
+        }
+        let gains = [self.gaze_gain_x, self.gaze_gain_up, self.gaze_gain_down];
+        if !gains.iter().all(|gain| GAZE_GAIN_RANGE.contains(gain)) {
+            return Err("gaze_gain_x/up/down must be between 0.5 and 2".into());
+        }
         Ok(())
     }
+}
+
+/// A request from the panel to average the gaze for a moment while the user looks at a target.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GazeCapture {
+    /// A new id is a new request.
+    pub id: i64,
+    /// Which target the user looks at ("center", "up", ...); only passed back with the result.
+    pub target: String,
 }
 
 /// Keys the panel uses to send one-off requests rather than settings.
@@ -175,13 +212,47 @@ impl Settings {
 struct Requests {
     /// Bumped to make the learned eyelid calibration start over.
     calibration_reset: i64,
+    /// `{"id": 3, "target": "center"}`. Read loosely, so a bad value never rejects the settings.
+    gaze_capture: serde_json::Value,
+}
+
+impl Requests {
+    /// The gaze capture request's id (0 without one) and the request itself.
+    fn gaze_capture(&self) -> (i64, Option<GazeCapture>) {
+        let id = self.gaze_capture.get("id").and_then(serde_json::Value::as_i64);
+        let target = self.gaze_capture.get("target").and_then(serde_json::Value::as_str);
+        match (id, target) {
+            (Some(id), Some(target)) => (
+                id,
+                Some(GazeCapture {
+                    id,
+                    target: target.chars().take(MAX_TARGET_CHARS).collect(),
+                }),
+            ),
+            _ => (0, None),
+        }
+    }
+}
+
+/// What config.json asks for besides settings.
+#[derive(Clone, Debug, PartialEq)]
+struct Asked {
+    calibration_reset: i64,
+    capture_id: i64,
+    capture: Option<GazeCapture>,
 }
 
 /// Parse config.json: missing keys keep their defaults and unknown keys are ignored.
-fn parse(text: &str) -> Result<(Settings, i64), String> {
+fn parse(text: &str) -> Result<(Settings, Asked), String> {
     let settings: Settings = serde_json::from_str(text).map_err(|error| error.to_string())?;
     let requests: Requests = serde_json::from_str(text).map_err(|error| error.to_string())?;
-    Ok((settings, requests.calibration_reset))
+    let (capture_id, capture) = requests.gaze_capture();
+    let asked = Asked {
+        calibration_reset: requests.calibration_reset,
+        capture_id,
+        capture,
+    };
+    Ok((settings, asked))
 }
 
 /// Ids of the options that were typed on the command line rather than left at their defaults.
@@ -262,7 +333,14 @@ pub fn apply_args(settings: &mut Settings, args: &Args, given: &HashSet<String>)
         settings.despike = !args.no_despike;
         locked.push("despike");
     }
-    pin!(blink_sync_below);
+    pin!(
+        blink_sync_below,
+        gaze_offset_x,
+        gaze_offset_y,
+        gaze_gain_x,
+        gaze_gain_up,
+        gaze_gain_down
+    );
     // "/" alone means no prefix, like "".
     let prefix = settings.prefix.trim_end_matches('/');
     settings.prefix = prefix.to_owned();
@@ -272,6 +350,7 @@ pub fn apply_args(settings: &mut Settings, args: &Args, given: &HashSet<String>)
 pub struct Reload {
     pub settings: Settings,
     pub reset_calibration: bool,
+    pub gaze_capture: Option<GazeCapture>,
 }
 
 /// Watches the config file and merges it with the command line whenever it changes.
@@ -284,8 +363,10 @@ pub struct Config {
     // Modification time, size and inode; None while the file does not exist.
     stamp: Option<(i64, i64, u64, u64)>,
     last_check: Instant,
-    // calibration_reset from the last good read (0 without a file); None until there has been one.
+    // calibration_reset and the gaze capture id from the last good read (0 without a file);
+    // None until there has been one.
     reset: Option<i64>,
+    capture_id: Option<i64>,
 }
 
 impl Config {
@@ -300,6 +381,7 @@ impl Config {
             stamp: None,
             last_check: Instant::now(),
             reset: None,
+            capture_id: None,
         }
     }
 
@@ -311,11 +393,13 @@ impl Config {
         fallback.validate()?;
         self.stamp = self.stamp();
         match self.read() {
-            Ok((settings, reset)) => {
-                if reset.is_some() {
+            Ok((settings, asked)) => {
+                if asked.is_some() {
                     eprintln!("Loaded {}", self.display_path());
                 }
-                self.reset = Some(reset.unwrap_or(0));
+                // Whatever the file asked for before this start is not repeated.
+                self.reset = Some(asked.as_ref().map_or(0, |asked| asked.calibration_reset));
+                self.capture_id = Some(asked.as_ref().map_or(0, |asked| asked.capture_id));
                 Ok(settings)
             }
             Err(error) => {
@@ -342,18 +426,24 @@ impl Config {
         }
         self.stamp = stamp;
         match self.read() {
-            Ok((settings, reset)) => {
-                match reset {
+            Ok((settings, asked)) => {
+                match asked {
                     Some(_) => eprintln!("Loaded {}", self.display_path()),
                     None => eprintln!("{} is gone; using the defaults", self.display_path()),
                 }
                 self.error = None;
-                // Removing the file resets the counter to 0 but is not itself a request.
+                // Removing the file resets the counters to 0 but is not itself a request.
+                let reset = asked.as_ref().map(|asked| asked.calibration_reset);
                 let reset_calibration = reset.is_some_and(|new| self.reset.is_some_and(|old| old != new));
                 self.reset = Some(reset.unwrap_or(0));
+                let capture_id = asked.as_ref().map(|asked| asked.capture_id);
+                let new_capture = capture_id.is_some_and(|new| self.capture_id.is_some_and(|old| old != new));
+                self.capture_id = Some(capture_id.unwrap_or(0));
+                let gaze_capture = asked.and_then(|asked| asked.capture).filter(|_| new_capture);
                 Some(Reload {
                     settings,
                     reset_calibration,
+                    gaze_capture,
                 })
             }
             Err(error) => {
@@ -364,8 +454,8 @@ impl Config {
         }
     }
 
-    /// The merged settings, and calibration_reset if the file exists.
-    fn read(&self) -> Result<(Settings, Option<i64>), String> {
+    /// The merged settings, and the requests if the file exists.
+    fn read(&self) -> Result<(Settings, Option<Asked>), String> {
         let text = match self.path.as_deref().map(fs::read_to_string) {
             Some(Ok(text)) => Some(text),
             Some(Err(error)) if error.kind() != io::ErrorKind::NotFound => {
@@ -373,13 +463,13 @@ impl Config {
             }
             _ => None,
         };
-        let (mut settings, reset) = match text {
-            Some(text) => parse(&text).map(|(settings, reset)| (settings, Some(reset)))?,
+        let (mut settings, asked) = match text {
+            Some(text) => parse(&text).map(|(settings, asked)| (settings, Some(asked)))?,
             None => (Settings::default(), None),
         };
         apply_args(&mut settings, &self.args, &self.given);
         settings.validate()?;
-        Ok((settings, reset))
+        Ok((settings, asked))
     }
 
     fn stamp(&self) -> Option<(i64, i64, u64, u64)> {
@@ -432,15 +522,15 @@ mod tests {
 
     #[test]
     fn missing_keys_keep_defaults_and_unknown_keys_are_ignored() {
-        let (settings, reset) =
+        let (settings, asked) =
             parse(r#"{"version": 1, "language": "en", "lid_open": 0.85, "port": 9001, "extra": [1]}"#)
                 .unwrap();
         assert_eq!(settings.lid_open, 0.85);
         assert_eq!(settings.port, Some(9001));
         assert_eq!(settings.lid_closed, 0.30);
         assert_eq!(settings.host, "auto");
-        assert_eq!(reset, 0);
-        assert_eq!(parse(r#"{"calibration_reset": 3}"#).unwrap().1, 3);
+        assert_eq!((asked.calibration_reset, asked.capture_id, asked.capture), (0, 0, None));
+        assert_eq!(parse(r#"{"calibration_reset": 3}"#).unwrap().1.calibration_reset, 3);
         // Integers are fine where a decimal is expected.
         assert_eq!(parse(r#"{"lid_min_cutoff": 10}"#).unwrap().0.lid_min_cutoff, 10.0);
     }
@@ -465,6 +555,10 @@ mod tests {
         assert!(merged(r#"{"host": "192.168.0.60:9000"}"#, &[]).is_err());
         assert!(merged(r#"{"prefix": "FT"}"#, &[]).is_err());
         assert!(merged(r#"{"host": "fe80::1"}"#, &[]).is_ok());
+        assert!(merged(r#"{"gaze_offset_y": -0.6}"#, &[]).is_err());
+        assert!(merged(r#"{"gaze_gain_up": 2.5}"#, &[]).is_err());
+        assert!(merged(r#"{"gaze_gain_x": 0.4}"#, &[]).is_err());
+        assert!(merged(r#"{"gaze_offset_x": 0.5, "gaze_gain_down": 0.5}"#, &[]).is_ok());
     }
 
     #[test]
@@ -500,6 +594,29 @@ mod tests {
         assert_eq!((settings.blink_hold_ms, settings.gaze_quality_limit), (120.0, 0.05));
         assert_eq!(settings.blink_sync_below, 0.0);
         assert_eq!(locked, ["despike", "blink_sync_below"]);
+
+        // Negative numbers work as option values.
+        let (settings, locked) = merged("{}", &["--gaze-offset-y", "-0.1", "--gaze-gain-down", "1.2"]).unwrap();
+        assert_eq!((settings.gaze_offset_y, settings.gaze_gain_down), (-0.1, 1.2));
+        assert_eq!(locked, ["gaze_offset_y", "gaze_gain_down"]);
+    }
+
+    #[test]
+    fn gaze_capture_requests_are_read_loosely() {
+        let (_, asked) = parse(r#"{"gaze_capture": {"id": 4, "target": "up"}}"#).unwrap();
+        let expected = GazeCapture {
+            id: 4,
+            target: "up".into(),
+        };
+        assert_eq!((asked.capture_id, asked.capture), (4, Some(expected)));
+        // Anything odd is no request, and never breaks the settings.
+        for odd in [r#"{"gaze_capture": 3}"#, r#"{"gaze_capture": {"id": "x", "target": "up"}}"#] {
+            let (settings, asked) = parse(odd).unwrap();
+            assert_eq!((asked.capture_id, asked.capture), (0, None));
+            assert_eq!(settings, Settings::default());
+        }
+        let (_, asked) = parse(r#"{"gaze_capture": {"id": 1, "target": "a-very-long-target-name"}}"#).unwrap();
+        assert_eq!(asked.capture.unwrap().target.chars().count(), MAX_TARGET_CHARS);
     }
 
     #[test]
@@ -570,6 +687,16 @@ mod tests {
         assert!(!config.check().unwrap().reset_calibration);
         write_atomically(&path, r#"{"calibration_reset": 1}"#);
         assert!(config.check().unwrap().reset_calibration);
+
+        // A gaze capture is asked for once per new id.
+        write_atomically(&path, r#"{"calibration_reset": 1, "gaze_capture": {"id": 1, "target": "up"}}"#);
+        let reload = config.check().unwrap();
+        assert_eq!(reload.gaze_capture.map(|capture| capture.target), Some("up".into()));
+        assert!(!reload.reset_calibration);
+        write_atomically(&path, r#"{"lid_open": 0.85, "calibration_reset": 1, "gaze_capture": {"id": 1, "target": "up"}}"#);
+        assert!(config.check().unwrap().gaze_capture.is_none());
+        write_atomically(&path, r#"{"calibration_reset": 1, "gaze_capture": {"id": 2, "target": "down"}}"#);
+        assert_eq!(config.check().unwrap().gaze_capture.map(|capture| capture.id), Some(2));
         fs::remove_dir_all(dir).unwrap();
     }
 
