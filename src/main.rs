@@ -1,6 +1,7 @@
 //! Steam Frame 0.5.0 eye bridge using the private version-4 shared-memory ABI.
 
 mod config;
+mod replay;
 mod status;
 
 use clap::{CommandFactory, FromArgMatches, Parser};
@@ -95,6 +96,7 @@ const _: () = {
     assert!(offset_of!(EyeDataMmap, pre_fusion_gaze) == 0x49);
     assert!(offset_of!(EyeDataMmap, pre_fusion_cov_diag) == 0x61);
     assert!(offset_of!(EyeDataMmap, openness) == 0x79);
+    assert!(offset_of!(EyeDataMmap, estimate_extra) == 0x81);
     assert!(size_of::<EyeDataMmap>() == 0xebc);
     assert!(size_of::<EyeServerMmap>() <= SHM_SIZE);
     assert!(size_of::<libc::pthread_mutex_t>() <= 0x30);
@@ -171,10 +173,32 @@ struct Args {
     /// larger differences such as winks pass through untouched. 0 disables
     #[arg(long, default_value_t = 0.4)]
     lid_sync: f32,
+    /// Ignore an eye's gaze while its covariance is above this; the other eye moves both,
+    /// or the gaze is held if both are above. 0 disables
+    #[arg(long, default_value_t = 0.03)]
+    gaze_quality_limit: f32,
+    /// Keep a closed eyelid fully closed for at least this long, so short blinks reach other players. 0 disables
+    #[arg(long, default_value_t = 80.0)]
+    blink_hold_ms: f32,
+    /// Turn off the 3-sample median that drops one-sample dropouts in gaze and openness
+    #[arg(long)]
+    no_despike: bool,
+    /// Close both eyes when one is closed and the other is below this (VRCFT units); winks pass. 0 disables
+    #[arg(long, default_value_t = 0.35)]
+    blink_sync_below: f32,
     /// Settings file, re-read while running; options given here win over it
     /// [default: ~/.config/frameeyeosc/config.json]
     #[arg(long)]
     config: Option<PathBuf>,
+    /// Write the eye server's raw samples to this CSV file until stopped, instead of sending anything
+    #[arg(long, value_name = "FILE", conflicts_with = "replay")]
+    record: Option<PathBuf>,
+    /// Run a recorded CSV file through the processing and print how the output behaves, instead of sending
+    #[arg(long, value_name = "FILE")]
+    replay: Option<PathBuf>,
+    /// With --replay, also write every processed sample to this CSV file
+    #[arg(long, value_name = "FILE", requires = "replay")]
+    replay_out: Option<PathBuf>,
 }
 
 /// One Euro filter: smooths hard while the signal is still and loosens up as it moves fast.
@@ -252,8 +276,13 @@ struct Smoother {
     gaze: [OneEuro; 6],
     deadzones: [Deadzone; 6],
     lids: [OneEuro; 2],
+    // The previous two samples' gaze angles and openness, for the 3-sample median.
+    recent: [Option<[f32; 8]>; 2],
+    // Sample time until which each eyelid is kept fully closed.
+    shut_until: [f64; 2],
     last_time: Option<f64>,
-    last_gaze: Option<[f32; 6]>,
+    // Left, right and combined gaze as last sent, to hold while the gaze is unreliable.
+    last_gaze: [Option<[f32; 2]>; 3],
 }
 
 impl Smoother {
@@ -262,8 +291,10 @@ impl Smoother {
             gaze: [OneEuro::new(settings.gaze_min_cutoff, settings.gaze_beta, settings.gaze_d_cutoff); 6],
             deadzones: [Deadzone::new(settings.gaze_deadzone); 6],
             lids: [OneEuro::new(settings.lid_min_cutoff, settings.lid_beta, LID_D_CUTOFF); 2],
+            recent: [None; 2],
+            shut_until: [f64::NEG_INFINITY; 2],
             last_time: None,
-            last_gaze: None,
+            last_gaze: [None; 3],
         }
     }
 
@@ -283,8 +314,8 @@ impl Smoother {
         }
     }
 
-    /// `hold_gaze` keeps the previous gaze while the eyes are mostly shut, where the Frame's gaze jumps around.
-    fn apply(&mut self, time: f64, gaze: &mut [f32; 6], lids: &mut [f32; 2], hold_gaze: bool) {
+    /// Move the clock to `time` and return the time since the previous sample; a gap starts the filters over.
+    fn advance(&mut self, time: f64) -> f32 {
         let dt = match self.last_time {
             Some(last) if time > last && time - last < MAX_GAP => (time - last) as f32,
             Some(last) if time <= last => NOMINAL_DT,
@@ -295,15 +326,33 @@ impl Smoother {
         };
         // Set after the match: reset() clears last_time, and every later sample would reset again.
         self.last_time = Some(time);
-        match self.last_gaze {
-            Some(last) if hold_gaze => *gaze = last,
-            _ => {
-                for ((value, filter), deadzone) in
-                    gaze.iter_mut().zip(&mut self.gaze).zip(&mut self.deadzones)
-                {
-                    *value = deadzone.apply(filter.filter(*value, dt));
+        dt
+    }
+
+    /// Median of this sample and the previous two: a one-sample dropout disappears, and everything
+    /// else comes out one sample (~11 ms) later.
+    fn despike(&mut self, values: [f32; 8]) -> [f32; 8] {
+        let median = match self.recent {
+            [Some(older), Some(old)] => std::array::from_fn(|i| median3(older[i], old[i], values[i])),
+            _ => values,
+        };
+        self.recent = [self.recent[1], Some(values)];
+        median
+    }
+
+    /// `hold` keeps the left, right and combined gaze as last sent while it is unreliable: when the eyes
+    /// are mostly shut, where the Frame's gaze jumps around, or when its covariance says so.
+    fn filter(&mut self, dt: f32, gaze: &mut [f32; 6], lids: &mut [f32; 2], hold: [bool; 3]) {
+        for (pair, held) in hold.into_iter().enumerate() {
+            let values = &mut gaze[2 * pair..2 * pair + 2];
+            match self.last_gaze[pair] {
+                Some(last) if held => values.copy_from_slice(&last),
+                _ => {
+                    for (index, value) in (2 * pair..).zip(values.iter_mut()) {
+                        *value = self.deadzones[index].apply(self.gaze[index].filter(*value, dt));
+                    }
+                    self.last_gaze[pair] = Some([values[0], values[1]]);
                 }
-                self.last_gaze = Some(*gaze);
             }
         }
         for (value, filter) in lids.iter_mut().zip(&mut self.lids) {
@@ -311,16 +360,41 @@ impl Smoother {
         }
     }
 
+    /// Which eyelids go out fully closed: `closed` ones (at or past --lid-closed), both when one is closed
+    /// and the other nearly so, and each for --blink-hold-ms after that. Their filters restart from
+    /// closed, so the eye opens smoothly afterwards.
+    fn hold_shut(&mut self, time: f64, closed: [bool; 2], lids: [f32; 2], settings: &Settings) -> [bool; 2] {
+        let hold = f64::from(settings.blink_hold_ms) / 1000.0;
+        let held = [0, 1].map(|eye| closed[eye] || time < self.shut_until[eye]);
+        let shut = sync_blinks(held, lids, settings.blink_sync_below);
+        for eye in 0..2 {
+            if closed[eye] || (shut[eye] && !held[eye]) {
+                self.shut_until[eye] = time + hold;
+            }
+            if shut[eye] {
+                self.lids[eye].value = Some(0.0);
+            }
+        }
+        shut
+    }
+
     fn reset(&mut self) {
         self.gaze.iter_mut().chain(&mut self.lids).for_each(OneEuro::reset);
         self.deadzones.iter_mut().for_each(Deadzone::reset);
+        self.recent = [None; 2];
+        self.shut_until = [f64::NEG_INFINITY; 2];
         self.last_time = None;
-        self.last_gaze = None;
+        self.last_gaze = [None; 3];
     }
+}
+
+fn median3(a: f32, b: f32, c: f32) -> f32 {
+    a.max(b).min(a.min(b).max(c))
 }
 
 /// Learns each eye's relaxed openness while in use, so a face that opens one eye less than the
 /// other still maps both eyes' normal state onto --lid-open.
+#[derive(Clone)]
 struct LidCalibration {
     histograms: [Vec<f32>; 2],
     relaxed: [f32; 2],
@@ -451,6 +525,44 @@ fn sync_lids([left, right]: [f32; 2], threshold: f32) -> [f32; 2] {
     [left + weight * (average - left), right + weight * (average - right)]
 }
 
+/// Close both eyes when one is `shut` and the other's eyelid is below `below`: a blink the Frame caught
+/// fully in one eye only. A wink, with the other eye open, passes through. 0 disables.
+fn sync_blinks(shut: [bool; 2], lids: [f32; 2], below: f32) -> [bool; 2] {
+    let [left, right] = shut;
+    if below > 0.0 && ((left && lids[1] < below) || (right && lids[0] < below)) {
+        [true; 2]
+    } else {
+        shut
+    }
+}
+
+/// Whether each eye's gaze is reliable enough to use: both variances of its own (pre-fusion) estimate
+/// must be at most `limit`. A missing or non-finite covariance counts as unreliable. 0 disables.
+fn gaze_quality(data: &EyeData, limit: f32) -> [bool; 2] {
+    if limit <= 0.0 {
+        return [true; 2];
+    }
+    data.pre_fusion_covariance.map(|[x, y, _]| x <= limit && y <= limit)
+}
+
+/// The six gaze values to send (left x/y, right x/y, combined x/y) from the same layout of readings.
+/// Each eye wobbles on its own (L/R changes correlate only ~0.35), so both share the combined gaze
+/// unless --independent-eyes is given. An eye with unreliable gaze is left out of the combined gaze and the other eye stands in for it;
+/// without --independent-eyes that also moves both eyes.
+fn choose_gaze(angles: [f32; 6], reliable: [bool; 2], independent: bool) -> [f32; 6] {
+    let [left_x, left_y, right_x, right_y, x, y] = angles;
+    let [x, y] = match reliable {
+        [true, false] => [left_x, left_y],
+        [false, true] => [right_x, right_y],
+        _ => [x, y],
+    };
+    if independent {
+        [left_x, left_y, right_x, right_y, x, y]
+    } else {
+        [x, y, x, y, x, y]
+    }
+}
+
 /// Map Frame eye openness onto VRCFT EyeLid, where 0 is closed, 0.75 relaxed open and 1 widened.
 /// A held-closed eye reads ~0.2 on the Frame rather than 0, hence the closed threshold.
 /// A relaxed eye wanders between ~0.75 and ~0.9, so widening only starts past a deadzone.
@@ -490,11 +602,18 @@ impl Drop for MutexGuard {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct EyeData {
     sample_time: f64,
     gaze: [[f32; 3]; 2],
+    // Diagonal of each eye's gaze covariance, after and before stereo fusion.
+    gaze_covariance: [[f32; 3]; 2],
     fixation_point: [f32; 3],
+    pre_fusion_gaze: [[f32; 3]; 2],
+    pre_fusion_covariance: [[f32; 3]; 2],
     openness: [f32; 2],
+    // Not yet understood; only recorded.
+    extra: [f32; 8],
 }
 
 impl EyeData {
@@ -607,8 +726,12 @@ impl EyeSource {
                 Next::Sample(EyeData {
                     sample_time: record.sample_time,
                     gaze: record.gaze_direction,
+                    gaze_covariance: record.gaze_covariance_diag,
                     fixation_point: record.fixation_point,
+                    pre_fusion_gaze: record.pre_fusion_gaze,
+                    pre_fusion_covariance: record.pre_fusion_cov_diag,
                     openness: record.openness,
+                    extra: record.estimate_extra,
                 })
             } else {
                 Next::Stopped
@@ -816,6 +939,8 @@ struct Sample {
     gaze: [f32; 6],
     // VRCFT eyelids, as sent to VRChat.
     lids: [f32; 2],
+    // Whether each eye's gaze passed the quality check.
+    reliable: [bool; 2],
 }
 
 /// Per-eye multipliers on Frame openness: the fixed ones, else the learned ones, else 1.
@@ -831,31 +956,85 @@ fn lid_scales(settings: &Settings, calibration: &LidCalibration) -> [f32; 2] {
     ]
 }
 
+/// Let the eyelid calibration learn from a sample once `settled`, then work the sample through.
+fn step(
+    settings: &Settings,
+    smoother: &mut Smoother,
+    calibration: &mut LidCalibration,
+    data: &EyeData,
+    settled: bool,
+) -> Sample {
+    // Openness read while the gaze is unreliable is suspect too, so it does not teach the calibration.
+    if settings.lid_calibration
+        && settled
+        && gaze_quality(data, settings.gaze_quality_limit) == [true; 2]
+    {
+        calibration.observe(data.openness);
+    }
+    process(settings, smoother, lid_scales(settings, calibration), data)
+}
+
 fn process(settings: &Settings, smoother: &mut Smoother, scales: [f32; 2], data: &EyeData) -> Sample {
     let [x, y] = gaze_angles(data.fixation_point);
     let [left, right] = data.gaze.map(gaze_angles);
     let raw_gaze = [left[0], left[1], right[0], right[1], x, y];
-    // Each eye wobbles on its own (L/R changes correlate only ~0.35), so share the combined gaze by default.
-    let mut gaze = if settings.independent_eyes {
-        raw_gaze
+    let scale = |openness: [f32; 2]| [0, 1].map(|eye| openness[eye] * scales[eye]);
+    let openness_scaled = scale(data.openness);
+    let reliable = gaze_quality(data, settings.gaze_quality_limit);
+    let blink_stages = settings.blink_hold_ms > 0.0 || settings.blink_sync_below > 0.0;
+    let (gaze, lids) = if settings.raw {
+        let gaze = choose_gaze(raw_gaze, [true; 2], settings.independent_eyes);
+        let mapped = openness_scaled.map(|openness| lid_to_vrcft(openness, settings));
+        let shut = sync_blinks(mapped.map(|lid| lid <= 0.0), mapped, settings.blink_sync_below);
+        let mut lids = sync_lids(mapped, settings.lid_sync);
+        if blink_stages {
+            shut_lids(&mut lids, shut);
+        }
+        (gaze, lids)
     } else {
-        [x, y, x, y, x, y]
+        let dt = smoother.advance(data.sample_time);
+        let readings: [f32; 8] =
+            std::array::from_fn(|i| if i < 6 { raw_gaze[i] } else { data.openness[i - 6] });
+        // Fed even while off, so turning it on does not start from an empty history.
+        let despiked = smoother.despike(readings);
+        let readings = if settings.despike { despiked } else { readings };
+        let angles: [f32; 6] = std::array::from_fn(|i| readings[i]);
+        let openness = [readings[6], readings[7]];
+        let mut gaze = choose_gaze(angles, reliable, settings.independent_eyes);
+        let mapped = scale(openness).map(|openness| lid_to_vrcft(openness, settings));
+        let mut lids = mapped;
+        let hold = if openness.iter().any(|openness| *openness < settings.gaze_hold_below)
+            || reliable == [false; 2]
+        {
+            [true; 3]
+        } else if settings.independent_eyes {
+            [!reliable[0], !reliable[1], false]
+        } else {
+            [false; 3]
+        };
+        smoother.filter(dt, &mut gaze, &mut lids, hold);
+        let mut lids = sync_lids(lids, settings.lid_sync);
+        if blink_stages {
+            let shut = smoother.hold_shut(data.sample_time, mapped.map(|lid| lid <= 0.0), mapped, settings);
+            shut_lids(&mut lids, shut);
+        }
+        (gaze, lids)
     };
-    let openness_scaled = [0, 1].map(|eye| data.openness[eye] * scales[eye]);
-    let mut lids = openness_scaled.map(|openness| lid_to_vrcft(openness, settings));
-    if !settings.raw {
-        let hold_gaze = data
-            .openness
-            .iter()
-            .any(|openness| *openness < settings.gaze_hold_below);
-        smoother.apply(data.sample_time, &mut gaze, &mut lids, hold_gaze);
-    }
     Sample {
         openness: data.openness,
         openness_scaled,
         raw_gaze,
         gaze,
-        lids: sync_lids(lids, settings.lid_sync),
+        lids,
+        reliable,
+    }
+}
+
+fn shut_lids(lids: &mut [f32; 2], shut: [bool; 2]) {
+    for (lid, shut) in lids.iter_mut().zip(shut) {
+        if shut {
+            *lid = 0.0;
+        }
     }
 }
 
@@ -948,12 +1127,11 @@ impl Bridge {
         let now = Instant::now();
         self.last_data = Some(now);
         let since = *self.active_since.get_or_insert(now);
-        if self.settings.lid_calibration && since.elapsed() >= CAL_SETTLE {
-            self.calibration.observe(data.openness);
+        let settled = since.elapsed() >= CAL_SETTLE;
+        let sample = step(&self.settings, &mut self.smoother, &mut self.calibration, &data, settled);
+        if self.settings.lid_calibration && settled {
             self.calibration.save_if_due();
         }
-        let scales = lid_scales(&self.settings, &self.calibration);
-        let sample = process(&self.settings, &mut self.smoother, scales, &data);
         if self.settings.sending {
             for (addr, arg) in osc_messages(&self.settings, &sample) {
                 self.output.send(addr, vec![arg])?;
@@ -1033,17 +1211,56 @@ impl Bridge {
     }
 }
 
+/// Write every sample the eye server produces to `path` until stopped. Nothing is sent, and the status
+/// and calibration files are left alone, so this can run next to the installed service.
+fn record(path: &Path) -> Result<(), Box<dyn Error>> {
+    let mut recorder = replay::Recorder::create(path)?;
+    let mut source = EyeSource::open()?;
+    eprintln!("Recording {SOURCE} to {}; stop with Ctrl+C", path.display());
+    let mut last_flush = Instant::now();
+    let mut reported = 0;
+    loop {
+        match source.next(POLL)? {
+            Next::Sample(data) => recorder.write(&data)?,
+            Next::Waiting | Next::Stopped if source.is_stale() => {
+                eprintln!("{SOURCE} was replaced; reopening");
+                source = EyeSource::open()?;
+            }
+            _ => {}
+        }
+        // Flushed every second, so stopping with Ctrl+C loses at most that much.
+        if last_flush.elapsed() >= Duration::from_secs(1) {
+            recorder.flush()?;
+            last_flush = Instant::now();
+            if recorder.count / 900 != reported {
+                reported = recorder.count / 900;
+                eprintln!("{} samples", recorder.count);
+            }
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let matches = Args::command().get_matches();
     let args = Args::from_arg_matches(&matches)?;
+    if let Some(path) = &args.record {
+        return record(path);
+    }
     if args.target != "auto" && config::split_target(&args.target).is_none() {
         return Err("--target must be HOST:PORT or auto".into());
     }
     let in_config_dir = |name: &str| Some(config::config_dir()?.join(name));
     let calibration_path = args.calibration_file.clone().or_else(|| in_config_dir("calibration"));
     let config_path = args.config.clone().or_else(|| in_config_dir("config.json"));
+    let replay = args.replay.clone().map(|input| (input, args.replay_out.clone()));
     let mut config = Config::new(config_path, args, config::given_options(&matches));
     let settings = config.load()?;
+    if let Some((input, output)) = replay {
+        // Starts from the saved calibration like a real run, but never writes it back.
+        let mut calibration = LidCalibration::load(calibration_path, settings.lid_open);
+        calibration.path = None;
+        return replay::run(&input, output.as_deref(), &settings, &calibration);
+    }
     let mut bridge = Bridge {
         output: Output::new(Target::of(&settings)),
         smoother: Smoother::new(&settings),
@@ -1090,6 +1307,150 @@ mod tests {
         Settings::default()
     }
 
+    fn apply(smoother: &mut Smoother, time: f64, gaze: &mut [f32; 6], lids: &mut [f32; 2], hold: bool) {
+        let dt = smoother.advance(time);
+        smoother.filter(dt, gaze, lids, [hold; 3]);
+    }
+
+    /// Both eyes looking along (x, y) at sample `index`, with the given Frame openness.
+    fn reading(index: usize, [x, y]: [f32; 2], openness: [f32; 2]) -> EyeData {
+        let direction = [x, y, -1.0];
+        EyeData {
+            sample_time: index as f64 * f64::from(NOMINAL_DT),
+            gaze: [direction; 2],
+            fixation_point: direction,
+            pre_fusion_gaze: [direction; 2],
+            openness,
+            ..EyeData::default()
+        }
+    }
+
+    fn run(settings: &Settings, readings: &[EyeData]) -> Vec<Sample> {
+        let mut smoother = Smoother::new(settings);
+        readings
+            .iter()
+            .map(|data| process(settings, &mut smoother, [1.0; 2], data))
+            .collect()
+    }
+
+    /// Open eyes, except for the samples listed with their openness.
+    fn openness_track(length: usize, changes: &[(usize, [f32; 2])]) -> Vec<EyeData> {
+        (0..length)
+            .map(|i| {
+                let openness = changes.iter().find(|(at, _)| *at == i).map_or([0.8; 2], |(_, open)| *open);
+                reading(i, [0.0, 0.0], openness)
+            })
+            .collect()
+    }
+
+    fn without_new_stages() -> Settings {
+        Settings {
+            gaze_quality_limit: 0.0,
+            blink_hold_ms: 0.0,
+            despike: false,
+            blink_sync_below: 0.0,
+            ..settings()
+        }
+    }
+
+    #[test]
+    fn gaze_quality_reads_each_eyes_own_covariance() {
+        let mut data = reading(0, [0.0, 0.0], [0.8; 2]);
+        data.pre_fusion_covariance = [[0.01, 0.02, 0.5], [0.01, 0.05, 0.0]];
+        // The z variance does not count.
+        assert_eq!(gaze_quality(&data, 0.03), [true, false]);
+        assert_eq!(gaze_quality(&data, 0.0), [true, true]);
+        data.pre_fusion_covariance[0][0] = f32::NAN;
+        assert_eq!(gaze_quality(&data, 0.03), [false, false]);
+    }
+
+    #[test]
+    fn unreliable_eye_gives_way_to_the_other() {
+        let angles = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        assert_eq!(choose_gaze(angles, [true; 2], false), [5.0, 6.0, 5.0, 6.0, 5.0, 6.0]);
+        assert_eq!(choose_gaze(angles, [true, false], false), [1.0, 2.0, 1.0, 2.0, 1.0, 2.0]);
+        assert_eq!(choose_gaze(angles, [false, true], true), [1.0, 2.0, 3.0, 4.0, 3.0, 4.0]);
+        assert_eq!(choose_gaze(angles, [false; 2], false), [5.0, 6.0, 5.0, 6.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn gaze_is_held_while_both_eyes_are_unreliable() {
+        let settings = Settings {
+            despike: false,
+            ..settings()
+        };
+        let mut readings: Vec<EyeData> = (0..10).map(|i| reading(i, [0.2, 0.0], [0.8; 2])).collect();
+        let mut wild = reading(10, [-0.5, 0.3], [0.8; 2]);
+        wild.pre_fusion_covariance = [[1.0; 3]; 2];
+        readings.push(wild);
+        let sent = run(&settings, &readings);
+        assert_eq!(sent[10].gaze, sent[9].gaze);
+        assert_eq!(sent[10].reliable, [false; 2]);
+
+        // With per-eye gaze only the unreliable eye is held; the other one moves both combined values.
+        let independent = Settings {
+            independent_eyes: true,
+            gaze_deadzone: 0.0,
+            ..settings
+        };
+        readings[10].pre_fusion_covariance = [[1.0; 3], [0.0; 3]];
+        let sent = run(&independent, &readings);
+        assert_eq!(sent[10].gaze[..2], sent[9].gaze[..2]);
+        assert!(sent[10].gaze[2] < sent[9].gaze[2] && sent[10].gaze[4] < sent[9].gaze[4]);
+    }
+
+    #[test]
+    fn blink_hold_keeps_a_short_blink_closed() {
+        let settings = Settings {
+            despike: false,
+            ..settings()
+        };
+        let readings = openness_track(30, &[(10, [0.2; 2])]);
+        let sent = run(&settings, &readings);
+        // 80 ms is 7.2 samples: closed at sample 10 and the seven after it.
+        assert!(sent[10..18].iter().all(|sample| sample.lids == [0.0; 2]));
+        assert!(sent[18].lids[0] > 0.0 && sent[18].lids[0] < 0.75);
+        // Without the new stages the filters never quite get there.
+        let sent = run(&without_new_stages(), &readings);
+        assert!(sent.iter().all(|sample| sample.lids[0] > 0.2), "{:?}", sent[10].lids);
+    }
+
+    #[test]
+    fn despike_drops_a_one_sample_dropout() {
+        let dropout = openness_track(30, &[(10, [0.2, 0.8])]);
+        let sent = run(&settings(), &dropout);
+        assert!(sent.iter().all(|sample| sample.lids[0] > 0.7));
+        let sent = run(&without_new_stages(), &dropout);
+        assert!(sent.iter().any(|sample| sample.lids[0] < 0.5));
+        // Two samples are a real (short) blink, and come through one sample late.
+        let blink = openness_track(30, &[(10, [0.2; 2]), (11, [0.2; 2])]);
+        let sent = run(&settings(), &blink);
+        assert!(sent[10].lids[0] > 0.7 && sent[11].lids == [0.0; 2]);
+    }
+
+    #[test]
+    fn blink_sync_closes_both_but_keeps_winks() {
+        assert_eq!(sync_blinks([true, false], [0.0, 0.2], 0.35), [true; 2]);
+        assert_eq!(sync_blinks([false, true], [0.3, 0.0], 0.35), [true; 2]);
+        assert_eq!(sync_blinks([true, false], [0.0, 0.75], 0.35), [true, false]);
+        assert_eq!(sync_blinks([true, false], [0.0, 0.2], 0.0), [true, false]);
+        // A wink stays a wink through the whole pipeline.
+        let wink: Vec<(usize, [f32; 2])> = (10..30).map(|i| (i, [0.2, 0.8])).collect();
+        let sent = run(&settings(), &openness_track(40, &wink));
+        assert!(sent[20].lids[0] == 0.0 && sent[20].lids[1] > 0.7);
+    }
+
+    #[test]
+    fn raw_mode_skips_the_timed_stages() {
+        let raw = Settings {
+            raw: true,
+            ..settings()
+        };
+        let sent = run(&raw, &openness_track(20, &[(10, [0.2; 2])]));
+        assert_eq!(sent[10].lids, [0.0; 2]);
+        assert_eq!(sent[11].lids, [0.75; 2]);
+    }
+
     #[test]
     fn deadzone_ignores_small_moves_and_follows_large_ones() {
         let mut deadzone = Deadzone::new(0.03);
@@ -1119,9 +1480,9 @@ mod tests {
         });
         let mut lids = [0.75; 2];
         let mut gaze = [0.0; 6];
-        smoother.apply(0.0, &mut gaze, &mut lids, false);
+        apply(&mut smoother, 0.0, &mut gaze, &mut lids, false);
         let mut jumped = [0.5; 6];
-        smoother.apply(NOMINAL_DT as f64, &mut jumped, &mut lids, false);
+        apply(&mut smoother, NOMINAL_DT as f64, &mut jumped, &mut lids, false);
         assert!(jumped[0] < 0.5, "a filtered step must not pass through untouched: {}", jumped[0]);
     }
 
@@ -1130,10 +1491,10 @@ mod tests {
         let mut smoother = Smoother::new(&settings());
         let mut lids = [0.75; 2];
         let mut gaze = [0.2; 6];
-        smoother.apply(0.0, &mut gaze, &mut lids, false);
+        apply(&mut smoother, 0.0, &mut gaze, &mut lids, false);
         let before = gaze;
         let mut jumped = [-0.4; 6];
-        smoother.apply(NOMINAL_DT as f64, &mut jumped, &mut lids, true);
+        apply(&mut smoother, NOMINAL_DT as f64, &mut jumped, &mut lids, true);
         assert_eq!(jumped, before);
     }
 
@@ -1248,6 +1609,7 @@ mod tests {
             raw_gaze: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
             gaze: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
             lids: [0.375, 0.75],
+            reliable: [true; 2],
         }
     }
 
@@ -1362,7 +1724,7 @@ mod tests {
         let mut smoother = Smoother::new(&settings());
         let mut lids = [0.75; 2];
         let mut gaze = [0.0; 6];
-        smoother.apply(0.0, &mut gaze, &mut lids, false);
+        apply(&mut smoother, 0.0, &mut gaze, &mut lids, false);
         smoother.configure(&Settings {
             lid_min_cutoff: 10.0,
             gaze_deadzone: 0.0,

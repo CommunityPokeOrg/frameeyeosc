@@ -3,3 +3,5 @@
 # Eye-tracking recordings are personal data; never commit them.
 /tools/
 *.csv
+# ...except the made-up one the replay tests read.
+!/tests/fixtures/synthetic.csv

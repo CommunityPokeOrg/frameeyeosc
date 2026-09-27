@@ -63,6 +63,10 @@ pub struct Settings {
     pub lid_scale_right: Option<f32>,
     pub lid_calibration: bool,
     pub lid_sync: f32,
+    pub gaze_quality_limit: f32,
+    pub blink_hold_ms: f32,
+    pub despike: bool,
+    pub blink_sync_below: f32,
 }
 
 impl Default for Settings {
@@ -90,6 +94,10 @@ impl Default for Settings {
             lid_scale_right: None,
             lid_calibration: true,
             lid_sync: 0.4,
+            gaze_quality_limit: 0.03,
+            blink_hold_ms: 80.0,
+            despike: true,
+            blink_sync_below: 0.35,
         }
     }
 }
@@ -113,6 +121,9 @@ impl Settings {
             self.lid_widen_start,
             self.lid_wide,
             self.lid_sync,
+            self.gaze_quality_limit,
+            self.blink_hold_ms,
+            self.blink_sync_below,
         ];
         let scales = [self.lid_scale_left, self.lid_scale_right];
         if !numbers.iter().chain(scales.iter().flatten()).all(|value| value.is_finite()) {
@@ -150,6 +161,9 @@ impl Settings {
         }
         if self.lid_sync < 0.0 {
             return Err("lid_sync must be non-negative".into());
+        }
+        if self.gaze_quality_limit < 0.0 || self.blink_hold_ms < 0.0 || self.blink_sync_below < 0.0 {
+            return Err("gaze_quality_limit, blink_hold_ms and blink_sync_below must be non-negative".into());
         }
         Ok(())
     }
@@ -243,7 +257,12 @@ pub fn apply_args(settings: &mut Settings, args: &Args, given: &HashSet<String>)
         settings.lid_calibration = !args.no_lid_calibration;
         locked.push("lid_calibration");
     }
-    pin!(lid_sync);
+    pin!(lid_sync, gaze_quality_limit, blink_hold_ms);
+    if given.contains("no_despike") {
+        settings.despike = !args.no_despike;
+        locked.push("despike");
+    }
+    pin!(blink_sync_below);
     // "/" alone means no prefix, like "".
     let prefix = settings.prefix.trim_end_matches('/');
     settings.prefix = prefix.to_owned();
@@ -438,6 +457,10 @@ mod tests {
         assert!(merged(r#"{"gaze_min_cutoff": 0}"#, &[]).is_err());
         assert!(merged(r#"{"lid_scale_left": -1}"#, &[]).is_err());
         assert!(merged(r#"{"lid_sync": -0.1}"#, &[]).is_err());
+        assert!(merged(r#"{"gaze_quality_limit": -0.01}"#, &[]).is_err());
+        assert!(merged(r#"{"blink_hold_ms": -1}"#, &[]).is_err());
+        assert!(merged(r#"{"blink_sync_below": -0.1}"#, &[]).is_err());
+        assert!(merged(r#"{"despike": 1}"#, &[]).is_err());
         assert!(merged(r#"{"lid_wide": 1e300}"#, &[]).is_err());
         assert!(merged(r#"{"host": "192.168.0.60:9000"}"#, &[]).is_err());
         assert!(merged(r#"{"prefix": "FT"}"#, &[]).is_err());
@@ -470,6 +493,13 @@ mod tests {
         let (settings, locked) = merged(file, &["--port", "9002"]).unwrap();
         assert_eq!((settings.host.as_str(), settings.port), ("10.0.0.2", Some(9002)));
         assert_eq!(locked, ["port"]);
+
+        let file = r#"{"despike": true, "blink_hold_ms": 120, "gaze_quality_limit": 0.05}"#;
+        let (settings, locked) = merged(file, &["--no-despike", "--blink-sync-below", "0"]).unwrap();
+        assert!(!settings.despike);
+        assert_eq!((settings.blink_hold_ms, settings.gaze_quality_limit), (120.0, 0.05));
+        assert_eq!(settings.blink_sync_below, 0.0);
+        assert_eq!(locked, ["despike", "blink_sync_below"]);
     }
 
     #[test]
