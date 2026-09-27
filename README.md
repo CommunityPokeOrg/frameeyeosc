@@ -63,6 +63,12 @@ From 0.4.0 on, the panel's "Update" button does the update. The panel's Advanced
 
 `./install.sh --with-panel` adds an "Eye" panel to the SteamVR dashboard. It starts together with SteamVR from the next SteamVR start; to open it right away, pick "frameeyeosc panel" under Launch program (+) on the dashboard.
 
+| Basic | Gaze |
+|---|---|
+| ![The Basic tab](docs/images/panel-basic-en_2026-09-27_20-20-00.png) | ![The Gaze tab](docs/images/panel-gaze-en_2026-09-27_20-20-00.png) |
+| **Eyelids** | **Advanced** |
+| ![The Eyelids tab](docs/images/panel-lids-en_2026-09-27_20-20-00.png) | ![The Advanced tab](docs/images/panel-advanced-en_2026-09-27_20-20-00.png) |
+
 - The left column always shows what frameeyeosc is doing: sending or paused, where it sends to, messages per second, both eyelids and the gaze (raw and sent), and a config error if there is one.
 - Basic: pause sending, VRChat or VRCFaceTracking (ETVR), target PC (automatic, or fixed to the PC it sends to now, so there's no IP to type in VR), port, language (Japanese / English), start with SteamVR, reset all, quit.
 - Gaze: smoothing on or off, light / medium / strong presets and the three filter values, deadzone, holding the gaze while blinking, per-eye gaze, skipping unreliable gaze, removing one-sample glitches.
