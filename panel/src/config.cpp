@@ -161,6 +161,10 @@ const std::vector<SettingSpec>& settingSpecs() {
         {key::kLidScaleRight, SettingType::NullableNumber, 0, "", 0.5, 2.0, 0.01, 2},
         {key::kLidCalibration, SettingType::Bool, 1, "", 0, 1, 1, 0},
         {key::kLidSync, SettingType::Number, 0.4, "", 0.0, 1.0, 0.05, 2},
+        {key::kGazeQualityLimit, SettingType::Number, 0.03, "", 0.005, 1.0, 0.005, 3},
+        {key::kBlinkHoldMs, SettingType::Number, 80, "", 0.0, 300.0, 10.0, 0},
+        {key::kDespike, SettingType::Bool, 1, "", 0, 1, 1, 0},
+        {key::kBlinkSyncBelow, SettingType::Number, 0.35, "", 0.0, 0.75, 0.05, 2},
         {key::kCalibrationReset, SettingType::Integer, 0, "", 0, 1e9, 1, 0},
         {key::kLanguage, SettingType::String, 0, "ja", 0, 0, 0, 0},
     };

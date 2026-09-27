@@ -107,6 +107,10 @@ struct UiText {
     const char* hintHold;
     const char* rowIndependent;
     const char* hintIndependent;
+    const char* rowQuality;
+    const char* hintQuality;
+    const char* rowDespike;
+    const char* hintDespike;
 
     // Lids tab
     const char* rowCalibration;
@@ -126,6 +130,10 @@ struct UiText {
     const char* markWide;
     const char* rowSync;
     const char* hintSync;
+    const char* rowBlink;
+    const char* hintBlink;
+    const char* blinkHold;          ///< label before the blink_hold_ms stepper
+    const char* blinkSync;          ///< label before the blink_sync_below stepper
     const char* rowLidSmooth;
 
     // Advanced tab

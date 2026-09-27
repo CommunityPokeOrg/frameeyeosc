@@ -95,6 +95,10 @@ UiText makeJapanese() {
     t.hintHold = "この値より閉じたら止める";
     t.rowIndependent = "左右の目を別々に動かす";
     t.hintIndependent = "Frame ではぶれやすい";
+    t.rowQuality = "不確かな視線を使わない";
+    t.hintQuality = "この値より不確かな目は無視";
+    t.rowDespike = "一瞬の途切れを消す";
+    t.hintDespike = "視線とまぶた。約 11 ms 遅れる";
 
     t.rowCalibration = "自動キャリブレーション";
     t.learnedFormat = "覚えた値 左 %s・右 %s";
@@ -113,6 +117,10 @@ UiText makeJapanese() {
     t.markWide = "見開き最大";
     t.rowSync = "左右をそろえる強さ";
     t.hintSync = "0 = そろえない。ウインクは通す";
+    t.rowBlink = "まばたきを届ける";
+    t.hintBlink = "閉じたまま保つ時間・両目で閉じる";
+    t.blinkHold = "保持";
+    t.blinkSync = "両目";
     t.rowLidSmooth = "まぶたのなめらかさ";
 
     t.rowPrefix = "パラメーター名の頭";
@@ -231,6 +239,10 @@ UiText makeEnglish() {
     t.hintHold = "Holds below this openness";
     t.rowIndependent = "Move eyes separately";
     t.hintIndependent = "Jittery on the Frame";
+    t.rowQuality = "Skip unreliable gaze";
+    t.hintQuality = "Ignores an eye less sure than this";
+    t.rowDespike = "Remove glitches";
+    t.hintDespike = "Gaze and lids, ~11 ms later";
 
     t.rowCalibration = "Auto calibration";
     t.learnedFormat = "Learned L %s / R %s";
@@ -249,6 +261,10 @@ UiText makeEnglish() {
     t.markWide = "Widest";
     t.rowSync = "Sync both lids";
     t.hintSync = "0 = off. Winks pass through";
+    t.rowBlink = "Make blinks visible";
+    t.hintBlink = "Hold closed, close both eyes";
+    t.blinkHold = "Hold";
+    t.blinkSync = "Both";
     t.rowLidSmooth = "Eyelid smoothing";
 
     t.rowPrefix = "Parameter prefix";

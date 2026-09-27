@@ -60,6 +60,10 @@ constexpr const char* kLidScaleLeft = "lid_scale_left";
 constexpr const char* kLidScaleRight = "lid_scale_right";
 constexpr const char* kLidCalibration = "lid_calibration";
 constexpr const char* kLidSync = "lid_sync";
+constexpr const char* kGazeQualityLimit = "gaze_quality_limit";
+constexpr const char* kBlinkHoldMs = "blink_hold_ms";
+constexpr const char* kDespike = "despike";
+constexpr const char* kBlinkSyncBelow = "blink_sync_below";
 constexpr const char* kCalibrationReset = "calibration_reset";
 constexpr const char* kLanguage = "language";
 }  // namespace key

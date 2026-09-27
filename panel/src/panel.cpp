@@ -1007,8 +1007,8 @@ void EyePanel::drawGaze(const Pen& pen, const UiText& t, const SettingsView& v) 
         const bool on = value > 0;
         drawRowLabel(pen, t, y, kRowH, t.rowHold, t.hintHold, locked);
         drawSegmented(pen, kControlX, y + cy, 200, kControlH,
-                      {{t.on, {PanelAction::HoldOn, key::kGazeHoldBelow, 0}},
-                       {t.off, {PanelAction::HoldOff, key::kGazeHoldBelow, 0}}},
+                      {{t.on, {PanelAction::NumberOn, key::kGazeHoldBelow, 0}},
+                       {t.off, {PanelAction::NumberOff, key::kGazeHoldBelow, 0}}},
                       on ? 0 : 1, 20, locked);
         drawStepper(pen, kControlX + 212, y + cy, 220, kControlH, key::kGazeHoldBelow, value,
                     on ? formatSetting(key::kGazeHoldBelow, value) : std::string("—"), on, locked);
@@ -1022,6 +1022,30 @@ void EyePanel::drawGaze(const Pen& pen, const UiText& t, const SettingsView& v) 
                       {{t.on, {PanelAction::SetBool, key::kIndependentEyes, 1}},
                        {t.off, {PanelAction::SetBool, key::kIndependentEyes, 0}}},
                       v.flag(key::kIndependentEyes) ? 0 : 1, 20, locked);
+    }
+    y += kRowH + kRowGap;
+    // Skip an eye's gaze while its covariance is high (0 = off) and the limit
+    {
+        const bool locked = v.locked(key::kGazeQualityLimit);
+        const double value = v.number(key::kGazeQualityLimit);
+        const bool on = value > 0;
+        drawRowLabel(pen, t, y, kRowH, t.rowQuality, t.hintQuality, locked);
+        drawSegmented(pen, kControlX, y + cy, 200, kControlH,
+                      {{t.on, {PanelAction::NumberOn, key::kGazeQualityLimit, 0}},
+                       {t.off, {PanelAction::NumberOff, key::kGazeQualityLimit, 0}}},
+                      on ? 0 : 1, 20, locked);
+        drawStepper(pen, kControlX + 212, y + cy, 220, kControlH, key::kGazeQualityLimit, value,
+                    on ? formatSetting(key::kGazeQualityLimit, value) : std::string("—"), on, locked);
+    }
+    y += kRowH + kRowGap;
+    // 3-sample median on gaze and openness
+    {
+        const bool locked = v.locked(key::kDespike);
+        drawRowLabel(pen, t, y, kRowH, t.rowDespike, t.hintDespike, locked);
+        drawSegmented(pen, kControlX, y + cy, 300, kControlH,
+                      {{t.on, {PanelAction::SetBool, key::kDespike, 1}},
+                       {t.off, {PanelAction::SetBool, key::kDespike, 0}}},
+                      v.flag(key::kDespike) ? 0 : 1, 20, locked);
     }
 }
 
@@ -1161,6 +1185,33 @@ void EyePanel::drawLids(const Pen& pen, const UiText& t, const PanelModel& m, co
         drawRowLabel(pen, t, y, kRowH, t.rowSync, t.hintSync, locked);
         drawStepper(pen, kControlX, y + cy, 220, kControlH, key::kLidSync, value, formatSetting(key::kLidSync, value),
                     true, locked);
+    }
+    y += kRowH + kRowGap;
+    // Blinks: how long a closed eye stays closed, and closing both when one is closed (0 = off for each)
+    {
+        const bool lockedHold = v.locked(key::kBlinkHoldMs);
+        const bool lockedSync = v.locked(key::kBlinkSyncBelow);
+        drawRowLabel(pen, t, y, kRowH, t.rowBlink, t.hintBlink, lockedHold || lockedSync);
+        const double labelW = 52;
+        const double gap = 12;
+        const double stepperW = (kControlW - labelW * 2 - gap) / 2;
+        const double hold = v.number(key::kBlinkHoldMs);
+        char holdText[32];
+        std::snprintf(holdText, sizeof(holdText), "%.0f ms", hold);
+        const double sync = v.number(key::kBlinkSyncBelow);
+        for (int i = 0; i < 2; ++i) {
+            const double lx = kControlX + i * (labelW + stepperW + gap);
+            const char* label = i == 0 ? t.blinkHold : t.blinkSync;
+            pen.text(lx, centerBaseline(y, kRowH, 18), label, fitSize(pen, label, 18, 12, labelW - 6, true), kText,
+                     true);
+            if (i == 0) {
+                drawStepper(pen, lx + labelW, y + cy, stepperW, kControlH, key::kBlinkHoldMs, hold, holdText, true,
+                            lockedHold);
+            } else {
+                drawStepper(pen, lx + labelW, y + cy, stepperW, kControlH, key::kBlinkSyncBelow, sync,
+                            formatSetting(key::kBlinkSyncBelow, sync), true, lockedSync);
+            }
+        }
     }
     y += kRowH + kRowGap;
     // Eyelid smoothing (two One Euro values)

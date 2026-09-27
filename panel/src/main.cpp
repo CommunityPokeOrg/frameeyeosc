@@ -579,14 +579,19 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
             };
             break;
         }
-        case PanelAction::HoldOn: {
-            const double value = findSetting(key::kGazeHoldBelow)->defaultNumber;
-            change = [value](JsonValue& root) { root.set(key::kGazeHoldBelow, JsonValue::makeNumber(value)); };
+        case PanelAction::NumberOn: {
+            const SettingSpec* spec = findSetting(hit.key);
+            if (spec == nullptr) return;
+            const std::string name = hit.key;
+            const double value = spec->defaultNumber;
+            change = [name, value](JsonValue& root) { root.set(name, JsonValue::makeNumber(value)); };
             break;
         }
-        case PanelAction::HoldOff:
-            change = [](JsonValue& root) { root.set(key::kGazeHoldBelow, JsonValue::makeNumber(0.0)); };
+        case PanelAction::NumberOff: {
+            const std::string name = hit.key;
+            change = [name](JsonValue& root) { root.set(name, JsonValue::makeNumber(0.0)); };
             break;
+        }
         case PanelAction::CalibrationReset:
             change = [](JsonValue& root) {
                 const JsonValue* current = root.get(key::kCalibrationReset);

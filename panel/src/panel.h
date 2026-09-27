@@ -24,8 +24,8 @@ enum class PanelAction {
     PortDefault,       ///< port = null
     SetOutput,         ///< output = arg (0 vrchat, 1 etvr), port = null, then ask about the recommendation
     Preset,            ///< gaze smoothing preset arg (0 light, 1 medium, 2 strong)
-    HoldOn,            ///< gaze_hold_below = its default
-    HoldOff,           ///< gaze_hold_below = 0
+    NumberOn,          ///< key = its default (for numbers where 0 means off)
+    NumberOff,         ///< key = 0
     CalibrationReset,  ///< calibration_reset + 1
     ScaleAuto,         ///< lid_scale_left/right = null
     ScaleFixed,        ///< lid_scale_left/right = the scales in use
