@@ -372,6 +372,10 @@ Actions Session::tick(double now, bool dashboardOpen, const EyeStatus& status) {
             actions.seconds = phase_ == Phase::Settling
                                   ? std::max(1, static_cast<int>(std::ceil(settle - (now - phaseAt_) - 1e-9)))
                                   : 0;
+            // The ring runs the whole way round for the 3, 2, 1, and again while the eyes are shut (not half for each)
+            actions.progress = phase_ == Phase::Settling
+                                   ? std::clamp((settle - (now - phaseAt_)) / settle, 0.0, 1.0)
+                                   : std::clamp(left / capture, 0.0, 1.0);
         }
         // Glide from the previous target to this one at the start of a step (smoothstep easing)
         const Target& from = target(previousPoint_);

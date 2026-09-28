@@ -294,15 +294,23 @@ void testFullSession() {
     CHECK(s.view().point == Point::Closed);
 
     // The eyes-shut step: "close your eyes" 3, 2, 1, then "keep them closed", then "open your eyes"
+    // The ring runs the full circle over the countdown: full at 3.0 s left, half at 1.5 s, nearly empty at 0.1 s
     a = s.tick(now, false, runningWith(0, false, {}));
-    CHECK(a.style == TargetStyle::CloseEyes && a.seconds == 3);
+    CHECK(a.style == TargetStyle::CloseEyes && a.seconds == 3 && near(a.progress, 1.0));
+    a = s.tick(now + 1.5, false, runningWith(0, false, {}));
+    CHECK(a.seconds == 2 && near(a.progress, 0.5));
+    a = s.tick(now + 2.9, false, runningWith(0, false, {}));
+    CHECK(a.seconds == 1 && near(a.progress, 0.1 / 3));
     a = s.tick(now + 2.5, false, runningWith(0, false, {}));
     CHECK(a.style == TargetStyle::CloseEyes && a.seconds == 1 && !a.writeCapture);
     now += kCloseSettleSec;
     a = s.tick(now, false, runningWith(0, false, {}));
     CHECK(a.writeCapture && std::string(a.target) == "closed" && a.style == TargetStyle::KeepClosed);
-    CHECK(near(a.captureSec, 3.0) && near(a.skipSec, 0.5));
+    CHECK(near(a.captureSec, 3.0) && near(a.skipSec, 0.5) && near(a.progress, 1.0));
     s.captureSent(++id, now);
+    // ...and again the whole way round while the eyes are shut
+    a = s.tick(now + 1.5, false, runningWith(id, false, {}));
+    CHECK(a.style == TargetStyle::KeepClosed && near(a.progress, 0.5));
     now += kClosedSec + 0.2;
     a = s.tick(now, false, runningWith(id, true, points[5], false));
     CHECK(s.view().phase == Phase::Reopen && a.style == TargetStyle::OpenEyes && !a.writeValues);
