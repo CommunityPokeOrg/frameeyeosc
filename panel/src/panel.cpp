@@ -1772,11 +1772,25 @@ void EyePanel::drawAdvanced(const Pen& pen, const UiText& t, const PanelModel& m
     {
         const double h = 56;
         const bool locked = v.locked(key::kGazeDebugDots);
+        const bool on = v.flag(key::kGazeDebugDots);
+        const double top = y + (h - kControlH) / 2;
         drawRowLabel(pen, t, y, h, t.rowGazeDots, t.hintGazeDots, locked);
-        drawSegmented(pen, kControlX, y + (h - kControlH) / 2, 300, kControlH,
+        drawSegmented(pen, kControlX, top, 200, kControlH,
                       {{t.on, {PanelAction::SetBool, key::kGazeDebugDots, 1}},
                        {t.off, {PanelAction::SetBool, key::kGazeDebugDots, 0}}},
-                      v.flag(key::kGazeDebugDots) ? 0 : 1, 20, locked);
+                      on ? 0 : 1, 20, locked);
+        // How far ahead the dots are: "Dot distance  − 1.0 m ＋", greyed out while the dots are off
+        const double stepperW = 180;
+        const double stepperX = kInnerRight - stepperW;
+        const double captionRight = stepperX - 12;
+        const double captionLeft = kControlX + 200 + 12;
+        const double captionSize = fitSize(pen, t.dotDistance, 16, 12, captionRight - captionLeft, false);
+        const double captionW = pen.measure(t.dotDistance, captionSize, false);
+        pen.text(captionRight - captionW, centerBaseline(y, h, captionSize), t.dotDistance, captionSize,
+                 on ? kText : kTextMuted);
+        const double distance = v.number(key::kGazeDebugDotsDistanceM);
+        drawStepper(pen, stepperX, top, stepperW, kControlH, key::kGazeDebugDotsDistanceM, distance,
+                    formatSetting(key::kGazeDebugDotsDistanceM, distance) + " m", on, false);
         y += h + kRowGap;
     }
     const double infoH = 38;

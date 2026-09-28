@@ -226,6 +226,7 @@ UiText makeJapanese() {
     t.checkedFormat = "・確認 %s";
     t.rowGazeDots = "視線の点を表示";
     t.hintGazeDots = "デバッグ用・送る視線を表示";
+    t.dotDistance = "点の距離";
     t.rowUpdateCheck = "新しい版の確認";
     t.hintUpdateCheck = "起動時と 1 日 1 回、GitHub に新しい版がないか見に行きます";
     t.updateUpToDateFormat = "最新版です（%s）";
@@ -493,7 +494,8 @@ UiText makeEnglish() {
     t.rowVersion = "Version";
     t.checkedFormat = " · checked %s";
     t.rowGazeDots = "Show gaze dots";
-    t.hintGazeDots = "Debug: the sent gaze, 1 m ahead";
+    t.hintGazeDots = "Debug: the sent gaze";
+    t.dotDistance = "Dot distance";
     t.rowUpdateCheck = "Check for updates";
     t.hintUpdateCheck = "Looks on GitHub for a new version at start and once a day";
     t.updateUpToDateFormat = "Up to date (%s)";

@@ -242,6 +242,7 @@ struct UiText {
     const char* checkedFormat;          ///< after the version under the row label: "・確認 %s" (time or date)
     const char* rowGazeDots;         ///< the debug gaze dots switch
     const char* hintGazeDots;
+    const char* dotDistance;         ///< next to its stepper ("Dot distance")
     const char* rowUpdateCheck;
     const char* hintUpdateCheck;
     const char* updateUpToDateFormat;   ///< "Up to date (%s)"
