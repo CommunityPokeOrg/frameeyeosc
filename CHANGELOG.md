@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 (unreleased)
+## 0.5.0 (2026-09-28)
 
 Fitting the eyes to you, for when the avatar's eyes look a little off (for example looking too far down, or eyelids that close when you look down).
 
