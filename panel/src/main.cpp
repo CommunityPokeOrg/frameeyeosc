@@ -1601,6 +1601,11 @@ int runOverlay(const Options& options) {
                 std::string error;
                 if (dots.open(dir + "/" + gaze_dots::kSocketName, error)) {
                     dotIpd = vr.userIpdMeters();
+                    // Set the distance now, so a packet in this same pass isn't placed at 0 m with the default width
+                    dotDistance = wantedDistance;
+                    std::fprintf(stderr, "[dots] at %.2f m, %.1f mm wide (plain overlays, no sort order or flags)
+",
+                                 wantedDistance, gaze_dots::dotWidth(wantedDistance) * 1000);
                     std::fprintf(stderr, "[dots] listening in %s (IPD %.1f mm)\n", dir.c_str(), dotIpd * 1000);
                 } else {
                     std::fprintf(stderr, "[dots] %s\n", error.c_str());
