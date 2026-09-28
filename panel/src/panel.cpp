@@ -2,6 +2,8 @@
 #include "panel.h"
 
 #include "draw.h"
+#include "fit_text.h"
+#include "host_entry.h"
 #include "theme.h"
 
 #include <cairo.h>
@@ -447,47 +449,6 @@ std::string offsetText(double value) {
     return text;
 }
 
-/**
- * The name of a eye fit point.
- * @param t texts
- * @param point the point
- * @return the name
- */
-const char* pointName(const UiText& t, gaze_fit::Point point) {
-    switch (point) {
-        case gaze_fit::Point::Center: return t.pointCenter;
-        case gaze_fit::Point::Up: return t.pointUp;
-        case gaze_fit::Point::Down: return t.pointDown;
-        case gaze_fit::Point::Left: return t.pointLeft;
-        case gaze_fit::Point::Right: return t.pointRight;
-        case gaze_fit::Point::Closed: return t.pointClosed;
-    }
-    return "";
-}
-
-/**
- * Why a eye fit stopped, in words.
- * @param t texts
- * @param fit the session
- * @return the text
- */
-std::string failureText(const UiText& t, const gaze_fit::View& fit) {
-    using gaze_fit::Failure;
-    switch (fit.failure) {
-        case Failure::None: return "";
-        case Failure::Cancelled: return t.failCancelled;
-        case Failure::WaitTimedOut: return t.failWaitTimedOut;
-        case Failure::NotRunning: return t.failNotRunning;
-        case Failure::NoResult: return t.failNoResult;
-        case Failure::Unsteady: return formatText(t.failUnsteadyFormat, pointName(t, fit.point));
-        case Failure::NotClosed: return t.failNotClosed;
-        case Failure::NoMovement: return formatText(t.failNoMovementFormat, pointName(t, fit.point));
-        case Failure::NoLidRange: return t.failLidRange;
-        case Failure::WriteFailed: return t.failWrite;
-    }
-    return "";
-}
-
 }  // namespace
 
 bool PanelHit::operator==(const PanelHit& other) const {
@@ -552,6 +513,13 @@ PanelHit EyePanel::pointerDown(double x, double y, double now) {
         case PanelAction::FitDetailsPage:
             fitDetailsPage_ = hit.arg;
             return {};
+        case PanelAction::HostKey:
+            hostEntryText_ = host_entry::keypadInput(hostEntryText_, hit.arg);
+            hostEntryError_.clear();
+            return {};
+        case PanelAction::HostCancel:
+            closeHostEntry();
+            return {};
         case PanelAction::Quit:
             // A single accidental press never quits
             if (quitArmed_ && now <= quitArmedUntil_) return hit;
@@ -608,6 +576,26 @@ void EyePanel::showPrompt(const std::string& output) {
     promptOutput_ = output;
     hover_ = {};
     pressed_ = {};
+}
+
+void EyePanel::openHostEntry(const std::string& text) {
+    hostEntryOpen_ = true;
+    hostEntryText_ = text;
+    hostEntryError_.clear();
+    hover_ = {};
+    pressed_ = {};
+}
+
+void EyePanel::closeHostEntry() {
+    hostEntryOpen_ = false;
+    hostEntryError_.clear();
+    hover_ = {};
+    pressed_ = {};
+}
+
+void EyePanel::setHostEntryText(const std::string& text) {
+    hostEntryText_ = text;
+    hostEntryError_.clear();
 }
 
 void EyePanel::showUpdatePrompt(const std::string& version) {
@@ -1053,7 +1041,8 @@ void EyePanel::drawBasic(const Pen& pen, const UiText& t, const PanelModel& m, c
                       output == kOutputEtvr ? 1 : (output == kOutputVrchat ? 0 : -1), 19, locked);
     }
     y += kRowH + kRowGap;
-    // Target PC: automatic, or fixed to the PC frameeyeosc sends to now (no typing an IP in VR)
+    // Target PC: automatic, fixed to the PC frameeyeosc sends to now, or typed on the keypad; any host set by hand
+    // shows in the third choice
     {
         const bool locked = v.locked(key::kHost);
         const std::string host = v.text(key::kHost);
@@ -1062,9 +1051,10 @@ void EyePanel::drawBasic(const Pen& pen, const UiText& t, const PanelModel& m, c
         drawRowLabel(pen, t, y, kRowH, t.rowTarget, t.hintTarget, locked);
         drawSegmented(pen, kControlX, y + cy, kControlW, kControlH,
                       {{t.targetAuto, {PanelAction::HostAuto, key::kHost, 0}},
-                       {isAuto ? std::string(t.targetFixNow) : formatText(t.targetFixedFormat, host),
-                        {PanelAction::FixHost, key::kHost, 0}, canFix}},
-                      isAuto ? 0 : 1, 19, locked);
+                       {t.targetFixNow, {PanelAction::FixHost, key::kHost, 0}, canFix},
+                       {isAuto ? std::string(t.targetEnter) : formatText(t.targetManualFormat, host),
+                        {PanelAction::HostEnter, key::kHost, 0}}},
+                      isAuto ? 0 : 2, 19, locked);
     }
     y += kRowH + kRowGap;
     // Port
@@ -1318,6 +1308,8 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
                 error = true;
                 title = t.fitFailed;
                 paragraphs.push_back(failureText(t, fit));
+                // The numbers behind it (what was measured against what was needed), for asking for help
+                if (const std::string detail = failureDetailText(t, fit); !detail.empty()) paragraphs.push_back(detail);
                 break;
             case Phase::Idle:
             case Phase::Done:
@@ -2029,6 +2021,107 @@ void EyePanel::drawPrompt(const Pen& pen, const UiText& t) {
     }
 }
 
+void EyePanel::drawHostEntry(const Pen& pen, const UiText& t) {
+    // Only the keypad's buttons stay usable
+    buttons_.clear();
+    cairo_set_source_rgba(pen.cr, 0, 0, 0, 0.62);
+    pen.roundedRect(0, 0, kWidth, kHeight, 24);
+    cairo_fill(pen.cr);
+    const double w = 760;
+    const double h = 560;
+    const double x = (kWidth - w) / 2;
+    const double y = (kHeight - h) / 2;
+    drawCard(pen, x, y, w, h, 24, kCard, kAccent, 2);
+    textCentered(pen, x + w / 2, y + 52, t.hostEntryTitle, fitSize(pen, t.hostEntryTitle, 24, 16, w - 60, true), kText,
+                 true);
+
+    // What is typed, with a caret
+    const double fx = x + 40;
+    const double fy = y + 78;
+    const double fw = w - 80;
+    const double fh = 60;
+    fillRounded(pen, fx, fy, fw, fh, 14, kControl);
+    strokeRounded(pen, fx, fy, fw, fh, 14, kAccent, 2);
+    const double textSize = fitSize(pen, hostEntryText_ + "|", 28, 14, fw - 40, true);
+    const double tw = pen.text(fx + 20, centerBaseline(fy, fh, textSize), hostEntryText_, textSize, kText, true);
+    pen.color(kAccent);
+    cairo_rectangle(pen.cr, fx + 22 + tw, fy + 14, 2.5, fh - 28);
+    cairo_fill(pen.cr);
+    // Why it can't be used, or how to type it
+    const bool error = !hostEntryError_.empty();
+    const std::string below = error ? hostEntryError_ : std::string(t.hostEntryHint);
+    pen.text(fx + 4, fy + fh + 30, below, fitSize(pen, below, 17, 12, fw - 8, error), error ? kDanger : kTextMuted,
+             error);
+
+    // The keypad: 1-9, then ".", "0" and backspace
+    const double keyW = 124;
+    const double keyH = 64;
+    const double gap = 12;
+    const double kx = x + 40;
+    const double ky = y + 196;
+    const int keys[12] = {'1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', host_entry::kBackspace};
+    for (int i = 0; i < 12; ++i) {
+        const double bx = kx + (i % 3) * (keyW + gap);
+        const double by = ky + (i / 3) * (keyH + gap);
+        const PanelHit hit {PanelAction::HostKey, nullptr, keys[i]};
+        const int pointer = pointerState(hit);
+        fillRounded(pen, bx, by, keyW, keyH, 16, pointer == 2 ? kAccentPressed : (pointer == 1 ? kControlHover : kControl));
+        strokeRounded(pen, bx, by, keyW, keyH, 16, kBorder, 2);
+        const Color color = pointer == 2 ? kOnAccent : kText;
+        if (keys[i] == host_entry::kBackspace) {
+            // A left-pointing key shape with an x, drawn (no font needed)
+            const double cx = bx + keyW / 2;
+            const double cy = by + keyH / 2;
+            cairo_t* cr = pen.cr;
+            pen.color(color);
+            cairo_set_line_width(cr, 2.5);
+            cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+            cairo_move_to(cr, cx - 22, cy);
+            cairo_line_to(cr, cx - 10, cy - 13);
+            cairo_line_to(cr, cx + 22, cy - 13);
+            cairo_line_to(cr, cx + 22, cy + 13);
+            cairo_line_to(cr, cx - 10, cy + 13);
+            cairo_close_path(cr);
+            cairo_stroke(cr);
+            cairo_move_to(cr, cx - 1, cy - 6);
+            cairo_line_to(cr, cx + 11, cy + 6);
+            cairo_move_to(cr, cx + 11, cy - 6);
+            cairo_line_to(cr, cx - 1, cy + 6);
+            cairo_stroke(cr);
+        } else {
+            const std::string label(1, static_cast<char>(keys[i]));
+            textCentered(pen, bx + keyW / 2, centerBaseline(by, keyH, 28), label, 28, color, true);
+        }
+        addButton(hit, bx, by, keyW, keyH);
+    }
+
+    // OK, the SteamVR keyboard (for host names) and cancel, on the right
+    const double bw = w - 80 - 3 * keyW - 2 * gap - 28;
+    const double bx = x + w - 40 - bw;
+    const double bh = kControlH + 8;
+    const struct {
+        PanelHit hit;
+        const char* label;
+        bool accent;
+    } side[3] = {{{PanelAction::HostOk, nullptr, 0}, t.hostEntryOk, true},
+                 {{PanelAction::HostKeyboard, nullptr, 0}, t.hostEntryKeyboard, false},
+                 {{PanelAction::HostCancel, nullptr, 0}, t.hostEntryCancel, false}};
+    for (int i = 0; i < 3; ++i) {
+        const double by = ky + i * (bh + 22);
+        const int pointer = pointerState(side[i].hit);
+        if (side[i].accent) {
+            fillRounded(pen, bx, by, bw, bh, bh / 2, pointer == 2 ? kAccentPressed : kAccent);
+        } else {
+            fillRounded(pen, bx, by, bw, bh, bh / 2, pointer > 0 ? kControlHover : kControl);
+            strokeRounded(pen, bx, by, bw, bh, bh / 2, kBorder, 2);
+        }
+        const double size = fitSize(pen, side[i].label, 21, 13, bw - 28, true);
+        textCentered(pen, bx + bw / 2, centerBaseline(by, bh, size), side[i].label, size,
+                     side[i].accent ? kOnAccent : kText, true);
+        addButton(side[i].hit, bx, by, bw, bh);
+    }
+}
+
 void EyePanel::render(const PanelModel& model) {
     const Pen pen {cr_, &fonts_};
     const UiText& t = uiText(model.language);
@@ -2053,6 +2146,7 @@ void EyePanel::render(const PanelModel& model) {
         case PanelTab::Advanced: drawAdvanced(pen, t, model, view); break;
     }
     if (promptOpen()) drawPrompt(pen, t);
+    if (hostEntryOpen_) drawHostEntry(pen, t);
 
     // Forget hover on a button that is gone or can no longer be pressed
     bool hoverFound = false;

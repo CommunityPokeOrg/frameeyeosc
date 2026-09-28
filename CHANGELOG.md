@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.2 (unreleased)
+
+- When the eye fit stops, the panel shows the numbers behind it under the reason: for an unsteady dot, the usable samples against the 45 needed, the spread against the 2.7° allowed, and the tries (for example "Center dot: 30 of 45 samples usable · spread 3.4° (max 2.7°) · 3 tries"); for the eyes-shut step, each eye's openness against what it had to read below; for a dot the gaze hardly moved toward, how far it moved against how far it had to; for eyelids that barely changed, which eye and reading. Every try is logged with its numbers too (`[fit] center try 2: 128 samples (min 45), spread 3.4° (max 2.7°) -> again`). The limits are unchanged.
+- The target PC can be typed in the panel: "Enter IP" on the Basic tab opens a keypad for an IPv4 address, with "Keyboard (names too)" for the SteamVR keyboard when a host name is needed. What is typed is checked (no spaces, no port: that goes in the Port row) and written to `host`. The row then shows it ("Manual 192.168.1.20"). For when the automatic choice picks the wrong PC.
+
 ## 0.5.1 (2026-09-29)
 
 - The debug gaze dots now show over the dashboard. They are plain overlays again (the sort order and dashboard flag added in 0.5.0 made the dashboard hide them) and sit 1 m ahead instead of 2 m, the same with the dashboard open or closed, so they don't jump. They look the same size as before. "Dot distance" next to the switch on the Advanced tab (`gaze_debug_dots_distance_m`, 0.3–2.0 m in 0.1 m steps) changes the distance, and applies right away. Beyond about 1.2 m the open dashboard hides them.

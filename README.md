@@ -74,13 +74,17 @@ From 0.4.0 on, the panel's "Update" button does the update. The panel's Advanced
 | ![The Advanced tab](docs/images/panel-advanced-en_2026-09-28_06-07-01.png) | |
 
 - The left column always shows what frameeyeosc is doing: sending or paused, where it sends to, messages per second, both eyelids and the gaze (raw and sent), and a config error if there is one.
-- Basic: pause sending, VRChat or VRCFaceTracking (ETVR), target PC (automatic, or fixed to the PC it sends to now, so there's no IP to type in VR), port, language (Japanese / English), start with SteamVR, reset all, quit.
+- Basic: pause sending, VRChat or VRCFaceTracking (ETVR), target PC (automatic, fixed to the PC it sends to now, or typed: see below), port, language (Japanese / English), start with SteamVR, reset all, quit.
 - Gaze: smoothing on or off, light / medium / strong presets and the three filter values, deadzone, holding the gaze while blinking, per-eye gaze, skipping unreliable gaze, removing one-sample glitches.
 - Eye fit: one button that fits your gaze and eyelids in about 20 seconds (see [Eye fit](#eye-fit)), re-centering the gaze only, the result with "Reset", and the values by hand under "Fine-tune".
 - Eyelids: auto calibration and its learned values, per-eye scales, the four openness marks drawn over each eye's live openness (blink and open wide to set them), left/right sync, keeping blinks visible (hold time and closing both eyes), eyelid smoothing.
 - Advanced: parameter prefix, the version with checking for and installing updates, showing gaze dots (debug) and their distance, file locations, options locked by the command line.
 
 The panel writes `config.json` and reads the status file. To pick its default language, it also reads the `language` line of Steam's `~/.steam/registry.vdf` once at startup (read only). For updates it runs `~/.local/share/frameeyeosc/frame-update.sh` (see above). Closing it, quitting it, or not installing it doesn't stop frameeyeosc. While it isn't open on the dashboard it draws nothing. Besides running the update check, the only thing it reads then is the update state file (`~/.cache/frameeyeosc/update-state.json`), about twice a second. The exceptions are an eye fit (it then also reads the status file and shows the dot with the dashboard closed, until the fit is over) and the debug gaze dots while they're switched on (it then listens on their socket and moves the dots about 90 times a second while samples arrive, and reads the status file and checks `config.json` for changes 10 times a second). Its "Start with SteamVR" switch enables or disables its systemd user unit (`frameeyeosc-panel.service`). Build notes and debugging options are in [panel/README.md](panel/README.md) (Japanese).
+
+### Setting the target PC by hand
+
+"Auto" sends to the PC Steam Link is streaming from. If that is the wrong PC, press "Enter IP" in the Target PC row on the Basic tab. A keypad opens: type the PC's IPv4 address (for example `192.168.1.20`) and press "OK". For a host name, "Keyboard (names too)" opens SteamVR's keyboard. Leave the port out; it goes in the Port row. The panel writes it to `host` in `config.json`, and the row shows "Manual 192.168.1.20". "Auto" switches back. You can also set `host` in `config.json` by hand.
 
 ## Settings
 

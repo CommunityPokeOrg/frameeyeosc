@@ -79,7 +79,19 @@ struct UiText {
     const char* hintTarget;
     const char* targetAuto;
     const char* targetFixNow;       ///< "Fix to current PC"
-    const char* targetFixedFormat;  ///< "Fixed %s"
+    const char* targetEnter;        ///< "Enter IP"
+    const char* targetManualFormat;  ///< "Manual %s": a host set by hand (typed or fixed)
+    const char* hostEntryTitle;     ///< the keypad for the target PC
+    const char* hostEntryHint;
+    const char* hostEntryKeyboard;  ///< opens the SteamVR keyboard (for host names)
+    const char* hostEntryOk;
+    const char* hostEntryCancel;
+    const char* hostErrEmpty;
+    const char* hostErrSpace;
+    const char* hostErrPort;
+    const char* hostErrIpv4;
+    const char* hostErrName;
+    const char* hostErrKeyboard;    ///< the SteamVR keyboard could not be opened
     const char* rowPort;
     const char* portDefaultHint;    ///< port follows the output type
     const char* portReset;          ///< back to default port
@@ -150,6 +162,21 @@ struct UiText {
     const char* failNoMovementFormat;
     const char* failLidRange;
     const char* failWrite;
+    // The numbers behind a failure (one line under it)
+    const char* failDetailSeparator;      ///< between the parts ("・")
+    const char* failDetailPointFormat;    ///< "%s dot"
+    const char* failDetailSamplesFormat;  ///< "%d of %d samples usable"
+    const char* failDetailSpreadFormat;   ///< "spread %s (max %.1f°)"
+    const char* failDetailTriesFormat;    ///< "%d tries"
+    const char* failDetailEyeLeft;        ///< "L"
+    const char* failDetailEyeRight;
+    const char* failDetailClosedFormat;   ///< "%s %.2f (needs below %.2f)"
+    const char* failDetailMovedFormat;    ///< "moved %.1f° (needs %.1f°)"
+    const char* failDetailSidewaysLeft;   ///< "left eye sideways" (its own fit)
+    const char* failDetailSidewaysRight;
+    const char* failDetailLidWhereFormat;  ///< "%s eyelid, %s dot"
+    const char* failDetailLidFormat;      ///< "open %.2f vs shut %.2f, %.2f apart (needs %.2f)"
+    const char* failDetailLidNone;        ///< no open reading
     const char* pointCenter;
     const char* pointUp;
     const char* pointDown;

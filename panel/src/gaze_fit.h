@@ -5,6 +5,9 @@
 
 #include "status.h"
 
+#include <cmath>
+#include <string>
+
 namespace gaze_fit {
 
 /** The whole fit (five gaze points and the eyes-shut step), or only re-centering the gaze. */
@@ -109,6 +112,30 @@ struct Measured {
     int samples = 0;
 };
 
+/** The numbers behind a failure, for the panel and the log. */
+struct FailureDetail {
+    int tries = 0;                      ///< Unsteady / NotClosed: the tries made...
+    Measured last;                      ///< ...and the last one
+    double closedBelow[2] = {NAN, NAN};  ///< NotClosed: each eye had to read below this (kClosedShare of ahead)
+    int eye = -1;                       ///< NoMovement: -1 = the gaze, 0 / 1 = that eye's sideways fit; NoLidRange: the eye
+    double movedDeg = NAN;              ///< NoMovement: how far it moved its way...
+    double neededDeg = NAN;             ///< ...and how far it had to
+    Point lidPoint = Point::Center;     ///< NoLidRange: the open reading nearest the shut one...
+    double lidOpen = NAN;               ///< ...that reading (NaN if there was none)...
+    double lidClosed = NAN;             ///< ...and the shut one
+};
+
+/**
+ * One try's numbers for the log, e.g. "center try 2: 128 samples (min 45), spread 3.4° (max 2.7°) -> again".
+ * @param point the step
+ * @param attempt the try (1-based)
+ * @param measured its capture
+ * @param center the straight-ahead capture (for the eyes-shut step's limits)
+ * @param outcome "ok", "again" or "failed"
+ * @return the line
+ */
+std::string tryText(Point point, int attempt, const Measured& measured, const Measured& center, const char* outcome);
+
 /**
  * Whether a gaze capture is steady and long enough to use.
  * @param measured the capture
@@ -158,9 +185,10 @@ double eyeAngle(double yawDeg, int eye, double ipd);
  * @param points the captures, indexed by Point
  * @param ipd the distance between the eyes (m)
  * @param out where they go (hasEyeX set when fitted)
+ * @param detail on failure, which eye and how far it moved (may be null)
  * @return false if an eye did not move far enough the right way between the side targets
  */
-bool fitEyes(const Measured points[kPointCount], double ipd, Values& out);
+bool fitEyes(const Measured points[kPointCount], double ipd, Values& out, FailureDetail* detail = nullptr);
 
 /**
  * The zero point from the center capture; everything else stays as it is. Each eye's own zero point moves too
@@ -180,15 +208,16 @@ Values fitCenter(const Measured& center, const Values& current, double ipd = kDe
  * @param failed the first point that did not move far enough the right way
  * @return false if a point did not move far enough the right way
  */
-bool fitGaze(const Measured points[kPointCount], Values& out, Point& failed);
+bool fitGaze(const Measured points[kPointCount], Values& out, Point& failed, FailureDetail* detail = nullptr);
 
 /**
  * Each eye's lid fit: the eyes-shut reading, and the open readings looking up, straight ahead and down.
  * @param points the captures, indexed by Point (Closed included)
  * @param out where the lid readings go (hasLids set)
+ * @param detail on failure, which eye and reading (may be null)
  * @return false if an eye's open readings are not at least kMinLidRange above its closed one
  */
-bool fitLids(const Measured points[kPointCount], Values& out);
+bool fitLids(const Measured points[kPointCount], Values& out, FailureDetail* detail = nullptr);
 
 /** Where a session is. */
 enum class Phase {
@@ -232,6 +261,7 @@ struct View {
     Point point = Point::Center;  ///< the step shown, or the one that failed
     int attempt = 1;           ///< try at this step (1-based)
     Failure failure = Failure::None;
+    FailureDetail detail;      ///< the numbers behind the failure
     Values values;             ///< the settings written (Done)
 };
 
@@ -250,6 +280,7 @@ struct Actions {
     int seconds = 0;            ///< the countdown on the target (0 = none): the seconds measured, or the eyes-shut 3, 2, 1
     double progress = 0.0;      ///< the ring on the target, 1 -> 0 over one step
     bool arrived = false;       ///< the target has finished gliding to this step (or didn't have to move)
+    std::string log;            ///< a try's numbers to log (tryText), or empty
 };
 
 /**
@@ -306,6 +337,7 @@ private:
     int index_ = 0;
     int attempt_ = 1;
     Point failedPoint_ = Point::Center;
+    FailureDetail detail_;
     Point previousPoint_ = Point::Center;  ///< where the dot glides from
     double startedAt_ = 0.0;     ///< when Waiting began
     double phaseAt_ = 0.0;       ///< when Settling, Capturing or Reopen began

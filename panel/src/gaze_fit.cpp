@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 namespace gaze_fit {
 
@@ -72,6 +73,23 @@ Point pointAt(Mode mode, int index) {
     return kTargets[std::clamp(index, 0, kPointCount - 1)].point;
 }
 
+std::string tryText(Point point, int attempt, const Measured& measured, const Measured& center, const char* outcome) {
+    char text[256];
+    int n = std::snprintf(text, sizeof(text), "%s try %d: %d samples (min %d), ", target(point).name, attempt,
+                          measured.samples, kMinSamples);
+    if (point == Point::Closed) {
+        const auto limit = [&](int eye) { return kClosedShare * center.openness[eye]; };
+        std::snprintf(text + n, sizeof(text) - n, "openness L %.3f R %.3f (below %.3f / %.3f) -> %s",
+                      measured.openness[0], measured.openness[1], limit(0), limit(1), outcome);
+    } else if (std::isfinite(measured.spread) && measured.samples > 0) {
+        std::snprintf(text + n, sizeof(text) - n, "spread %.1f° (max %.1f°) -> %s", measured.spread * kFullScaleDeg,
+                      kMaxSpread * kFullScaleDeg, outcome);
+    } else {
+        std::snprintf(text + n, sizeof(text) - n, "no gaze average -> %s", outcome);
+    }
+    return text;
+}
+
 bool usable(const Measured& measured) {
     return measured.samples >= kMinSamples && std::isfinite(measured.x) && std::isfinite(measured.y) &&
            std::isfinite(measured.spread) && measured.spread <= kMaxSpread;
@@ -92,7 +110,7 @@ double eyeAngle(double yawDeg, int eye, double ipd) {
     return std::atan2(side, kTargetDistanceM * std::cos(yaw)) * 180.0 / M_PI / kFullScaleDeg;
 }
 
-bool fitEyes(const Measured points[kPointCount], double ipd, Values& out) {
+bool fitEyes(const Measured points[kPointCount], double ipd, Values& out, FailureDetail* detail) {
     const Point used[3] = {Point::Center, Point::Left, Point::Right};
     for (Point point : used) {
         if (!at(points, point).hasEyeX) return true;  // an older frameeyeosc: nothing to fit, not a failure
@@ -104,7 +122,14 @@ bool fitEyes(const Measured points[kPointCount], double ipd, Values& out) {
         const double right = at(points, Point::Right).xEye[eye];
         const double expectedCenter = eyeAngle(0.0, eye, ipd);
         const double expectedSpan = eyeAngle(kSideDeg, eye, ipd) - eyeAngle(-kSideDeg, eye, ipd);
-        if (!(right - left >= kMinMoveFraction * expectedSpan)) return false;
+        if (!(right - left >= kMinMoveFraction * expectedSpan)) {
+            if (detail != nullptr) {
+                detail->eye = eye;
+                detail->movedDeg = (right - left) * kFullScaleDeg;
+                detail->neededDeg = kMinMoveFraction * expectedSpan * kFullScaleDeg;
+            }
+            return false;
+        }
         // (x - offset) * gain: the span sets the gain, and the center then lands on the eye's own angle
         const double gain = gainSetting(expectedSpan / (right - left));
         fitted.eyeGainX[eye] = gain;
@@ -127,7 +152,7 @@ Values fitCenter(const Measured& center, const Values& current, double ipd) {
     return values;
 }
 
-bool fitGaze(const Measured points[kPointCount], Values& out, Point& failed) {
+bool fitGaze(const Measured points[kPointCount], Values& out, Point& failed, FailureDetail* detail) {
     const Measured& center = at(points, Point::Center);
     const double side = kSideDeg / kFullScaleDeg;
     const double upDown = kUpDownDeg / kFullScaleDeg;
@@ -145,6 +170,11 @@ bool fitGaze(const Measured points[kPointCount], Values& out, Point& failed) {
     for (const auto& check : checks) {
         if (!(check.moved >= kMinMoveFraction * check.target)) {
             failed = check.point;
+            if (detail != nullptr) {
+                detail->eye = -1;
+                detail->movedDeg = check.moved * kFullScaleDeg;
+                detail->neededDeg = kMinMoveFraction * check.target * kFullScaleDeg;
+            }
             return false;
         }
     }
@@ -156,12 +186,22 @@ bool fitGaze(const Measured points[kPointCount], Values& out, Point& failed) {
     return true;
 }
 
-bool fitLids(const Measured points[kPointCount], Values& out) {
+bool fitLids(const Measured points[kPointCount], Values& out, FailureDetail* detail) {
     const Measured& closed = at(points, Point::Closed);
     const Measured* open[3] = {&at(points, Point::Up), &at(points, Point::Center), &at(points, Point::Down)};
+    const Point openPoints[3] = {Point::Up, Point::Center, Point::Down};
     for (int eye = 0; eye < 2; ++eye) {
-        for (const Measured* m : open) {
-            if (!m->hasOpenness || !(m->openness[eye] >= closed.openness[eye] + kMinLidRange)) return false;
+        for (int i = 0; i < 3; ++i) {
+            const Measured* m = open[i];
+            if (!m->hasOpenness || !(m->openness[eye] >= closed.openness[eye] + kMinLidRange)) {
+                if (detail != nullptr) {
+                    detail->eye = eye;
+                    detail->lidPoint = openPoints[i];
+                    detail->lidOpen = m->hasOpenness ? m->openness[eye] : NAN;
+                    detail->lidClosed = closed.openness[eye];
+                }
+                return false;
+            }
         }
     }
     for (int eye = 0; eye < 2; ++eye) {
@@ -228,12 +268,12 @@ void Session::next(double now, Actions& actions) {
     if (point() == Point::Closed) {
         Values gaze = current_;
         Point failed = Point::Center;
-        if (!fitGaze(measured_, gaze, failed)) {
+        if (!fitGaze(measured_, gaze, failed, &detail_)) {
             index_ = static_cast<int>(failed);
             fail(Failure::NoMovement);
             return;
         }
-        if (!fitEyes(measured_, ipd_, gaze)) {
+        if (!fitEyes(measured_, ipd_, gaze, &detail_)) {
             index_ = static_cast<int>(Point::Right);
             fail(Failure::NoMovement);
             return;
@@ -249,19 +289,19 @@ void Session::finish(Actions& actions) {
     } else {
         result_ = current_;
         Point failed = Point::Center;
-        if (!fitGaze(measured_, result_, failed)) {
+        if (!fitGaze(measured_, result_, failed, &detail_)) {
             index_ = static_cast<int>(failed);
             fail(Failure::NoMovement);
             return;
         }
         // Each eye's own sideways fit replaces the one before; without per-eye data there is none
         result_.hasEyeX = false;
-        if (!fitEyes(measured_, ipd_, result_)) {
+        if (!fitEyes(measured_, ipd_, result_, &detail_)) {
             index_ = static_cast<int>(Point::Right);
             fail(Failure::NoMovement);
             return;
         }
-        if (!fitLids(measured_, result_)) {
+        if (!fitLids(measured_, result_, &detail_)) {
             fail(Failure::NoLidRange);
             return;
         }
@@ -326,13 +366,21 @@ Actions Session::tick(double now, bool dashboardOpen, const EyeStatus& status) {
             measured.openness[1] = capture.openness[1];
             const bool closedStep = point() == Point::Closed;
             // The full fit needs each gaze point's openness too, for the lid fit
-            const bool ok = closedStep ? usableClosed(measured, measured_[static_cast<int>(Point::Center)])
+            const Measured& center = measured_[static_cast<int>(Point::Center)];
+            const bool ok = closedStep ? usableClosed(measured, center)
                                        : usable(measured) && (mode_ == Mode::Center || measured.hasOpenness);
+            const bool last = attempt_ >= kMaxAttempts;
+            actions.log = tryText(point(), attempt_, measured, center, ok ? "ok" : (last ? "failed" : "again"));
             if (ok) {
                 measured_[static_cast<int>(point())] = measured;
                 next(now, actions);
             } else if (++attempt_ > kMaxAttempts) {
                 attempt_ = kMaxAttempts;
+                detail_.tries = kMaxAttempts;
+                detail_.last = measured;
+                if (closedStep) {
+                    for (int eye = 0; eye < 2; ++eye) detail_.closedBelow[eye] = kClosedShare * center.openness[eye];
+                }
                 fail(closedStep ? Failure::NotClosed : Failure::Unsteady);
             } else {
                 previousPoint_ = point();
@@ -398,6 +446,7 @@ View Session::view() const {
     view.point = phase_ == Phase::Failed ? failedPoint_ : point();
     view.attempt = attempt_;
     view.failure = failure_;
+    view.detail = detail_;
     view.values = result_;
     return view;
 }

@@ -353,8 +353,21 @@ void testFailures() {
         s.start(Mode::Center, Values(), now);
         Measured shaky = points[0];
         shaky.samples = 3;
-        for (int i = 0; i < kMaxAttempts; ++i) runStep(s, now, id, shaky);
+        Actions a;
+        for (int i = 0; i < kMaxAttempts; ++i) {
+            a = runStep(s, now, id, shaky);
+            // Every try is logged with its numbers
+            const std::string expected = "center try " + std::to_string(i + 1) + ": 3 samples (min 45), spread ";
+            CHECK(a.log.rfind(expected, 0) == 0);
+            CHECK(a.log.find(i + 1 < kMaxAttempts ? "-> again" : "-> failed") != std::string::npos);
+        }
         CHECK(s.view().phase == Phase::Failed && s.view().failure == Failure::Unsteady);
+        // The numbers behind it: the tries and the last one
+        CHECK(s.view().detail.tries == kMaxAttempts && s.view().detail.last.samples == 3);
+        Measured wide = steady(0, 0);
+        wide.spread = 3.4 / 45;
+        CHECK(tryText(Point::Center, 2, wide, Measured(), "again") ==
+              "center try 2: 120 samples (min 45), spread 3.4° (max 2.7°) -> again");
     }
     {
         // The eyes never shut: three tries, then NotClosed
@@ -363,8 +376,12 @@ void testFailures() {
         long long id = 0;
         s.start(Mode::Full, Values(), now);
         for (int i = 0; i < 5; ++i) runStep(s, now, id, points[i]);
-        for (int i = 0; i < kMaxAttempts; ++i) runStep(s, now, id, steady(0, 0), kCloseSettleSec, false);
+        Actions a;
+        for (int i = 0; i < kMaxAttempts; ++i) a = runStep(s, now, id, steady(0, 0), kCloseSettleSec, false);
         CHECK(s.view().failure == Failure::NotClosed && s.view().point == Point::Closed);
+        // Each eye had to read below 70% of its straight-ahead reading
+        CHECK(near(s.view().detail.closedBelow[0], 0.7 * points[0].openness[0]) && s.view().detail.tries == 3);
+        CHECK(a.log.rfind("closed try 3: 120 samples (min 45), openness L ", 0) == 0);
     }
     {
         // "Down" did not move: stops before asking to close the eyes
@@ -377,6 +394,9 @@ void testFailures() {
         flat[static_cast<int>(Point::Down)] = flat[static_cast<int>(Point::Center)];
         for (int i = 0; i < 5; ++i) runStep(s, now, id, flat[i]);
         CHECK(s.view().failure == Failure::NoMovement && s.view().point == Point::Down && id == 5);
+        // It did not move at all, and had to move a quarter of 15°
+        const FailureDetail& d = s.view().detail;
+        CHECK(d.eye == -1 && near(d.movedDeg, 0.0) && near(d.neededDeg, 3.75));
     }
     {
         // Eyelids that barely closed: the gaze is fine, but nothing is written
@@ -393,6 +413,9 @@ void testFailures() {
         now += kReopenSec;
         const Actions a = s.tick(now, false, runningWith(0, false, {}));
         CHECK(!a.writeValues && s.view().failure == Failure::NoLidRange);
+        // Which eye and reading: the right eye looking down, 0.6 open against 0.55 shut
+        const FailureDetail& d = s.view().detail;
+        CHECK(d.eye == 1 && d.lidPoint == Point::Down && near(d.lidOpen, 0.6) && near(d.lidClosed, 0.55));
     }
     {
         // Opening the dashboard during a run stops it and hides the target

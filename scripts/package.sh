@@ -21,6 +21,7 @@ ninja -C panel/build
 panel/build/gaze-fit-test
 panel/build/gaze-dots-test
 panel/build/sounds-test
+panel/build/text-test
 
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT

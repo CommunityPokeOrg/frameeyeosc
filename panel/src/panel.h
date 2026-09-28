@@ -49,6 +49,11 @@ enum class PanelAction {
     FitReset,          ///< gaze_offset_x/y = 0, gaze_gain_x/up/down = 1, lid_fit_* = null
     FitDetails,        ///< open / close "Fine-tune" (handled inside the panel)
     FitDetailsPage,    ///< show arg (0 gaze, 1 eyelids) under "Fine-tune" (handled inside the panel)
+    HostEnter,         ///< open the keypad for the target PC (the caller fills in the host now)
+    HostKey,           ///< a keypad key: arg = '0'-'9', '.' or host_entry::kBackspace (handled inside the panel)
+    HostOk,            ///< use the typed host (the caller checks and writes it)
+    HostCancel,        ///< close the keypad (handled inside the panel)
+    HostKeyboard,      ///< type it on the SteamVR keyboard instead (the caller opens it)
 };
 
 /** A button: its action, the config key it changes and an argument. */
@@ -162,6 +167,33 @@ public:
     void setFitDetailsPage(int page) { fitDetailsPage_ = page; }
 
     /**
+     * Open the keypad for the target PC (only its buttons work while it is open).
+     * @param text what it starts with (the host set now, or "")
+     */
+    void openHostEntry(const std::string& text);
+
+    /** Close the keypad. */
+    void closeHostEntry();
+
+    /** @return true while the keypad is open */
+    bool hostEntryOpen() const { return hostEntryOpen_; }
+
+    /** @return what is typed */
+    const std::string& hostEntryText() const { return hostEntryText_; }
+
+    /**
+     * Replace what is typed (from the SteamVR keyboard).
+     * @param text the text
+     */
+    void setHostEntryText(const std::string& text);
+
+    /**
+     * Show why the typed host can't be used (cleared by the next key).
+     * @param message the message ("" for none)
+     */
+    void setHostEntryError(const std::string& message) { hostEntryError_ = message; }
+
+    /**
      * The image as un-premultiplied RGBA for OpenVR.
      * @return width() * height() * 4 bytes
      */
@@ -215,6 +247,9 @@ private:
     double resetArmedUntil_ = 0.0;
     std::string promptOutput_;  ///< the output type the prompt asks about; empty = no prompt
     std::string updatePromptVersion_;  ///< the release the update prompt asks about; empty = no prompt
+    bool hostEntryOpen_ = false;  ///< the keypad for the target PC is open
+    std::string hostEntryText_;   ///< what is typed in it
+    std::string hostEntryError_;  ///< why it can't be used, shown under it
 
     /**
      * Find the usable button at a point.
@@ -348,6 +383,13 @@ private:
      * @param t texts
      */
     void drawPrompt(const Pen& pen, const UiText& t);
+
+    /**
+     * The keypad for the target PC over everything (only its buttons stay usable).
+     * @param pen drawing tools
+     * @param t texts
+     */
+    void drawHostEntry(const Pen& pen, const UiText& t);
 
     /**
      * The version row and its button (Advanced tab): the running version, the check result, install progress.

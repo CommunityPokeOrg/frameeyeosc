@@ -33,6 +33,8 @@ add_executable(frameeyeosc-panel
   src/draw.cpp
   src/gaze_dots.cpp
   src/gaze_fit.cpp
+  src/fit_text.cpp
+  src/host_entry.cpp
   src/i18n.cpp
   src/json.cpp
   src/model.cpp
@@ -81,3 +83,10 @@ add_executable(sounds-test tests/sounds_test.cpp src/sounds.cpp src/gaze_fit.cpp
 target_include_directories(sounds-test PRIVATE src)
 target_compile_options(sounds-test PRIVATE -Wall -Wextra)
 add_test(NAME sounds COMMAND sounds-test)
+
+# Checking a typed target PC and the eye fit's failure texts (both languages): panel/build/text-test
+add_executable(text-test tests/text_test.cpp src/host_entry.cpp src/fit_text.cpp src/i18n.cpp src/gaze_fit.cpp
+  src/status.cpp src/json.cpp)
+target_include_directories(text-test PRIVATE src)
+target_compile_options(text-test PRIVATE -Wall -Wextra)
+add_test(NAME text COMMAND text-test)

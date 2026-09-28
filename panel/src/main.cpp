@@ -5,6 +5,7 @@
 #include "draw.h"
 #include "gaze_dots.h"
 #include "gaze_fit.h"
+#include "host_entry.h"
 #include "i18n.h"
 #include "model.h"
 #include "panel.h"
@@ -553,6 +554,30 @@ PanelModel fakeModel(const Options& options) {
                           : state == "failed-cancelled" ? Failure::Cancelled
                                                         : Failure::NoResult;
             fit.point = state == "failed-movement" ? Point::Down : Point::Left;
+            // Made-up numbers behind it
+            gaze_fit::FailureDetail& d = fit.detail;
+            if (fit.failure == Failure::Unsteady) {
+                fit.point = Point::Center;
+                d.tries = 3;
+                d.last.samples = 30;
+                d.last.spread = 3.4 / gaze_fit::kFullScaleDeg;
+            } else if (fit.failure == Failure::NotClosed) {
+                fit.point = Point::Closed;
+                d.tries = 3;
+                d.last.samples = 200;
+                d.last.openness[0] = 0.62;
+                d.last.openness[1] = 0.40;
+                d.closedBelow[0] = 0.56;
+                d.closedBelow[1] = 0.53;
+            } else if (fit.failure == Failure::NoMovement) {
+                d.movedDeg = 2.1;
+                d.neededDeg = 3.75;
+            } else if (fit.failure == Failure::NoLidRange) {
+                d.eye = 1;
+                d.lidPoint = Point::Down;
+                d.lidOpen = 0.30;
+                d.lidClosed = 0.25;
+            }
         }
     }
 
@@ -616,7 +641,7 @@ PanelModel fakeModel(const Options& options) {
 }
 
 void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, AutostartWorker& autostart,
-              frame_updater::UpdateChecker* updater, gaze_fit::Session* fit, const VrOverlay* vr);
+              frame_updater::UpdateChecker* updater, gaze_fit::Session* fit, VrOverlay* vr);
 std::string targetLabel(const UiText& t, gaze_fit::TargetStyle style);
 
 /**
@@ -966,6 +991,25 @@ std::string targetLabel(const UiText& t, gaze_fit::TargetStyle style) {
 }
 
 /**
+ * Why a typed host can't be used, in words.
+ * @param t texts
+ * @param problem what is wrong
+ * @return the message
+ */
+std::string hostErrorText(const UiText& t, host_entry::HostError problem) {
+    using host_entry::HostError;
+    switch (problem) {
+        case HostError::None: return "";
+        case HostError::Empty: return t.hostErrEmpty;
+        case HostError::Space: return t.hostErrSpace;
+        case HostError::Port: return t.hostErrPort;
+        case HostError::Ipv4: return t.hostErrIpv4;
+        case HostError::Name: return t.hostErrName;
+    }
+    return "";
+}
+
+/**
  * Carry out a button press: re-read config.json, change keys, write it back; or ask the autostart worker.
  * @param hit the button
  * @param model the model (config and error are updated)
@@ -973,10 +1017,10 @@ std::string targetLabel(const UiText& t, gaze_fit::TargetStyle style) {
  * @param autostart the autostart worker
  * @param updater the update checker (null in --dump-png without --update-live)
  * @param fit the eye fit session (null in --dump-png)
- * @param vr the connection to SteamVR, for the IPD (null in --dump-png)
+ * @param vr the connection to SteamVR, for the IPD and the keyboard (null in --dump-png)
  */
 void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, AutostartWorker& autostart,
-              frame_updater::UpdateChecker* updater, gaze_fit::Session* fit, const VrOverlay* vr) {
+              frame_updater::UpdateChecker* updater, gaze_fit::Session* fit, VrOverlay* vr) {
     const SettingsView view(model);
     std::function<void(JsonValue&)> change;
     std::string openPrompt;
@@ -1150,7 +1194,36 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
             return;
         }
         case PanelAction::FitDetails:
-        case PanelAction::FitDetailsPage: return;
+        case PanelAction::FitDetailsPage:
+        case PanelAction::HostKey:
+        case PanelAction::HostCancel: return;
+        case PanelAction::HostEnter: {
+            // Start from the host set now (not "auto")
+            const std::string host = view.text(key::kHost);
+            panel.openHostEntry(host == "auto" ? "" : host);
+            return;
+        }
+        case PanelAction::HostKeyboard: {
+            const UiText& t = uiText(model.language);
+            if (vr == nullptr || !vr->showKeyboard(t.hostEntryTitle, panel.hostEntryText())) {
+                panel.setHostEntryError(t.hostErrKeyboard);
+            }
+            return;
+        }
+        case PanelAction::HostOk: {
+            const std::string host = panel.hostEntryText();
+            const host_entry::HostError problem = host_entry::checkHost(host);
+            if (problem != host_entry::HostError::None) {
+                std::fprintf(stderr, "[action] typed host \"%s\" can't be used (%d)\n", host.c_str(),
+                             static_cast<int>(problem));
+                panel.setHostEntryError(hostErrorText(uiText(model.language), problem));
+                return;
+            }
+            panel.closeHostEntry();
+            std::fprintf(stderr, "[action] host typed: %s\n", host.c_str());
+            change = [host](JsonValue& root) { root.set(key::kHost, JsonValue::makeString(host)); };
+            break;
+        }
         case PanelAction::FitStop:
             std::fprintf(stderr, "[fit] stopped\n");
             if (fit != nullptr) fit->cancel();
@@ -1476,6 +1549,13 @@ int runOverlay(const Options& options) {
             }
         }
 
+        // The SteamVR keyboard's Done: what was typed goes into the keypad and is used like its OK
+        if (events.keyboardDone && panel.hostEntryOpen()) {
+            panel.setHostEntryText(events.keyboardText);
+            applyHit({PanelAction::HostOk, nullptr, 0}, model, panel, autostart, &updater, &fit, &vr);
+            lastStamp = configStamp(model.configPath);
+            dirty = true;
+        }
         for (const PointerInput& input : events.pointer) {
             switch (input.type) {
                 case PointerInput::Type::Move: dirty |= panel.pointerMove(input.x, input.y); break;
@@ -1515,6 +1595,7 @@ int runOverlay(const Options& options) {
         // while the dashboard is closed
         {
             const gaze_fit::Actions actions = fit.tick(nowSeconds(), vr.dashboardVisible(), model.status);
+            if (!actions.log.empty()) std::fprintf(stderr, "[fit] %s\n", actions.log.c_str());
             // Cues follow what the target shows (a dot arriving, the countdown, the eyes-shut ending)
             const bool soundsOn = model.config.flag(key::kFitSounds);
             for (sounds::Cue cue : cues.update(fit.view(), actions)) {

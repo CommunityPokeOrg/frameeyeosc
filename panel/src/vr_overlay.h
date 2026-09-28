@@ -18,6 +18,8 @@ struct PointerInput {
 /** Result of pollEvents(). */
 struct VrEvents {
     bool quit = false;                  ///< SteamVR asked us to quit (VREvent_Quit; SteamVR itself is shutting down)
+    bool keyboardDone = false;          ///< the SteamVR keyboard's Done was pressed...
+    std::string keyboardText;           ///< ...with this text
     bool closeRequested = false;        ///< the dashboard icon's "close" was pressed (VREvent_OverlayClosed)
     std::vector<PointerInput> pointer;  ///< actions on the panel (in arrival order)
 };
@@ -65,6 +67,15 @@ public:
      * @return quit request and panel pointer actions
      */
     VrEvents pollEvents();
+
+    /**
+     * Open the SteamVR keyboard for the panel (ShowKeyboardForOverlay, one line, modal). Its Done comes back through
+     * pollEvents (keyboardDone).
+     * @param description the line above it
+     * @param text what it starts with
+     * @return false if SteamVR would not open it
+     */
+    bool showKeyboard(const std::string& description, const std::string& text);
 
     /**
      * Whether the vrserver process found at connect time is still alive.
@@ -188,6 +199,7 @@ private:
     uint64_t targetHandle_ = 0;     ///< the eye fit's target (0 until first needed)
     bool targetShown_ = false;
     bool frameSyncFailed_ = false;  ///< WaitFrameSync gave an error other than a timeout
+    bool keyboardOpen_ = false;     ///< the SteamVR keyboard is open for the panel
     bool targetPlaced_ = false;     ///< its transform was set, to targetYaw_ / targetPitch_
     double targetYaw_ = 0.0;
     double targetPitch_ = 0.0;
