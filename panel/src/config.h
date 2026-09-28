@@ -76,6 +76,8 @@ constexpr const char* kGazeOffsetXRight = "gaze_offset_x_right";
 constexpr const char* kGazeGainXLeft = "gaze_gain_x_left";
 constexpr const char* kGazeGainXRight = "gaze_gain_x_right";
 constexpr const char* kGazeDebugDots = "gaze_debug_dots";
+/** The panel's own: play sound cues during the eye fit (frameeyeosc ignores it). */
+constexpr const char* kFitSounds = "fit_sounds";
 constexpr const char* kLidFitClosedLeft = "lid_fit_closed_left";
 constexpr const char* kLidFitClosedRight = "lid_fit_closed_right";
 constexpr const char* kLidFitUpLeft = "lid_fit_up_left";

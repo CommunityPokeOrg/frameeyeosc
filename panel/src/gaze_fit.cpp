@@ -373,6 +373,7 @@ Actions Session::tick(double now, bool dashboardOpen, const EyeStatus& status) {
         const Target& from = target(previousPoint_);
         const Target& to = target(point());
         double t = phase_ == Phase::Settling ? std::clamp((now - phaseAt_) / kMoveSec, 0.0, 1.0) : 1.0;
+        actions.arrived = t >= 1.0 || previousPoint_ == point();
         t = t * t * (3.0 - 2.0 * t);
         actions.yawDeg = from.yawDeg + (to.yawDeg - from.yawDeg) * t;
         actions.pitchDeg = from.pitchDeg + (to.pitchDeg - from.pitchDeg) * t;

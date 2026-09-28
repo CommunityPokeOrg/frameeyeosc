@@ -1409,7 +1409,14 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
     // "Fine-tune": the values by hand, folded away by default
     {
         const std::string label = std::string(t.fitDetails) + (fitDetails_ ? "  ▲" : "  ▼");
-        drawButton(pen, kInnerX, y, 230, 38, label, {PanelAction::FitDetails, nullptr, 0}, true, false);
+        drawButton(pen, kInnerX, y, 200, 38, label, {PanelAction::FitDetails, nullptr, 0}, true, false);
+        // Sound cues on / off: one button that says the state and flips it
+        {
+            const bool on = v.flag(key::kFitSounds);
+            const bool locked = v.locked(key::kFitSounds);
+            drawButton(pen, kInnerX + 212, y, 190, 38, on ? t.fitSoundsOn : t.fitSoundsOff,
+                       {PanelAction::SetBool, key::kFitSounds, on ? 0 : 1}, !locked, false);
+        }
         // Once open: the gaze values, or the eyelid values
         if (fitDetails_) {
             drawSegmented(pen, kInnerRight - 300, y, 300, 38,

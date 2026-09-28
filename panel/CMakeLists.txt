@@ -37,6 +37,7 @@ add_executable(frameeyeosc-panel
   src/json.cpp
   src/model.cpp
   src/panel.cpp
+  src/sounds.cpp
   src/status.cpp
   src/target.cpp
   src/theme.cpp
@@ -74,3 +75,9 @@ add_executable(gaze-dots-test tests/gaze_dots_test.cpp src/gaze_dots.cpp src/gaz
 target_include_directories(gaze-dots-test PRIVATE src)
 target_compile_options(gaze-dots-test PRIVATE -Wall -Wextra)
 add_test(NAME gaze-dots COMMAND gaze-dots-test)
+
+# The eye fit's sound cues (the WAV files and which cue goes with which moment), without playing: panel/build/sounds-test
+add_executable(sounds-test tests/sounds_test.cpp src/sounds.cpp src/gaze_fit.cpp src/status.cpp src/json.cpp)
+target_include_directories(sounds-test PRIVATE src)
+target_compile_options(sounds-test PRIVATE -Wall -Wextra)
+add_test(NAME sounds COMMAND sounds-test)

@@ -8,6 +8,7 @@
 #include "i18n.h"
 #include "model.h"
 #include "panel.h"
+#include "sounds.h"
 #include "status.h"
 #include "target.h"
 #include "theme.h"
@@ -51,7 +52,7 @@ constexpr double kUpdateSettleSec = 60.0; ///< --update-live: longest wait for a
 
 /** The command line. */
 struct Options {
-    enum class Mode { Overlay, Print, DumpPng, Probe, SwitchAway, ContrastReport, Help, Version };
+    enum class Mode { Overlay, Print, DumpPng, Probe, SwitchAway, ContrastReport, PlaySound, Help, Version };
     Mode mode = Mode::Overlay;
     std::string configPath;
     std::string statusPath;
@@ -61,6 +62,7 @@ struct Options {
     std::string targetPngPath;    ///< --target-png: the eye fit's target image
     std::string targetStyle = "dot";
     std::string dotPngPath;       ///< --dot-png: a debug gaze dot image
+    std::string playSound;        ///< --play-sound: play one eye fit cue and exit
     std::string dotKind = "both";
     int targetSeconds = 3;
     double targetProgress = 0.7;
@@ -157,6 +159,7 @@ void printUsage() {
         "  --dump-png PATH       Without OpenVR: draw the panel to a PNG (from the real files) and exit\n"
         "  --thumbnail-png PATH  Draw the dashboard thumbnail (the launcher icon) to a PNG\n"
         "      --thumbnail-size N  Its edge length (default 256)\n"
+        "  --play-sound NAME     Play one eye fit cue (pop, pip, buzz, tick, open, done, fail) and exit\n"
         "  --dot-png PATH        Draw a debug gaze dot to a PNG\n"
         "      --dot-kind both|left|right  Which one (default both)\n"
         "  --target-png PATH     Draw the eye fit's target (the head-locked dot) to a PNG\n"
@@ -220,6 +223,14 @@ bool parseOptions(int argc, char** argv, Options& options) {
         } else if (arg == "--target-png" && hasNext) {
             options.mode = Options::Mode::DumpPng;
             options.targetPngPath = argv[++i];
+        } else if (arg == "--play-sound" && hasNext) {
+            options.mode = Options::Mode::PlaySound;
+            options.playSound = argv[++i];
+            sounds::Cue cue = sounds::Cue::Pop;
+            if (!sounds::parse(options.playSound, cue)) {
+                std::fprintf(stderr, "--play-sound: unknown cue %s\n", options.playSound.c_str());
+                return false;
+            }
         } else if (arg == "--dot-png" && hasNext) {
             options.mode = Options::Mode::DumpPng;
             options.dotPngPath = argv[++i];
@@ -1157,6 +1168,34 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
 }
 
 /**
+ * Where the eye fit's sound files go: a "sounds" folder next to the status file.
+ * @param statusPath the status file
+ * @return the folder
+ */
+std::string soundsDir(const std::string& statusPath) {
+    const size_t slash = statusPath.find_last_of('/');
+    return (slash == std::string::npos ? std::string(".") : statusPath.substr(0, slash)) + "/sounds";
+}
+
+/**
+ * --play-sound: play one cue and wait for it (for listening while tuning).
+ * @param options the command line
+ * @return exit code
+ */
+int runPlaySound(const Options& options) {
+    sounds::Cue cue = sounds::Cue::Pop;
+    sounds::parse(options.playSound, cue);
+    sounds::Player player;
+    if (!player.init(soundsDir(options.statusPath)) || player.program().empty()) return 1;
+    player.play(cue);
+    for (int i = 0; i < 40; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        player.reap();
+    }
+    return 0;
+}
+
+/**
  * Where the single-instance lock lives ($XDG_RUNTIME_DIR, or /run/user/<uid>).
  * @return the path
  */
@@ -1328,6 +1367,10 @@ int runOverlay(const Options& options) {
 
     gaze_fit::Session fit;
     long long lastCaptureId = 0;
+    // The eye fit's sound cues: files written once now, played while the fit runs (if fit_sounds is on)
+    sounds::Player player;
+    player.init(soundsDir(model.statusPath));
+    sounds::FitCues cues;
     std::vector<uint8_t> targetImage;
     int targetFrames = 0;           // drawn since the target came up, to log the frame rate
     double targetShownAt = 0.0;
@@ -1439,6 +1482,12 @@ int runOverlay(const Options& options) {
         // while the dashboard is closed
         {
             const gaze_fit::Actions actions = fit.tick(nowSeconds(), vr.dashboardVisible(), model.status);
+            // Cues follow what the target shows (a dot arriving, the countdown, the eyes-shut ending)
+            const bool soundsOn = model.config.flag(key::kFitSounds);
+            for (sounds::Cue cue : cues.update(fit.view(), actions)) {
+                if (soundsOn) player.play(cue);
+            }
+            player.reap();
             if (actions.writeCapture) {
                 const long long id = writeCaptureRequest(model, actions.target, lastCaptureId);
                 if (id != 0) {
@@ -1582,6 +1631,7 @@ int main(int argc, char** argv) {
         case Options::Mode::Probe: return VrOverlay::probe();
         case Options::Mode::SwitchAway: return VrOverlay::switchAway(options.switchAwaySec);
         case Options::Mode::ContrastReport: return printContrastReport();
+        case Options::Mode::PlaySound: return runPlaySound(options);
         case Options::Mode::Overlay: break;
     }
     return runOverlay(options);

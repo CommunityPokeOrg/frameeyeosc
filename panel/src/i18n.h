@@ -161,6 +161,8 @@ struct UiText {
     const char* targetOpen;
     const char* fitReset;
     const char* fitDetails;          ///< the fold with the values by hand
+    const char* fitSoundsOn;         ///< the sound switch, on ("Sounds: on")
+    const char* fitSoundsOff;
     const char* rowOffset;
     const char* hintOffset;
     const char* rowGain;

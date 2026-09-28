@@ -236,6 +236,7 @@ struct Actions {
     double pitchDeg = 0.0;
     int seconds = 0;            ///< the countdown on the target (0 = none)
     double progress = 0.0;      ///< the ring on the target, 1 -> 0 over one step
+    bool arrived = false;       ///< the target has finished gliding to this step (or didn't have to move)
 };
 
 /**

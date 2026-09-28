@@ -121,6 +121,7 @@ Settings are in `~/.config/frameeyeosc/config.json`. The panel writes it, and yo
 | `lid_fit_closed_left` ... `lid_fit_down_right` | | `null` | Each eye's Frame openness with the eyes shut, and open while looking up, straight ahead and down (`closed` / `up` / `open` / `down`, `_left` / `_right`). Set by the eye fit; `null` = not fitted. A fitted eye uses these instead of the learned calibration and `lid_scale_*`, and doesn't close when you look down |
 | `calibration_reset` | | `0` | Increase it to make the eyelid calibration start over |
 | `language` | | Steam's language | Panel language, `"ja"` or `"en"`. Without it, the panel is in Japanese if Steam is set to Japanese and in English otherwise |
+| `fit_sounds` | | `true` | The panel plays short sounds during the eye fit. frameeyeosc itself ignores it |
 | `update_check` | | `true` | The panel looks for a new release on GitHub at start and once a day (an hour later after a failed check). frameeyeosc itself ignores it |
 
 Command-line options win over the file. They go in `~/.config/frameeyeosc/env` (then `systemctl --user restart frameeyeosc`):
@@ -157,7 +158,7 @@ If the avatar's eyes look a little off (looking too far down, or eyelids that cl
 1. A dot appears straight ahead, then 15° up, 15° down, 20° left and 20° right. Keep your head still and follow it with your eyes.
 2. Then the target says "Close your eyes" and counts down 3, 2, 1. Keep them closed for 2 seconds, until you've counted to about 3. It then says "Open them".
 
-It takes about 30 seconds. Opening the dashboard stops it. A step where the gaze is unsteady (or the eyes aren't shut in the last step) is measured again, up to three times. The result shows on the tab. From then on the one button there says "Fit again", and "Reset" undoes the fit. After putting the headset back on, "Re-center only" measures straight ahead again (about 3 seconds). The values can also be changed by hand under "Fine-tune".
+It takes about 30 seconds. Opening the dashboard stops it. Soft sounds mark each step, so you can follow it without watching the panel: a pop when a dot is in place, a pip when it's measured, a low buzz when it's measured again, a tick for each of 3, 2, 1, a chime when you can open your eyes, and a rising chime at the end (two falling tones if it stops). Turn them off with "♪ Sounds" on the tab. A step where the gaze is unsteady (or the eyes aren't shut in the last step) is measured again, up to three times. The result shows on the tab. From then on the one button there says "Fit again", and "Reset" undoes the fit. After putting the headset back on, "Re-center only" measures straight ahead again (about 3 seconds). The values can also be changed by hand under "Fine-tune".
 
 What the fit sets:
 
@@ -196,6 +197,8 @@ Eyelid calibration is automatic. For the first 20 seconds after you put the head
   - your settings (`~/.config/frameeyeosc/config.json`) and two numbers, each eye's learned relaxed openness (`~/.config/frameeyeosc/calibration`)
   - from `install.sh`: the update script `~/.local/share/frameeyeosc/frame-update.sh` and your install options `~/.config/frameeyeosc/install-args`
   - from the update check and updates, in `~/.cache/frameeyeosc/`: `update-check.json` (GitHub's last answer), `update-state.json` (progress of the last update), `update.log` (log of the last update), the `update/` work folder (emptied after each run, except for the copy of the update script it keeps), and the `update.lock/` folder while a check or update runs
+
+  - from the panel, in `$XDG_RUNTIME_DIR/frameeyeosc/` (in memory, gone after a reboot): the eye fit's sound files in `sounds/`, written at start
 
   No eye data is stored, except that each eye fit measurement (an average gaze direction, how much it spread, and each eye's average openness) is logged as one line to the systemd journal, and the eyelid readings of a fit are kept in `config.json`. The latest eye values are in the status file, which is in memory, readable only by you, and overwritten ten times a second; no history is kept.
 - The OSC messages are unencrypted, so other devices on the same network could read them.
