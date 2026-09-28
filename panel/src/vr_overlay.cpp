@@ -35,6 +35,10 @@ constexpr float kTargetWidthM = 0.3f;
 // The debug gaze dots: small overlays of their own; 3.5 cm at 2 m is about 1 degree
 constexpr const char* kDotKeys[2] = {"sasaken.frameeyeosc-panel.dot0", "sasaken.frameeyeosc-panel.dot1"};
 constexpr float kDotWidthM = 0.035f;
+// Drawn after other apps' overlays with a lower sort order, the dashboard's included (overlays of one kind are drawn
+// lowest sort order first, and only equal ones back to front by distance, so a nearer dashboard covered the dots).
+// High, with room above for anything that must be on top of them
+constexpr uint32_t kDotSortOrder = 1u << 20;
 // IPDs outside this range (m) are taken as a failed read
 constexpr double kIpdMin = 0.045;
 constexpr double kIpdMax = 0.085;
@@ -340,6 +344,26 @@ double VrOverlay::userIpdMeters() const {
     return ipd;
 }
 
+double VrOverlay::panelDistanceM() const {
+    if (!connected_ || dashboardHandle_ == 0) return -1.0;
+    // The panel's center in the room, and the headset's position
+    vr::HmdMatrix34_t center {};
+    const vr::HmdVector2_t middle {{0.5f, 0.5f}};
+    if (vr::VROverlay()->GetTransformForOverlayCoordinates(dashboardHandle_, vr::TrackingUniverseStanding, middle,
+                                                           &center) != vr::VROverlayError_None) {
+        return -1.0;
+    }
+    vr::TrackedDevicePose_t hmd {};
+    vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, 0.0f, &hmd, 1);
+    if (!hmd.bPoseIsValid) return -1.0;
+    double squares = 0.0;
+    for (int axis = 0; axis < 3; ++axis) {
+        const double d = center.m[axis][3] - hmd.mDeviceToAbsoluteTracking.m[axis][3];
+        squares += d * d;
+    }
+    return std::sqrt(squares);
+}
+
 bool VrOverlay::showTarget(double yawDeg, double pitchDeg, const uint8_t* rgba, int size) {
     if (!connected_ || targetFailed_) return false;
     vr::IVROverlay* overlay = vr::VROverlay();
@@ -414,6 +438,10 @@ bool VrOverlay::showDot(int index, double x, double y, double z, double yawDeg, 
         }
         handle = created;
         checkOverlay("SetOverlayWidthInMeters(dot)", overlay->SetOverlayWidthInMeters(handle, kDotWidthM));
+        // On top of the dashboard, and kept visible while it is open
+        checkOverlay("SetOverlaySortOrder(dot)", overlay->SetOverlaySortOrder(handle, kDotSortOrder));
+        checkOverlay("SetOverlayFlag(dot, VisibleInDashboard)",
+                     overlay->SetOverlayFlag(handle, vr::VROverlayFlags_VisibleInDashboard, true));
         newImage = true;
     }
     if (newImage && !dotTextures_[index].update(handle, rgba, message)) {

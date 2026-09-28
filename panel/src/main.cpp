@@ -1586,6 +1586,11 @@ int runOverlay(const Options& options) {
                     dotsVisible[i] = false;
                 }
             };
+            // Where the dashboard sits, once each time it opens with the dots on (they are drawn on top of it)
+            if (dots.isOpen() && visible && !wasVisible) {
+                std::fprintf(stderr, "[dots] the panel is %.2f m away; the dots are %.1f m ahead, drawn on top\n",
+                             vr.panelDistanceM(), gaze_dots::kDistanceM);
+            }
             if (wanted && !dots.isOpen() && !dotsOpenFailed) {
                 const size_t slash = model.statusPath.find_last_of('/');
                 const std::string dir = slash == std::string::npos ? "." : model.statusPath.substr(0, slash);
