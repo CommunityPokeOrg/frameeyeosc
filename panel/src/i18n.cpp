@@ -34,6 +34,8 @@ UiText makeJapanese() {
     t.left = "左";
     t.right = "右";
     t.gazeTitle = "視線";
+    t.leftEye = "左目";
+    t.rightEye = "右目";
     t.noEyeData = "目のデータがありません";
     t.errorPrefix = "設定のエラー: ";
     t.errWrite = "設定を書けません: ";
@@ -295,6 +297,8 @@ UiText makeEnglish() {
     t.left = "L";
     t.right = "R";
     t.gazeTitle = "Gaze";
+    t.leftEye = "Left";
+    t.rightEye = "Right";
     t.noEyeData = "No eye data";
     t.errorPrefix = "Config error: ";
     t.errWrite = "Can't save settings: ";

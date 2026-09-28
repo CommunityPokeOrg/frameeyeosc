@@ -97,7 +97,8 @@ double unixNow() {
 EyeStatus parseStatus(const std::string& text, double now, bool checkPid) {
     EyeStatus status;
     for (Pair* pair : {&status.openness, &status.opennessScaled, &status.gaze, &status.lids, &status.lidsVrcft,
-                       &status.sentGaze, &status.relaxed, &status.scales}) {
+                       &status.sentGaze, &status.relaxed, &status.scales, &status.rawGazeEye[0],
+                       &status.rawGazeEye[1], &status.sentGazeEye[0], &status.sentGazeEye[1]}) {
         *pair = readPair(nullptr);
     }
     JsonValue root;
@@ -122,12 +123,16 @@ EyeStatus parseStatus(const std::string& text, double now, bool checkPid) {
         status.openness = readPair(raw->get("openness"));
         status.opennessScaled = readPair(raw->get("openness_scaled"));
         status.gaze = readPair(raw->get("gaze"));
+        status.rawGazeEye[0] = readPair(raw->get("gaze_left"));
+        status.rawGazeEye[1] = readPair(raw->get("gaze_right"));
     }
     if (const JsonValue* sent = root.get("sent"); sent != nullptr && sent->isObject()) {
         status.hasSent = true;
         status.lids = readPair(sent->get("lids"));
         status.lidsVrcft = readPair(sent->get("lids_vrcft"));
         status.sentGaze = readPair(sent->get("gaze"));
+        status.sentGazeEye[0] = readPair(sent->get("gaze_left"));
+        status.sentGazeEye[1] = readPair(sent->get("gaze_right"));
     }
     if (const JsonValue* cal = root.get("calibration"); cal != nullptr && cal->isObject()) {
         status.calibrationEnabled = readBool(*cal, "enabled");

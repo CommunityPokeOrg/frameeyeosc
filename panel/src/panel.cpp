@@ -848,14 +848,16 @@ void EyePanel::drawStatus(const Pen& pen, const UiText& t, const PanelModel& m) 
 
     // Gaze: raw = ring, sent = filled dot
     pen.text(x0, 430, t.gazeTitle, 15, kTextMuted, true);
-    {
-        const double box = 164;
-        const double bx = x0;
-        const double by = 444;
+    /**
+     * A gaze pad: crosshair, a circle at half range, the raw gaze as a ring and the sent gaze as a dot, seen the way
+     * the user looks (+x right, +y up).
+     */
+    const auto gazePad = [&](double bx, double by, double box, const Pair& raw, const Pair& sent, Color dot) {
         const double cx = bx + box / 2;
         const double cy = by + box / 2;
-        const bool hasRaw = live && s.hasRaw && s.gaze.valid();
-        const bool hasSent = live && s.hasSent && s.sentGaze.valid();
+        const bool hasRaw = live && s.hasRaw && raw.valid();
+        const bool hasSent = live && s.hasSent && sent.valid();
+        const double scale = box / 164;
         fillRounded(pen, bx, by, box, box, 12, kBg);
         pen.color(kDivider, hasRaw || hasSent ? 1.0 : 0.0);
         cairo_set_line_width(cr, 1);
@@ -879,17 +881,59 @@ void EyePanel::drawStatus(const Pen& pen, const UiText& t, const PanelModel& m) 
         double px = 0;
         double py = 0;
         if (hasSent) {
-            point(s.sentGaze, px, py);
-            drawDot(cr, px, py, 8, kAccent);
+            point(sent, px, py);
+            drawDot(cr, px, py, 8 * std::max(scale, 0.8), dot);
         }
         if (hasRaw) {
-            point(s.gaze, px, py);
-            drawRing(cr, px, py, 11, 2.5, kText);
+            point(raw, px, py);
+            drawRing(cr, px, py, 11 * std::max(scale, 0.8), 2.5, kText);
         }
         if (!hasRaw && !hasSent) {
             const double size = fitSize(pen, t.noEyeData, 14, 10, box - 16, false);
-            textCentered(pen, cx, cy + 5, t.noEyeData, size, kTextMuted, false);
+            const std::vector<std::string> lines = wrapText(pen, t.noEyeData, size, false, box - 16, 2);
+            for (size_t i = 0; i < lines.size(); ++i) {
+                textCentered(pen, cx, cy + 5 + (i - (lines.size() - 1) / 2.0) * (size + 4), lines[i], size,
+                             kTextMuted, false);
+            }
         }
+        return hasSent;
+    };
+    // Each eye's own pad while the eyes move separately; one pad for the shared gaze otherwise
+    const bool perEye = SettingsView(m).flag(key::kIndependentEyes);
+    if (perEye) {
+        // The legend on the title line: ring = raw, the two eye colors = sent
+        {
+            const double sentW = pen.measure(t.legendSent, 14, false);
+            const double rawW = pen.measure(t.legendRaw, 14, false);
+            double lx = x1 - sentW;
+            pen.text(lx, 430, t.legendSent, 14, kText);
+            lx -= 14;
+            drawDot(cr, lx, 425, 5, kDotRight);
+            lx -= 12;
+            drawDot(cr, lx, 425, 5, kDotLeft);
+            lx -= 18 + rawW;
+            pen.text(lx, 430, t.legendRaw, 14, kText);
+            lx -= 14;
+            drawRing(cr, lx, 425, 6, 2, kText);
+        }
+        const double box = 132;
+        const char* labels[2] = {t.leftEye, t.rightEye};
+        const Color colors[2] = {kDotLeft, kDotRight};
+        for (int eye = 0; eye < 2; ++eye) {
+            // The left eye on the left, as the user sees it (not mirrored)
+            const double bx = eye == 0 ? x0 : x1 - box;
+            pen.text(bx + 2, 456, labels[eye], 15, kText, true);
+            const bool hasSent = gazePad(bx, 464, box, s.rawGazeEye[eye], s.sentGazeEye[eye], colors[eye]);
+            const std::string xy = hasSent ? xyText(s.sentGazeEye[eye]) : "—";
+            pen.text(bx + 2, 618, xy, fitSize(pen, xy, 14, 10, box, false), kTextMuted);
+        }
+    } else {
+        const double box = 164;
+        const double bx = x0;
+        const double by = 444;
+        gazePad(bx, by, box, s.gaze, s.sentGaze, kAccent);
+        const bool hasRaw = live && s.hasRaw && s.gaze.valid();
+        const bool hasSent = live && s.hasSent && s.sentGaze.valid();
         const double lx = bx + box + 18;
         drawRing(cr, lx + 9, 470, 8, 2.5, kText);
         pen.text(lx + 26, 476, t.legendRaw, 15, kText);

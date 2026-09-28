@@ -56,6 +56,8 @@ struct EyeStatus {
     Pair lids {};            ///< what was sent (0..1 in the output's scale)
     Pair lidsVrcft {};       ///< the same in VRCFT's scale (0.75 = relaxed)
     Pair sentGaze {};        ///< gaze sent, x / y
+    Pair rawGazeEye[2] {};   ///< each eye's own gaze before smoothing (left, right), x / y
+    Pair sentGazeEye[2] {};  ///< each eye's gaze as sent (the combined one unless independent_eyes)
 
     bool calibrationEnabled = false;
     Pair relaxed {};         ///< learned relaxed openness per eye (NaN = not learned)

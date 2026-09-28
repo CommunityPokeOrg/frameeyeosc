@@ -86,6 +86,7 @@ struct Options {
     bool fakeBroken = false;
     bool fakeWriteError = false;
     bool fakeCustom = false;
+    bool fakeIndependent = false; ///< --fake-independent: independent_eyes on, the gaze pad per eye
     std::string fakePrompt;       ///< vrchat / etvr
     std::string fakeUpdate;       ///< a made-up update state (see printUsage)
     std::string fakeFit;          ///< a made-up eye fit state (see printUsage)
@@ -178,6 +179,7 @@ void printUsage() {
         "      --fake-broken     config.json can't be parsed\n"
         "      --fake-write-error  The panel failed to write config.json\n"
         "      --fake-custom     Gaze smoothing values that match no preset\n"
+        "      --fake-independent  Move eyes separately (the left column shows each eye's gaze)\n"
         "      --fake-prompt vrchat|etvr  The recommended-settings question\n"
         "      --fake-autostart on|off|missing|unknown\n"
         "      --fake-update checking|uptodate|available|manual|installing|installed|checkfailed|installfailed\n"
@@ -300,6 +302,8 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.fake = options.fakeWriteError = true;
         } else if (arg == "--fake-custom") {
             options.fake = options.fakeCustom = true;
+        } else if (arg == "--fake-independent") {
+            options.fake = options.fakeIndependent = true;
         } else if (arg == "--fake-prompt" && hasNext) {
             options.fakePrompt = argv[++i];
             if (options.fakePrompt != kOutputVrchat && options.fakePrompt != kOutputEtvr) {
@@ -483,6 +487,7 @@ PanelModel fakeModel(const Options& options) {
         root.set(key::kPrefix, JsonValue::makeString(""));
     }
     if (options.fakeBroken) m.config.error = "expected , or } between members (near character 212)";
+    if (options.fakeIndependent) root.set(key::kIndependentEyes, JsonValue::makeBool(true));
     if (!options.fakeFit.empty()) {
         using gaze_fit::Failure;
         using gaze_fit::Phase;
@@ -564,6 +569,11 @@ PanelModel fakeModel(const Options& options) {
             s.lidsVrcft = {{0.75, 0.72}};
             s.lids = etvr ? Pair {{1.0, 0.96}} : s.lidsVrcft;
             s.sentGaze = {{0.17, -0.10}};
+            // Each eye turned in a little (left eye right of the combined gaze, right eye left of it)
+            s.rawGazeEye[0] = {{0.27, -0.14}};
+            s.rawGazeEye[1] = {{0.17, -0.14}};
+            s.sentGazeEye[0] = options.fakeIndependent ? Pair {{0.21, -0.10}} : s.sentGaze;
+            s.sentGazeEye[1] = options.fakeIndependent ? Pair {{0.13, -0.10}} : s.sentGaze;
         }
         s.calibrationEnabled = true;
         s.relaxed = {{0.78, 0.82}};
@@ -787,6 +797,11 @@ std::string statusSignature(const EyeStatus& s) {
                   s.scales.v[0], s.scales.v[1], s.lidsVrcft.v[0], s.lidsVrcft.v[1], s.learning, s.calibrationEnabled,
                   static_cast<int>((s.time - s.started) / 60));
     std::string signature = text;
+    char eyes[128];
+    std::snprintf(eyes, sizeof(eyes), "|%.2f %.2f %.2f %.2f|%.2f %.2f %.2f %.2f", s.rawGazeEye[0].v[0],
+                  s.rawGazeEye[0].v[1], s.rawGazeEye[1].v[0], s.rawGazeEye[1].v[1], s.sentGazeEye[0].v[0],
+                  s.sentGazeEye[0].v[1], s.sentGazeEye[1].v[0], s.sentGazeEye[1].v[1]);
+    signature += eyes;
     signature += "|" + s.configError + "|" + s.configPath + "|" + s.calibrationPath + "|";
     for (const auto& name : s.locked) signature += name + ",";
     if (s.effective.isObject()) signature += writeJson(s.effective);

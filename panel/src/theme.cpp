@@ -115,6 +115,10 @@ const std::vector<ContrastPair>& contrastPairs() {
         {"debug gaze dot, combined (dark edge)", kDotBoth, kBg, ContrastKind::Ui},
         {"debug gaze dot, left eye (dark edge)", kDotLeft, kBg, ContrastKind::Ui},
         {"debug gaze dot, right eye (dark edge)", kDotRight, kBg, ContrastKind::Ui},
+        // The left column's two-eye gaze pads (independent eyes): the same eye colors on the pad background
+        {"left eye's sent gaze dot (gaze pad)", kDotLeft, kBg, ContrastKind::Ui},
+        {"right eye's sent gaze dot (gaze pad)", kDotRight, kBg, ContrastKind::Ui},
+        {"eye colors in the gaze legend (card)", kDotRight, kCard, ContrastKind::Ui},
     };
     return pairs;
 }
