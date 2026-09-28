@@ -84,6 +84,32 @@ void testGeometry() {
     // (2 m along each ray, and the dot is 2 m ahead: they differ by micrometres)
     CHECK(near(left.position.x, 0.0, 1e-4) && near(right.position.x, 0.0, 1e-4));
     CHECK(near(left.position.z, -kDistanceM, 1e-3) && left.yawDeg > 0 && right.yawDeg < 0);
+
+    // At another distance: the same ray from the same eye and the same facing, only nearer
+    for (const double distance : {0.5, 1.07, 2.0}) {
+        const Pose far = dotPose(0.3, -0.2, -1, 0.063);
+        const Pose at = dotPose(0.3, -0.2, -1, 0.063, distance);
+        const double eyeX = -0.0315;
+        const double length = std::sqrt((at.position.x - eyeX) * (at.position.x - eyeX) +
+                                        at.position.y * at.position.y + at.position.z * at.position.z);
+        CHECK(near(length, distance));
+        const double share = distance / kDistanceM;
+        CHECK(near(at.position.x - eyeX, (far.position.x - eyeX) * share) && near(at.position.y, far.position.y * share) &&
+              near(at.position.z, far.position.z * share));
+        CHECK(near(at.yawDeg, far.yawDeg) && near(at.pitchDeg, far.pitchDeg));
+        // The same angular size: width over distance stays put
+        CHECK(near(dotWidth(distance) / distance, kWidthM / kDistanceM));
+    }
+    // The two eyes' dots for a point straight ahead at 2 m, shown at 1 m: each on its own ray, so they sit apart
+    // by half the IPD (the eyes cross 2 m away, behind them)
+    const Pose leftNear = dotPose(gaze_fit::eyeAngle(0.0, 0, 0.063), 0.0, -1, 0.063, 1.0);
+    const Pose rightNear = dotPose(gaze_fit::eyeAngle(0.0, 1, 0.063), 0.0, 1, 0.063, 1.0);
+    CHECK(near(leftNear.position.x, -0.01575, 1e-4) && near(rightNear.position.x, 0.01575, 1e-4));
+
+    // Which distance: 2 m with the dashboard closed; 0.3 m nearer than the panel while it is open, 0.5..2 m
+    CHECK(near(dotDistance(false, 1.37), 2.0) && near(dotDistance(false, -1), 2.0));
+    CHECK(near(dotDistance(true, 1.37), 1.07) && near(dotDistance(true, 0.6), 0.5) && near(dotDistance(true, 5.0), 2.0));
+    CHECK(near(dotDistance(true, -1), kUnknownDashboardM));
 }
 
 void testSocket() {

@@ -137,10 +137,11 @@ public:
      * @param rgba the image, non-premultiplied RGBA
      * @param size its edge length (px)
      * @param newImage the image changed since the last call
+     * @param widthM its width (m; set when it changes, to keep its angular size at another distance)
      * @return true if it is shown
      */
     bool showDot(int index, double x, double y, double z, double yawDeg, double pitchDeg, const uint8_t* rgba, int size,
-                 bool newImage);
+                 bool newImage, double widthM);
 
     /**
      * Hide a debug gaze dot.
@@ -199,6 +200,7 @@ private:
     bool targetFailed_ = false;     ///< creating it failed; not tried again
     uint64_t dotHandles_[2] = {0, 0};  ///< the debug gaze dots (0 until first needed)
     bool dotShown_[2] = {false, false};
+    double dotWidth_[2] = {0.0, 0.0};  ///< the width last set (m)
     bool dotFailed_ = false;          ///< creating one failed; not tried again
     int panelHeight_ = 0;
     int vrserverPid_ = -1;

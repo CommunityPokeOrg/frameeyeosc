@@ -32,12 +32,11 @@ constexpr const char* kTargetName = "Eye target";
 // 2 m ahead (gaze_fit::kTargetDistanceM) and 0.3 m wide (about 8.6 degrees)
 constexpr double kTargetDistanceM = gaze_fit::kTargetDistanceM;
 constexpr float kTargetWidthM = 0.3f;
-// The debug gaze dots: small overlays of their own; 3.5 cm at 2 m is about 1 degree
+// The debug gaze dots: small overlays of their own (their width and distance: gaze_dots.h)
 constexpr const char* kDotKeys[2] = {"sasaken.frameeyeosc-panel.dot0", "sasaken.frameeyeosc-panel.dot1"};
-constexpr float kDotWidthM = 0.035f;
-// Drawn after other apps' overlays with a lower sort order, the dashboard's included (overlays of one kind are drawn
-// lowest sort order first, and only equal ones back to front by distance, so a nearer dashboard covered the dots).
-// High, with room above for anything that must be on top of them
+// Drawn after other apps' overlays with a lower sort order (overlays of one kind are drawn lowest sort order first).
+// High, with room above for anything that must be on top of them. The dashboard still covered the dots behind it,
+// so while it is open they also come nearer than the panel (gaze_dots::dotDistance)
 constexpr uint32_t kDotSortOrder = 1u << 20;
 // IPDs outside this range (m) are taken as a failed read
 constexpr double kIpdMin = 0.045;
@@ -421,7 +420,7 @@ void VrOverlay::hideTarget() {
 }
 
 bool VrOverlay::showDot(int index, double x, double y, double z, double yawDeg, double pitchDeg, const uint8_t* rgba,
-                        int size, bool newImage) {
+                        int size, bool newImage, double widthM) {
     if (!connected_ || dotFailed_ || index < 0 || index > 1) return false;
     vr::IVROverlay* overlay = vr::VROverlay();
     std::string message;
@@ -437,7 +436,7 @@ bool VrOverlay::showDot(int index, double x, double y, double z, double yawDeg, 
             return false;
         }
         handle = created;
-        checkOverlay("SetOverlayWidthInMeters(dot)", overlay->SetOverlayWidthInMeters(handle, kDotWidthM));
+        dotWidth_[index] = 0.0;
         // On top of the dashboard, and kept visible while it is open
         checkOverlay("SetOverlaySortOrder(dot)", overlay->SetOverlaySortOrder(handle, kDotSortOrder));
         checkOverlay("SetOverlayFlag(dot, VisibleInDashboard)",
@@ -447,6 +446,13 @@ bool VrOverlay::showDot(int index, double x, double y, double z, double yawDeg, 
     if (newImage && !dotTextures_[index].update(handle, rgba, message)) {
         std::fprintf(stderr, "[VR] can't send a dot: %s\n", message.c_str());
         return false;
+    }
+    if (widthM != dotWidth_[index]) {
+        if (!checkOverlay("SetOverlayWidthInMeters(dot)",
+                          overlay->SetOverlayWidthInMeters(handle, static_cast<float>(widthM)))) {
+            return false;
+        }
+        dotWidth_[index] = widthM;
     }
     const vr::HmdMatrix34_t transform = poseTransform(yawDeg, pitchDeg, x, y, z);
     if (overlay->SetOverlayTransformTrackedDeviceRelative(handle, vr::k_unTrackedDeviceIndex_Hmd, &transform) !=

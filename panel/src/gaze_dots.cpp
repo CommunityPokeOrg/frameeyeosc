@@ -5,6 +5,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cmath>
 #include <cstring>
@@ -44,20 +45,30 @@ std::vector<uint8_t> encode(const Packet& packet) {
     return data;
 }
 
-Pose dotPose(double x, double y, int eye, double ipd) {
+Pose dotPose(double x, double y, int eye, double ipd, double distance) {
     const double scale = 45.0 * M_PI / 180.0;
     // The ray the tracker's angles describe, from the eye
     const double rx = std::tan(x * scale);
     const double ry = std::tan(y * scale);
     const double length = std::sqrt(rx * rx + ry * ry + 1.0);
     Pose pose;
-    pose.position.x = eye * ipd / 2 + kDistanceM * rx / length;
-    pose.position.y = kDistanceM * ry / length;
-    pose.position.z = -kDistanceM / length;
+    pose.position.x = eye * ipd / 2 + distance * rx / length;
+    pose.position.y = distance * ry / length;
+    pose.position.z = -distance / length;
     // Facing back along the ray: turned right by its yaw, up by its pitch
     pose.yawDeg = std::atan2(rx, 1.0) * 180.0 / M_PI;
     pose.pitchDeg = std::asin(ry / length) * 180.0 / M_PI;
     return pose;
+}
+
+double dotDistance(bool dashboardOpen, double panelDistance) {
+    if (!dashboardOpen) return kDistanceM;
+    if (!(panelDistance > 0)) return kUnknownDashboardM;
+    return std::clamp(panelDistance - kDashboardGapM, kNearestM, kDistanceM);
+}
+
+double dotWidth(double distance) {
+    return kWidthM * distance / kDistanceM;
 }
 
 Receiver::~Receiver() {

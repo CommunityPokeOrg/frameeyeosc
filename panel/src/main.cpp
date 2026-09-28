@@ -1415,6 +1415,8 @@ int runOverlay(const Options& options) {
     bool dotsOpenFailed = false;
     double lastDotAt = 0.0;
     double dotIpd = gaze_fit::kDefaultIpdM;
+    double dotDistance = gaze_dots::kDistanceM;  // how far along the rays the dots are now
+    double panelDistance = -1.0;                 // how far the panel is, read once each time the dashboard opens
     uint64_t drawnAutostart = autostart.snapshot(model.autostart);
     uint64_t drawnUpdate = 0;
     std::string lastSignature;
@@ -1586,11 +1588,23 @@ int runOverlay(const Options& options) {
                     dotsVisible[i] = false;
                 }
             };
-            // Where the dashboard sits, once each time it opens with the dots on (they are drawn on top of it)
-            if (dots.isOpen() && visible && !wasVisible) {
-                std::fprintf(stderr, "[dots] the panel is %.2f m away; the dots are %.1f m ahead, drawn on top\n",
-                             vr.panelDistanceM(), gaze_dots::kDistanceM);
+            // The dashboard covers overlays behind it, so while it is open the dots come nearer than the panel
+            // (read once per opening), and go back to 2 m when it closes
+            if (!visible) {
+                panelDistance = -1.0;
+            } else if (dots.isOpen() && panelDistance < 0) {
+                panelDistance = vr.panelDistanceM();
             }
+            const double wantedDistance = gaze_dots::dotDistance(visible, panelDistance);
+            if (dots.isOpen() && wantedDistance != dotDistance) {
+                if (visible) {
+                    std::fprintf(stderr, "[dots] the panel is %.2f m away; dots at %.2f m\n", panelDistance,
+                                 wantedDistance);
+                } else {
+                    std::fprintf(stderr, "[dots] dashboard closed; dots at %.2f m\n", wantedDistance);
+                }
+            }
+            dotDistance = wantedDistance;
             if (wanted && !dots.isOpen() && !dotsOpenFailed) {
                 const size_t slash = model.statusPath.find_last_of('/');
                 const std::string dir = slash == std::string::npos ? "." : model.statusPath.substr(0, slash);
@@ -1612,11 +1626,12 @@ int runOverlay(const Options& options) {
             if (dots.isOpen() && dots.poll(packet)) {
                 lastDotAt = nowSeconds();
                 const auto place = [&](int index, int eye, DotKind kind, float x, float y) {
-                    const gaze_dots::Pose pose = gaze_dots::dotPose(x, y, eye, dotIpd);
+                    const gaze_dots::Pose pose = gaze_dots::dotPose(x, y, eye, dotIpd, dotDistance);
                     const int image = static_cast<int>(kind);
                     dotsVisible[index] = vr.showDot(index, pose.position.x, pose.position.y, pose.position.z,
                                                     pose.yawDeg, pose.pitchDeg, dotImages[image].data(),
-                                                    kDotImageSize, dotImageShown[index] != image);
+                                                    kDotImageSize, dotImageShown[index] != image,
+                                                    gaze_dots::dotWidth(dotDistance));
                     if (dotsVisible[index]) dotImageShown[index] = image;
                 };
                 if (packet.independent) {

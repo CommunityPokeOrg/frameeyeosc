@@ -15,8 +15,17 @@ namespace gaze_dots {
 constexpr const char* kSocketName = "gaze-dots.sock";
 /** One datagram: b"FEOD", version 1, flags, 2 zero bytes, time (f64), six gaze values (f32), little-endian. */
 constexpr size_t kPacketSize = 40;
-/** How far ahead the dots are shown (m). */
+/** How far along each ray the dots are shown (m)... */
 constexpr double kDistanceM = 2.0;
+/** ...and how wide they are there (about 1 degree); nearer, they shrink to look the same size. */
+constexpr double kWidthM = 0.035;
+/** While the dashboard is open the dots come this much nearer than the panel, which covers anything behind it
+ *  whatever the sort order... */
+constexpr double kDashboardGapM = 0.3;
+/** ...but no nearer than this... */
+constexpr double kNearestM = 0.5;
+/** ...and this near if the panel's distance can't be read. */
+constexpr double kUnknownDashboardM = 1.0;
 /** Without a packet for this long, the dots are hidden (frameeyeosc stopped or tracking is lost). */
 constexpr double kStaleSec = 1.0;
 
@@ -58,15 +67,32 @@ struct Pose {
 };
 
 /**
- * Where a gaze points, kDistanceM along the ray from an eye. The gaze values are the tracker's angles
+ * Where a gaze points, a distance along the ray from an eye. The gaze values are the tracker's angles
  * (atan2(x, -z) and atan2(y, -z), 1.0 = 45°), so the ray is (tan x, tan y, -1).
  * @param x sideways gaze (1.0 = 45° right)
  * @param y up/down gaze (1.0 = 45° up)
  * @param eye -1 = the left eye (at -ipd/2), 0 = between the eyes, 1 = the right eye (at +ipd/2)
  * @param ipd the distance between the eyes (m)
+ * @param distance how far along the ray (m)
  * @return the pose
  */
-Pose dotPose(double x, double y, int eye, double ipd);
+Pose dotPose(double x, double y, int eye, double ipd, double distance = kDistanceM);
+
+/**
+ * How far along the rays the dots go: kDistanceM with the dashboard closed; with it open, kDashboardGapM nearer
+ * than the panel, within kNearestM..kDistanceM.
+ * @param dashboardOpen whether the dashboard is open
+ * @param panelDistance how far the panel is (m; negative if unknown)
+ * @return the distance (m)
+ */
+double dotDistance(bool dashboardOpen, double panelDistance);
+
+/**
+ * How wide a dot is at a distance, so it always looks the same size.
+ * @param distance how far along its ray (m)
+ * @return the width (m)
+ */
+double dotWidth(double distance);
 
 /** The panel's end of the socket: bound while the dots are on, non-blocking. */
 class Receiver {
