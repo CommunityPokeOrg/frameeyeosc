@@ -1,5 +1,5 @@
 // The debug gaze dots: frameeyeosc streams the gaze it sends (one datagram per sample, see src/dots.rs) to a Unix
-// socket in the status folder while "gaze_debug_dots" is on, and the panel shows a dot 2 m ahead where that gaze
+// socket in the status folder while "gaze_debug_dots" is on, and the panel shows a dot 1 m ahead where that gaze
 // points: one for the combined gaze, or one per eye, each along that eye's own ray. Nothing here talks to OpenVR,
 // so the packet and the geometry are tested on their own (gaze_dots_test.cpp).
 #pragma once
@@ -15,17 +15,16 @@ namespace gaze_dots {
 constexpr const char* kSocketName = "gaze-dots.sock";
 /** One datagram: b"FEOD", version 1, flags, 2 zero bytes, time (f64), six gaze values (f32), little-endian. */
 constexpr size_t kPacketSize = 40;
-/** How far along each ray the dots are shown (m)... */
-constexpr double kDistanceM = 2.0;
-/** ...and how wide they are there (about 1 degree); nearer, they shrink to look the same size. */
-constexpr double kWidthM = 0.035;
-/** While the dashboard is open the dots come this near (gaze_debug_dots_near_m): the dashboard covered them at
- *  2 m and at 1.0-1.13 m (0.3 m in front of the panel), whatever their sort order, while frame-perf-overlay's
- *  panel, about 0.45 m ahead, shows over it... */
-constexpr double kNearDefaultM = 0.45;
+/** How far along each ray the dots are shown (m; gaze_debug_dots_distance_m), the same with the dashboard open or
+ *  closed so they never jump. Plain overlays show over the dashboard (about 1.35 m away) up to about 1 m: at 1.2 m
+ *  it hid them, depending on where the head was... */
+constexpr double kDefaultDistanceM = 1.0;
 /** ...within this range. */
-constexpr double kNearMinM = 0.2;
-constexpr double kNearMaxM = 1.5;
+constexpr double kMinDistanceM = 0.3;
+constexpr double kMaxDistanceM = 1.2;
+/** A dot is this wide (m) at kWidthAtM (about 1 degree), and scaled with its distance to look the same size. */
+constexpr double kWidthM = 0.035;
+constexpr double kWidthAtM = 2.0;
 /** Without a packet for this long, the dots are hidden (frameeyeosc stopped or tracking is lost). */
 constexpr double kStaleSec = 1.0;
 
@@ -76,16 +75,15 @@ struct Pose {
  * @param distance how far along the ray (m)
  * @return the pose
  */
-Pose dotPose(double x, double y, int eye, double ipd, double distance = kDistanceM);
+Pose dotPose(double x, double y, int eye, double ipd, double distance);
 
 /**
- * How far along the rays the dots go: kDistanceM with the dashboard closed; with it open, the near distance
- * (gaze_debug_dots_near_m, kept within kNearMinM..kNearMaxM; kNearDefaultM if unset).
- * @param dashboardOpen whether the dashboard is open
- * @param near the gaze_debug_dots_near_m setting (m; NaN if unset)
+ * How far along the rays the dots go: the gaze_debug_dots_distance_m setting, kept within
+ * kMinDistanceM..kMaxDistanceM (kDefaultDistanceM if unset).
+ * @param setting the setting (m; NaN if unset)
  * @return the distance (m)
  */
-double dotDistance(bool dashboardOpen, double near);
+double dotDistance(double setting);
 
 /**
  * How wide a dot is at a distance, so it always looks the same size.

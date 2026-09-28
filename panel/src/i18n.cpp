@@ -493,7 +493,7 @@ UiText makeEnglish() {
     t.rowVersion = "Version";
     t.checkedFormat = " · checked %s";
     t.rowGazeDots = "Show gaze dots";
-    t.hintGazeDots = "Debug: the sent gaze, 2 m ahead";
+    t.hintGazeDots = "Debug: the sent gaze, 1 m ahead";
     t.rowUpdateCheck = "Check for updates";
     t.hintUpdateCheck = "Looks on GitHub for a new version at start and once a day";
     t.updateUpToDateFormat = "Up to date (%s)";

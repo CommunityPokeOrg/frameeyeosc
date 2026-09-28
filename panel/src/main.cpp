@@ -1415,8 +1415,7 @@ int runOverlay(const Options& options) {
     bool dotsOpenFailed = false;
     double lastDotAt = 0.0;
     double dotIpd = gaze_fit::kDefaultIpdM;
-    double dotDistance = gaze_dots::kDistanceM;  // how far along the rays the dots are now
-    double panelDistance = -1.0;                 // how far the panel is, read once each time the dashboard opens (logged)
+    double dotDistance = 0.0;       // how far along the rays the dots are (gaze_debug_dots_distance_m), 0 until set
     uint64_t drawnAutostart = autostart.snapshot(model.autostart);
     uint64_t drawnUpdate = 0;
     std::string lastSignature;
@@ -1450,7 +1449,8 @@ int runOverlay(const Options& options) {
         const bool visible = vr.panelVisible();
         autostart.setActive(visible);
         const bool fitting = fit.active();
-        if ((visible || fitting) && ((visible && !wasVisible) || nowSeconds() >= nextStatusRead)) {
+        // (also while the debug dots are on, so their switch and distance apply without opening the dashboard)
+        if ((visible || fitting || dots.isOpen()) && ((visible && !wasVisible) || nowSeconds() >= nextStatusRead)) {
             nextStatusRead = nowSeconds() + kStatusReadSec;
             model.status = readStatus(model.statusPath, unixNow());
             if (model.status.running != lastRunning) {
@@ -1588,26 +1588,13 @@ int runOverlay(const Options& options) {
                     dotsVisible[i] = false;
                 }
             };
-            // The dashboard covers overlays behind it, even 0.3 m in front of the panel, so while it is open the dots
-            // come as near as frame-perf-overlay's panel (gaze_debug_dots_near_m), and go back to 2 m when it closes
-            if (!visible) {
-                panelDistance = -1.0;
-            } else if (dots.isOpen() && panelDistance < 0) {
-                panelDistance = vr.panelDistanceM();
-            }
-            const double wantedDistance =
-                gaze_dots::dotDistance(visible, model.config.number(key::kGazeDebugDotsNearM));
+            // One distance, dashboard open or closed (near enough to show over it; nothing jumps)
+            const double wantedDistance = gaze_dots::dotDistance(model.config.number(key::kGazeDebugDotsDistanceM));
             if (dots.isOpen() && wantedDistance != dotDistance) {
-                if (visible) {
-                    std::fprintf(stderr,
-                                 "[dots] dashboard open (the panel is %.2f m away); dots at %.2f m, %.1f mm wide, "
-                                 "plain overlays (no sort order, no dashboard flags)\n",
-                                 panelDistance, wantedDistance, gaze_dots::dotWidth(wantedDistance) * 1000);
-                } else {
-                    std::fprintf(stderr, "[dots] dashboard closed; dots at %.2f m\n", wantedDistance);
-                }
+                std::fprintf(stderr, "[dots] at %.2f m, %.1f mm wide (plain overlays, no sort order or flags)\n",
+                             wantedDistance, gaze_dots::dotWidth(wantedDistance) * 1000);
+                dotDistance = wantedDistance;
             }
-            dotDistance = wantedDistance;
             if (wanted && !dots.isOpen() && !dotsOpenFailed) {
                 const size_t slash = model.statusPath.find_last_of('/');
                 const std::string dir = slash == std::string::npos ? "." : model.statusPath.substr(0, slash);
@@ -1621,6 +1608,7 @@ int runOverlay(const Options& options) {
                 }
             } else if (!wanted && (dots.isOpen() || dotsOpenFailed)) {
                 if (dots.isOpen()) std::fprintf(stderr, "[dots] off\n");
+                dotDistance = 0.0;
                 dots.close();
                 hideDots();
                 dotsOpenFailed = false;

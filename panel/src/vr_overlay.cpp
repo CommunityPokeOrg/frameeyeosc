@@ -33,7 +33,7 @@ constexpr const char* kTargetName = "Eye target";
 constexpr double kTargetDistanceM = gaze_fit::kTargetDistanceM;
 constexpr float kTargetWidthM = 0.3f;
 // The debug gaze dots: small plain overlays of their own, like frame-perf-overlay's panel (no sort order, no
-// dashboard flags); over the dashboard they come near instead (their width and distance: gaze_dots.h)
+// dashboard flags: with those, the dashboard hid them even at 1 m); their width and distance: gaze_dots.h
 constexpr const char* kDotKeys[2] = {"sasaken.frameeyeosc-panel.dot0", "sasaken.frameeyeosc-panel.dot1"};
 // IPDs outside this range (m) are taken as a failed read
 constexpr double kIpdMin = 0.045;
@@ -338,26 +338,6 @@ double VrOverlay::userIpdMeters() const {
         return gaze_fit::kDefaultIpdM;
     }
     return ipd;
-}
-
-double VrOverlay::panelDistanceM() const {
-    if (!connected_ || dashboardHandle_ == 0) return -1.0;
-    // The panel's center in the room, and the headset's position
-    vr::HmdMatrix34_t center {};
-    const vr::HmdVector2_t middle {{0.5f, 0.5f}};
-    if (vr::VROverlay()->GetTransformForOverlayCoordinates(dashboardHandle_, vr::TrackingUniverseStanding, middle,
-                                                           &center) != vr::VROverlayError_None) {
-        return -1.0;
-    }
-    vr::TrackedDevicePose_t hmd {};
-    vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, 0.0f, &hmd, 1);
-    if (!hmd.bPoseIsValid) return -1.0;
-    double squares = 0.0;
-    for (int axis = 0; axis < 3; ++axis) {
-        const double d = center.m[axis][3] - hmd.mDeviceToAbsoluteTracking.m[axis][3];
-        squares += d * d;
-    }
-    return std::sqrt(squares);
 }
 
 bool VrOverlay::showTarget(double yawDeg, double pitchDeg, const uint8_t* rgba, int size) {

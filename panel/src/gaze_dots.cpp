@@ -61,14 +61,13 @@ Pose dotPose(double x, double y, int eye, double ipd, double distance) {
     return pose;
 }
 
-double dotDistance(bool dashboardOpen, double near) {
-    if (!dashboardOpen) return kDistanceM;
-    if (!std::isfinite(near)) return kNearDefaultM;
-    return std::clamp(near, kNearMinM, kNearMaxM);
+double dotDistance(double setting) {
+    if (!std::isfinite(setting)) return kDefaultDistanceM;
+    return std::clamp(setting, kMinDistanceM, kMaxDistanceM);
 }
 
 double dotWidth(double distance) {
-    return kWidthM * distance / kDistanceM;
+    return kWidthM * distance / kWidthAtM;
 }
 
 Receiver::~Receiver() {

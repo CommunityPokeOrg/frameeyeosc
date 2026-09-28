@@ -95,12 +95,6 @@ public:
      */
     double userIpdMeters() const;
 
-    /**
-     * How far the panel (on the dashboard) is from the headset, to log where the dashboard sits compared with the
-     * debug gaze dots.
-     * @return meters, or -1 if unknown (not shown, no pose)
-     */
-    double panelDistanceM() const;
 
     /**
      * Show the eye fit's target: an overlay of its own (not on the dashboard), fixed to the headset 2 m ahead in

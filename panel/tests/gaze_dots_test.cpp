@@ -68,26 +68,27 @@ void testPacket() {
 
 void testGeometry() {
     // Straight ahead from between the eyes: 2 m ahead
-    Pose pose = dotPose(0.0, 0.0, 0, 0.063);
+    const double kDistanceM = 2.0;
+    Pose pose = dotPose(0.0, 0.0, 0, 0.063, kDistanceM);
     CHECK(near(pose.position.x, 0) && near(pose.position.y, 0) && near(pose.position.z, -kDistanceM));
     // Each eye's straight-ahead ray starts at that eye
-    pose = dotPose(0.0, 0.0, -1, 0.063);
+    pose = dotPose(0.0, 0.0, -1, 0.063, kDistanceM);
     CHECK(near(pose.position.x, -0.0315) && near(pose.position.z, -kDistanceM));
     // 45° right and 45° up (1.0 each) lies along (1, 1, -1)
-    pose = dotPose(1.0, 1.0, 0, 0.063);
+    pose = dotPose(1.0, 1.0, 0, 0.063, kDistanceM);
     const double side = kDistanceM / std::sqrt(3.0);
     CHECK(near(pose.position.x, side) && near(pose.position.y, side) && near(pose.position.z, -side));
     CHECK(near(pose.yawDeg, 45.0) && near(pose.pitchDeg, std::asin(1 / std::sqrt(3.0)) * 180 / M_PI));
     // Eyes turned in the way the eye fit expects for a dot straight ahead: both dots meet near it
-    const Pose left = dotPose(gaze_fit::eyeAngle(0.0, 0, 0.063), 0.0, -1, 0.063);
-    const Pose right = dotPose(gaze_fit::eyeAngle(0.0, 1, 0.063), 0.0, 1, 0.063);
+    const Pose left = dotPose(gaze_fit::eyeAngle(0.0, 0, 0.063), 0.0, -1, 0.063, kDistanceM);
+    const Pose right = dotPose(gaze_fit::eyeAngle(0.0, 1, 0.063), 0.0, 1, 0.063, kDistanceM);
     // (2 m along each ray, and the dot is 2 m ahead: they differ by micrometres)
     CHECK(near(left.position.x, 0.0, 1e-4) && near(right.position.x, 0.0, 1e-4));
     CHECK(near(left.position.z, -kDistanceM, 1e-3) && left.yawDeg > 0 && right.yawDeg < 0);
 
     // At another distance: the same ray from the same eye and the same facing, only nearer
     for (const double distance : {0.5, 1.07, 2.0}) {
-        const Pose far = dotPose(0.3, -0.2, -1, 0.063);
+        const Pose far = dotPose(0.3, -0.2, -1, 0.063, kDistanceM);
         const Pose at = dotPose(0.3, -0.2, -1, 0.063, distance);
         const double eyeX = -0.0315;
         const double length = std::sqrt((at.position.x - eyeX) * (at.position.x - eyeX) +
@@ -98,7 +99,7 @@ void testGeometry() {
               near(at.position.z, far.position.z * share));
         CHECK(near(at.yawDeg, far.yawDeg) && near(at.pitchDeg, far.pitchDeg));
         // The same angular size: width over distance stays put
-        CHECK(near(dotWidth(distance) / distance, kWidthM / kDistanceM));
+        CHECK(near(dotWidth(distance) / distance, kWidthM / kWidthAtM));
     }
     // The two eyes' dots for a point straight ahead at 2 m, shown at 1 m: each on its own ray, so they sit apart
     // by half the IPD (the eyes cross 2 m away, behind them)
@@ -106,14 +107,13 @@ void testGeometry() {
     const Pose rightNear = dotPose(gaze_fit::eyeAngle(0.0, 1, 0.063), 0.0, 1, 0.063, 1.0);
     CHECK(near(leftNear.position.x, -0.01575, 1e-4) && near(rightNear.position.x, 0.01575, 1e-4));
 
-    // Which distance: 2 m with the dashboard closed; the near setting while it is open (0.45 m if unset), 0.2..1.5 m
-    CHECK(near(dotDistance(false, 0.45), 2.0) && near(dotDistance(false, std::nan("")), 2.0));
-    CHECK(near(dotDistance(true, std::nan("")), 0.45) && near(kNearDefaultM, 0.45));
-    CHECK(near(dotDistance(true, 0.6), 0.6) && near(dotDistance(true, 0.05), 0.2) && near(dotDistance(true, 5.0), 1.5));
-    // At the near distance a dot keeps its size and stays on its eye's ray: 0.45 m straight ahead from the left eye
-    const Pose leftClose = dotPose(0.0, 0.0, -1, 0.063, dotDistance(true, std::nan("")));
-    CHECK(near(leftClose.position.x, -0.0315) && near(leftClose.position.z, -0.45));
-    CHECK(near(dotWidth(0.45), 0.035 * 0.45 / 2.0));
+    // Which distance: the setting, 1 m if unset, kept within 0.3..1.2 m
+    CHECK(near(dotDistance(std::nan("")), 1.0) && near(kDefaultDistanceM, 1.0));
+    CHECK(near(dotDistance(0.8), 0.8) && near(dotDistance(0.05), 0.3) && near(dotDistance(5.0), 1.2));
+    // At the default a dot is 17.5 mm wide (1 degree, as 35 mm at 2 m) on its eye's ray: straight ahead from the left eye
+    const Pose leftDefault = dotPose(0.0, 0.0, -1, 0.063, dotDistance(std::nan("")));
+    CHECK(near(leftDefault.position.x, -0.0315) && near(leftDefault.position.z, -1.0));
+    CHECK(near(dotWidth(1.0), 0.0175));
 }
 
 void testSocket() {

@@ -117,11 +117,11 @@ sudo は要りません。全部ホームフォルダ（`~/.local/bin`、`~/.con
 | `gaze_gain_x` / `gaze_gain_up` / `gaze_gain_down` | `--gaze-gain-x` / `--gaze-gain-up` / `--gaze-gain-down` | `1.0` | そこから左右・上・下にどれだけ動かすか。0.5〜2。目を合わせると決まる |
 | `gaze_offset_x_left` / `_right`、`gaze_gain_x_left` / `_right` | `--gaze-offset-x-left` など | `null` | 目ごとの左右の 0 点と幅。目ごとの視線（`independent_eyes`）に使う。目を合わせると、2 m 先を見るときそれぞれの目が本当に向く角度（少し寄り目になる）に合うよう決まる。`null` = `gaze_offset_x` / `gaze_gain_x` を使う。上下は Frame が両目で共有しているので目ごとの値はない |
 | `gaze_down_hold_x_deg` | `--gaze-down-hold-x-deg` | `24` | 真下を見ると、Frame の左右の視線が跳ねます（右へ 19° くらい）。この角度より下を見ている間は、左右の視線（両目とまとめた視線）を、その手前の値へ寄せます（さらに 10° 下で完全に止める）。角度はトラッカーのそのままの値（正面の位置・幅をかける前）。上下は変えない。`0` で無効 |
-| `gaze_debug_dots` | | `false` | デバッグ用: 送っている視線の向きに、2 m 先に小さい点を出す（`independent_eyes` のときは目ごとに、それぞれの目から。左は水色、右はオレンジ）。アバターに届いている視線が見えます。オンの間は、frameeyeosc が処理したサンプルを 1 つずつ状態ファイルのフォルダの Unix ソケットでパネルに渡します。ヘッドセットの外には出さず、オフのときは渡しません。目を合わせている間は隠します |
+| `gaze_debug_dots` | | `false` | デバッグ用: 送っている視線の向きに、1 m 先（`gaze_debug_dots_distance_m`）に小さい点を出す（`independent_eyes` のときは目ごとに、それぞれの目から。左は水色、右はオレンジ）。アバターに届いている視線が見えます。オンの間は、frameeyeosc が処理したサンプルを 1 つずつ状態ファイルのフォルダの Unix ソケットでパネルに渡します。ヘッドセットの外には出さず、オフのときは渡しません。目を合わせている間は隠します |
 | `lid_fit_closed_left` 〜 `lid_fit_down_right` | | `null` | 目ごとの Frame の開き具合: 目を閉じたとき、上・正面・下を見て開いているとき（`closed` / `up` / `open` / `down`、`_left` / `_right`）。目を合わせると決まる。`null` = まだ合わせていない。合わせた目は、自動キャリブレーションと `lid_scale_*` の代わりにこれを使い、下を見ただけでは閉じない |
 | `calibration_reset` | | `0` | 増やすと、まぶたの学習をやり直す |
 | `language` | | Steam の言語 | パネルの言語。`"ja"` か `"en"`。書いていないときは、Steam の言語が日本語なら日本語、それ以外なら英語 |
-| `gaze_debug_dots_near_m` | | `0.45` | ダッシュボードを開いている間、視線の点をどこまで手前に出すか（0.2〜1.5 m。それより奥はダッシュボードに隠れる）。パネルが使い、frameeyeosc 本体は使わない |
+| `gaze_debug_dots_distance_m` | | `1.0` | 視線の点を何 m 先に出すか（0.3〜1.2 m）。ダッシュボードを開いても閉じても同じ。それよりずっと奥だとダッシュボードに隠れる。パネルが使い、frameeyeosc 本体は使わない |
 | `fit_sounds` | | `true` | 目を合わせている間、パネルが短い音を鳴らす。frameeyeosc 本体は使わない |
 | `update_check` | | `true` | パネルが起動時と 1 日 1 回（確認に失敗したときは 1 時間後）、GitHub に新しい版がないか確かめる。frameeyeosc 本体は使わない |
 
