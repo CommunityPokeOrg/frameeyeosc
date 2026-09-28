@@ -11,8 +11,9 @@ HostError checkHost(const std::string& text) {
     while (true) {
         const size_t dot = text.find('.', start);
         const std::string part = text.substr(start, dot == std::string::npos ? std::string::npos : dot - start);
+        // A leading zero is refused: the address lookup reads "010" as octal (8), so it would send elsewhere
         if (part.empty() || part.size() > 3 || part.find_first_not_of("0123456789") != std::string::npos ||
-            std::stoi(part) > 255) {
+            (part.size() > 1 && part[0] == '0') || std::stoi(part) > 255) {
             return HostError::Ipv4;
         }
         ++parts;

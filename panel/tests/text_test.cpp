@@ -44,13 +44,13 @@ using host_entry::checkHost;
 
 void testHosts() {
     // IPv4 addresses only (a host name can only be set in config.json)
-    for (const char* good : {"192.168.1.20", "10.0.0.1", "0.0.0.0", "255.255.255.255", "010.0.0.1"}) {
+    for (const char* good : {"192.168.1.20", "10.0.0.1", "0.0.0.0", "255.255.255.255"}) {
         CHECK(checkHost(good) == HostError::None);
     }
     CHECK(checkHost("") == HostError::Empty);
     // Not four numbers 0-255 separated by dots
     for (const char* bad : {"256.1.1.1", "1.2.3", "1.2.3.4.5", "1..2.3", ".1.2.3", "1.2.3.", "1234.1.1.1", "192", ".",
-                            "192.168.1.20:9000", "my-pc", "auto", "1.2.3.4 "}) {
+                            "192.168.1.20:9000", "my-pc", "auto", "1.2.3.4 ", "010.0.0.1", "192.168.010.5", "00.1.2.3"}) {
         CHECK(checkHost(bad) == HostError::Ipv4);
     }
 

@@ -1718,6 +1718,8 @@ int runOverlay(const Options& options) {
                 vr.logOverlayState("after the first draw");
             }
         }
+        // The IP keypad doesn't stay open behind a closed dashboard
+        if (!visible && wasVisible) panel.closeHostEntry();
         wasVisible = visible;
         // Every display frame while the fit's target or the debug dots are up: with the target, paced by the
         // compositor itself (a fixed sleep plus the loop's work fell behind the display, and the ring stuttered)

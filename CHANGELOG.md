@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.2 (unreleased)
+## 0.5.2 (2026-09-29)
 
 - When the eye fit stops, the panel shows the numbers behind it under the reason: for an unsteady dot, the usable samples against the 45 needed, the spread against the 2.7° allowed, and the tries (for example "Center dot: 30 of 45 samples usable · spread 3.4° (max 2.7°) · 3 tries"); for the eyes-shut step, each eye's openness against what it had to read below; for a dot the gaze hardly moved toward, how far it moved against how far it had to; for eyelids that barely changed, which eye and reading. Every try is logged with its numbers too (`[fit] center try 2: 128 samples (min 45), spread 3.4° (max 2.7°) -> again`). The limits are unchanged.
 - The target PC's IP address can be typed in the panel, for when the automatic choice picks the wrong PC: "Enter IP" on the Basic tab opens a keypad for an IPv4 address (the port stays in the Port row). It is checked and written to `host`, and the row then shows it ("Manual 192.168.1.20"). A host name can still be set in `config.json`; the row shows it the same way, and "Auto" switches back.
