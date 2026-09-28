@@ -101,11 +101,18 @@ public:
      * shows it while the dashboard is closed.
      * @param yawDeg degrees to the right of straight ahead
      * @param pitchDeg degrees up
-     * @param rgba the image, non-premultiplied RGBA
+     * @param rgba a new image, non-premultiplied RGBA; nullptr keeps the last one
      * @param size its edge length (px)
      * @return true if it is shown
      */
     bool showTarget(double yawDeg, double pitchDeg, const uint8_t* rgba, int size);
+
+    /**
+     * Wait for the compositor's next frame (IVROverlay::WaitFrameSync), to draw the target once per display frame.
+     * @param timeoutMs the longest wait
+     * @return false if it can't be used (then the caller sleeps instead); logged once
+     */
+    bool waitFrameSync(uint32_t timeoutMs);
 
     /** Hide the target (nothing happens if it was never created). */
     void hideTarget();
@@ -178,6 +185,7 @@ private:
     uint64_t thumbnailHandle_ = 0;  ///< the dashboard thumbnail
     uint64_t targetHandle_ = 0;     ///< the eye fit's target (0 until first needed)
     bool targetShown_ = false;
+    bool frameSyncFailed_ = false;  ///< WaitFrameSync gave an error other than a timeout
     bool targetPlaced_ = false;     ///< its transform was set, to targetYaw_ / targetPitch_
     double targetYaw_ = 0.0;
     double targetPitch_ = 0.0;

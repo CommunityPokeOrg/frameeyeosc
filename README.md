@@ -76,7 +76,7 @@ From 0.4.0 on, the panel's "Update" button does the update. The panel's Advanced
 - The left column always shows what frameeyeosc is doing: sending or paused, where it sends to, messages per second, both eyelids and the gaze (raw and sent), and a config error if there is one.
 - Basic: pause sending, VRChat or VRCFaceTracking (ETVR), target PC (automatic, or fixed to the PC it sends to now, so there's no IP to type in VR), port, language (Japanese / English), start with SteamVR, reset all, quit.
 - Gaze: smoothing on or off, light / medium / strong presets and the three filter values, deadzone, holding the gaze while blinking, per-eye gaze, skipping unreliable gaze, removing one-sample glitches.
-- Eye fit: one button that fits your gaze and eyelids in about 30 seconds (see [Eye fit](#eye-fit)), re-centering the gaze only, the result with "Reset", and the values by hand under "Fine-tune".
+- Eye fit: one button that fits your gaze and eyelids in about 20 seconds (see [Eye fit](#eye-fit)), re-centering the gaze only, the result with "Reset", and the values by hand under "Fine-tune".
 - Eyelids: auto calibration and its learned values, per-eye scales, the four openness marks drawn over each eye's live openness (blink and open wide to set them), left/right sync, keeping blinks visible (hold time and closing both eyes), eyelid smoothing.
 - Advanced: parameter prefix, the version with checking for and installing updates, showing gaze dots (debug), file locations, options locked by the command line.
 
@@ -84,7 +84,7 @@ The panel writes `config.json` and reads the status file. To pick its default la
 
 ## Settings
 
-Settings are in `~/.config/frameeyeosc/config.json`. The panel writes it, and you can also edit it by hand. frameeyeosc checks it once a second and applies changes without a restart. Missing keys use the defaults and unknown keys are ignored. If the file is broken or a value is out of range, frameeyeosc keeps the previous settings and reports the error (in the panel and in the status file).
+Settings are in `~/.config/frameeyeosc/config.json`. The panel writes it, and you can also edit it by hand. frameeyeosc checks it 10 times a second and applies changes without a restart. Missing keys use the defaults and unknown keys are ignored. If the file is broken or a value is out of range, frameeyeosc keeps the previous settings and reports the error (in the panel and in the status file).
 
 ```json
 { "output": "vrchat", "gaze_min_cutoff": 0.3, "lid_sync": 0.6 }
@@ -155,10 +155,10 @@ Notes:
 
 If the avatar's eyes look a little off (looking too far down, or eyelids that close when you look down), the panel's "Eye fit" tab fits them to you. Press "Fit my eyes", then close the dashboard:
 
-1. A dot appears straight ahead, then 15° up, 15° down, 20° left and 20° right. Keep your head still and follow it with your eyes.
-2. Then the target says "Close your eyes" and counts down 3, 2, 1. Keep them closed for 2 seconds, until you've counted to about 3. It then says "Open them".
+1. A dot appears straight ahead, then 15° up, 15° down, 20° left and 20° right, 2.5 seconds each. Keep your head still and follow it with your eyes. The ring around the dot runs down, and the seconds being measured (2, 1) show under it.
+2. Then the target says "Close your eyes for 3 s" and counts down 3, 2, 1. Close them at the end of the count and keep them closed for 3 seconds, until the chime. It then says "Open them".
 
-It takes about 30 seconds. Opening the dashboard stops it. Soft sounds mark each step, so you can follow it without watching the panel: a pop when a dot is in place, a pip when it's measured, a low buzz when it's measured again, a tick for each of 3, 2, 1, a chime when you can open your eyes, and a rising chime at the end (two falling tones if it stops). Turn them off with "♪ Sounds" on the tab. A step where the gaze is unsteady (or the eyes aren't shut in the last step) is measured again, up to three times. The result shows on the tab. From then on the one button there says "Fit again", and "Reset" undoes the fit. After putting the headset back on, "Re-center only" measures straight ahead again (about 3 seconds). The values can also be changed by hand under "Fine-tune".
+It takes about 20 seconds. Opening the dashboard stops it. Soft sounds mark each step, so you can follow it without watching the panel: a pop when a dot is in place, a pip when it's measured, a low buzz when it's measured again, a tick for each of 3, 2, 1, a chime when you can open your eyes, and a rising chime at the end (two falling tones if it stops). Turn them off with "♪ Sounds" on the tab. A step where the gaze is unsteady (or the eyes aren't shut in the last step) is measured again, up to three times. The result shows on the tab. From then on the one button there says "Fit again", and "Reset" undoes the fit. After putting the headset back on, "Re-center only" measures straight ahead again (about 3 seconds). The values can also be changed by hand under "Fine-tune".
 
 What the fit sets:
 
@@ -166,7 +166,7 @@ What the fit sets:
 - Each eye's sideways gaze, for "Move eyes separately" (`gaze_offset_x_left/right`, `gaze_gain_x_left/right`). The dots are 2 m away, so each eye's true angle to a dot is not the angle from between the eyes: seen from between the eyes a dot straight ahead is at 0°, but the left eye turns about 0.9° right and the right eye about 0.9° left to see it (with a 63 mm distance between the eyes). Each eye is fitted to its own angles, using the distance between the eyes that SteamVR reports (63 mm if it doesn't), so the avatar's eyes turn in naturally.
 - Eyelids: each eye's openness with the eyes shut, and open while looking up, straight ahead and down (`lid_fit_*`). The Frame reads an eye as less open when you look down (about 30% less 20° down), so a fitted eye is judged against what is normal for where you look, and doesn't close when you only look down. A fitted eye counts as closed below 30% of the way from its shut to its open reading. The learned calibration and `lid_scale_*` are not used for fitted eyes, and the "Closed" and "Open" lid marks give way to the fit (widening works as before). On a recording, the fit cut the times an eye looking down was sent a third closed from 35 to 5, and more blinks were sent fully closed (53 of 60, from 50).
 
-The dot is fixed to the headset 2 m ahead and only shows while the dashboard is closed. How it works: the panel writes a `gaze_capture` request into `config.json`, frameeyeosc averages the tracker's gaze and each eye's openness for 2 seconds (skipping the first 0.5 s, and samples with the eyes shut except in the last step) and reports the averages in the status file, and the panel turns them into the settings. Each measurement is logged (`journalctl --user -u frameeyeosc`). With the defaults nothing changes.
+The dot is fixed to the headset 2 m ahead and only shows while the dashboard is closed. How it works: the panel writes a `gaze_capture` request into `config.json`, frameeyeosc averages the tracker's gaze and each eye's openness for as long as the panel asks (2 seconds skipping the first 0.3 s for a dot, 3 seconds skipping the first 0.5 s with the eyes shut; samples with the eyes shut are skipped except in the last step) and reports the averages in the status file, and the panel turns them into the settings. Each measurement is logged (`journalctl --user -u frameeyeosc`). With the defaults nothing changes.
 
 ## Calibration
 

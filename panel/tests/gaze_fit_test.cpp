@@ -239,8 +239,9 @@ Actions runStep(Session& s, double& now, long long& id, const Measured& answer, 
     now += settle;
     const Actions a = s.tick(now, false, runningWith(0, false, {}));
     CHECK(a.writeCapture);
+    CHECK(near(a.captureSec, gaze ? kCaptureSec : kClosedSec) && near(a.skipSec, gaze ? kCaptureSkipSec : kClosedSkipSec));
     s.captureSent(++id, now);
-    now += 2.5;
+    now += (gaze ? kCaptureSec : kClosedSec) + 0.2;
     return s.tick(now, false, runningWith(id, true, answer, gaze));
 }
 
@@ -256,22 +257,23 @@ void testFullSession() {
     Actions a = s.tick(now + 0.1, true, runningWith(0, false, {}));
     CHECK(!a.showTarget && s.view().phase == Phase::Waiting);
 
-    // First step: the dot straight ahead, counting down from 3
+    // First step: the dot straight ahead, the ring full and no number until it is measured
     now += 1.0;
     a = s.tick(now, false, runningWith(0, false, {}));
-    CHECK(a.showTarget && a.style == TargetStyle::Dot && a.seconds == 3 && near(a.progress, 1.0));
+    CHECK(a.showTarget && a.style == TargetStyle::Dot && a.seconds == 0 && near(a.progress, 1.0));
     CHECK(near(a.yawDeg, 0.0) && near(a.pitchDeg, 0.0));
     now += kSettleSec;
     a = s.tick(now, false, runningWith(0, false, {}));
-    CHECK(a.writeCapture && std::string(a.target) == "center");
+    CHECK(a.writeCapture && std::string(a.target) == "center" && near(a.captureSec, 2.0) && near(a.skipSec, 0.3));
+    CHECK(near(kSettleSec + kCaptureSec, 2.5));
     s.captureSent(++id, now);
-    // An old capture's result is not ours
+    // An old capture's result is not ours; the measured seconds count down 2, 1 and the ring runs down evenly
     a = s.tick(now + 0.5, false, runningWith(id - 1 + 100, true, steady(0.3, 0.3)));
-    CHECK(s.view().phase == Phase::Capturing && a.seconds == 2);
+    CHECK(s.view().phase == Phase::Capturing && a.seconds == 2 && near(a.progress, 1.5 / 2.5));
     a = s.tick(now + 1.0, false, runningWith(id, false, {}));
-    a = s.tick(now + 2.0, false, runningWith(id, false, {}));
-    CHECK(a.seconds == 1 && a.progress < 0.5);
-    now += 2.5;
+    a = s.tick(now + 1.5, false, runningWith(id, false, {}));
+    CHECK(a.seconds == 1 && near(a.progress, 0.5 / 2.5));
+    now += 2.2;
     a = s.tick(now, false, runningWith(id, true, points[0]));
     CHECK(s.view().point == Point::Up && s.view().phase == Phase::Settling);
 
@@ -299,8 +301,9 @@ void testFullSession() {
     now += kCloseSettleSec;
     a = s.tick(now, false, runningWith(0, false, {}));
     CHECK(a.writeCapture && std::string(a.target) == "closed" && a.style == TargetStyle::KeepClosed);
+    CHECK(near(a.captureSec, 3.0) && near(a.skipSec, 0.5));
     s.captureSent(++id, now);
-    now += 2.5;
+    now += kClosedSec + 0.2;
     a = s.tick(now, false, runningWith(id, true, points[5], false));
     CHECK(s.view().phase == Phase::Reopen && a.style == TargetStyle::OpenEyes && !a.writeValues);
     now += kReopenSec;

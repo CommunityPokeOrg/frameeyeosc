@@ -360,7 +360,7 @@ bool VrOverlay::showTarget(double yawDeg, double pitchDeg, const uint8_t* rgba, 
             return false;
         }
     }
-    if (!targetTexture_.update(targetHandle_, rgba, message)) {
+    if (rgba != nullptr && !targetTexture_.update(targetHandle_, rgba, message)) {
         std::fprintf(stderr, "[VR] can't send the target: %s\n", message.c_str());
         return false;
     }
@@ -372,13 +372,22 @@ bool VrOverlay::showTarget(double yawDeg, double pitchDeg, const uint8_t* rgba, 
         targetYaw_ = yawDeg;
         targetPitch_ = pitchDeg;
         targetPlaced_ = true;
-        std::fprintf(stderr, "[VR] target at %.0f deg right, %.0f deg up\n", yawDeg, pitchDeg);
     }
     if (!targetShown_) {
         if (!checkOverlay("ShowOverlay(target)", overlay->ShowOverlay(targetHandle_))) return false;
         targetShown_ = true;
     }
     return true;
+}
+
+bool VrOverlay::waitFrameSync(uint32_t timeoutMs) {
+    if (!connected_ || frameSyncFailed_) return false;
+    const vr::EVROverlayError error = vr::VROverlay()->WaitFrameSync(timeoutMs);
+    // A timeout is normal while the compositor skips frames; the loop just goes on
+    if (error == vr::VROverlayError_None || error == vr::VROverlayError_TimedOut) return true;
+    std::fprintf(stderr, "[VR] WaitFrameSync -> %s; pacing the target with a timer instead\n", overlayErrorName(error));
+    frameSyncFailed_ = true;
+    return false;
 }
 
 void VrOverlay::hideTarget() {

@@ -156,7 +156,7 @@ struct UiText {
     const char* pointLeft;
     const char* pointRight;
     const char* pointClosed;
-    const char* targetClose;         ///< on the target: "Close your eyes"
+    const char* targetClose;         ///< on the target: "Close your eyes\nfor 3 s" (two lines)
     const char* targetKeepClosed;
     const char* targetOpen;
     const char* fitReset;

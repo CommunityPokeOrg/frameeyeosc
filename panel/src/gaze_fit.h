@@ -43,17 +43,28 @@ constexpr double kClosedShare = 0.7;
 constexpr double kMinLidRange = 0.1;
 /** Tries per step before giving up. */
 constexpr int kMaxAttempts = 3;
-/** Seconds a target shows before its capture is asked for, so the eyes can find it... */
-constexpr double kSettleSec = 1.0;
+/** How long each gaze point takes in all: the dot glides over and the eyes find it, then it is measured. The one
+ *  number that makes the fit faster or slower. */
+constexpr double kPointSec = 2.5;
+/** Of that, seconds a target shows before its capture is asked for, so the eyes can find it... */
+constexpr double kSettleSec = 0.5;
 /** ...of which the dot spends this long gliding over from the previous target. */
 constexpr double kMoveSec = 0.35;
-/** The eyes-shut step: "close your eyes" counts down this long, then the capture is asked for. */
+/** The rest is measured by frameeyeosc... */
+constexpr double kCaptureSec = kPointSec - kSettleSec;
+/** ...skipping its first samples while the eyes settle on the dot. */
+constexpr double kCaptureSkipSec = 0.3;
+static_assert((kCaptureSec - kCaptureSkipSec) * 90 >= 2 * 45, "at 90 Hz, twice kMinSamples, so a blink still leaves enough");
+/** The eyes-shut step: "close your eyes for 3 s" counts down 3, 2, 1 this long, then the capture is asked for... */
 constexpr double kCloseSettleSec = 3.0;
+/** ...which lasts this long, the time the eyes are shut (what the target says)... */
+constexpr double kClosedSec = 3.0;
+/** ...skipping its first half second while the eyes close. */
+constexpr double kClosedSkipSec = 0.5;
 /** After it, "open your eyes" shows this long before the result is written. */
 constexpr double kReopenSec = 1.5;
-/** How long frameeyeosc captures (its first 0.5 s are skipped). */
-constexpr double kCaptureSec = 2.0;
-/** Seconds to wait for a capture's result: frameeyeosc reads config.json once a second, then gives up after 5 s. */
+/** Seconds to wait for a capture's result: frameeyeosc checks config.json every 0.1 s and gives up 3 s after the
+ *  capture should have ended. */
 constexpr double kResultTimeoutSec = 8.0;
 /** How long "close the dashboard to start" waits. */
 constexpr double kDashboardWaitSec = 60.0;
@@ -228,13 +239,15 @@ struct View {
 struct Actions {
     bool writeCapture = false;  ///< write a gaze_capture request for `target`, then call captureSent / writeFailed
     const char* target = "";
+    double captureSec = 0.0;    ///< how long that capture lasts...
+    double skipSec = 0.0;       ///< ...and how much of its start frameeyeosc skips
     bool writeValues = false;   ///< write `values` (once, when done): in Center mode only the zero point
     Values values;
     bool showTarget = false;    ///< show the head-locked target (hide it otherwise)
     TargetStyle style = TargetStyle::Dot;
     double yawDeg = 0.0;        ///< where, gliding between targets
     double pitchDeg = 0.0;
-    int seconds = 0;            ///< the countdown on the target (0 = none)
+    int seconds = 0;            ///< the countdown on the target (0 = none): the seconds measured, or the eyes-shut 3, 2, 1
     double progress = 0.0;      ///< the ring on the target, 1 -> 0 over one step
     bool arrived = false;       ///< the target has finished gliding to this step (or didn't have to move)
 };
@@ -297,7 +310,6 @@ private:
     double startedAt_ = 0.0;     ///< when Waiting began
     double phaseAt_ = 0.0;       ///< when Settling, Capturing or Reopen began
     long long captureId_ = 0;    ///< 0 until captureSent
-    double runningSeenAt_ = -1;  ///< when frameeyeosc was first seen capturing
     bool requested_ = false;     ///< the request was asked for and not yet confirmed
 
     /**
@@ -324,6 +336,9 @@ private:
 
     /** @return how long the current step settles */
     double settleSec() const { return point() == Point::Closed ? kCloseSettleSec : kSettleSec; }
+
+    /** @return how long the current step's capture lasts */
+    double captureSec() const { return point() == Point::Closed ? kClosedSec : kCaptureSec; }
 };
 
 }  // namespace gaze_fit

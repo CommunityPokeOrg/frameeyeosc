@@ -3,15 +3,15 @@
 //! gains and each eye's lid fit.
 
 use crate::config::GazeCapture;
+#[cfg(test)]
+use crate::config::{CAPTURE_SECONDS, CAPTURE_SKIP};
 use serde::Serialize;
 use std::time::{Duration, Instant};
 
-// Samples in the first half second are skipped, while the eyes settle on the target...
-const SKIP: f64 = 0.5;
-// ...and the capture ends with the first sample this long after the first one (sample time).
-const LENGTH: f64 = 2.0;
-// Without samples (tracking lost), the capture gives up after this long on the clock.
-const TIMEOUT: Duration = Duration::from_secs(5);
+// Samples at the start are skipped while the eyes settle on the target (the request's `skip`), and the capture
+// ends with the first sample its `seconds` after the first one (sample time). Without samples (tracking lost), it
+// gives up this long on the clock after it should have ended.
+const TIMEOUT_EXTRA: Duration = Duration::from_secs(3);
 // The target that asks for the eyes-shut capture: every sample counts and the gaze is not used.
 pub const CLOSED_TARGET: &str = "closed";
 
@@ -76,11 +76,11 @@ impl Capture {
     /// capture is over.
     pub fn add(&mut self, time: f64, gaze: [f32; 2], eye_x: [f32; 2], openness: [f32; 2], usable: bool) -> bool {
         let elapsed = time - *self.first_time.get_or_insert(time);
-        if elapsed >= LENGTH {
+        if elapsed >= self.request.seconds {
             return true;
         }
         let finite = gaze.iter().chain(&eye_x).chain(&openness).all(|value| value.is_finite());
-        if elapsed >= SKIP && (usable || self.closed) && finite {
+        if elapsed >= self.request.skip && (usable || self.closed) && finite {
             for ((sum, squares), value) in self.sum.iter_mut().zip(&mut self.sum_squares).zip(gaze) {
                 let value = f64::from(value);
                 *sum += value;
@@ -99,7 +99,7 @@ impl Capture {
 
     /// Whether it has waited too long for samples.
     pub fn timed_out(&self) -> bool {
-        self.started.elapsed() >= TIMEOUT
+        self.started.elapsed() >= Duration::from_secs_f64(self.request.seconds) + TIMEOUT_EXTRA
     }
 
     pub fn result(&self, state: CaptureState) -> CaptureResult {
@@ -152,6 +152,8 @@ mod tests {
         Capture::new(GazeCapture {
             id: 7,
             target: "up".into(),
+            seconds: CAPTURE_SECONDS,
+            skip: CAPTURE_SKIP,
         })
     }
 
@@ -162,7 +164,7 @@ mod tests {
         for i in 0..=180 {
             let time = 100.0 + f64::from(i) / 90.0;
             // Wild gaze while settling, alternating around (0.1, 0.3) after, and a blink in between.
-            let settled = time - 100.0 >= SKIP;
+            let settled = time - 100.0 >= CAPTURE_SKIP;
             let gaze = if !settled {
                 [0.9, -0.9]
             } else if i % 2 == 0 {
@@ -214,15 +216,21 @@ mod tests {
         let mut capture = Capture::new(GazeCapture {
             id: 9,
             target: CLOSED_TARGET.into(),
+            seconds: 3.0,
+            skip: 0.5,
         });
-        for i in 0..200 {
+        let mut over_at = None;
+        for i in 0..400 {
             // The gaze is held (not usable) all along, as it is with the eyes shut.
             if capture.add(f64::from(i) / 90.0, [0.5, -0.5], [0.5, 0.5], [0.15, 0.26], false) {
+                over_at = Some(i);
                 break;
             }
         }
+        // As long as asked (3 s at 90 Hz), less the first half second
+        assert_eq!(over_at, Some(270));
         let result = capture.result(CaptureState::Done);
-        assert!(result.samples >= 134, "{}", result.samples);
+        assert!((224..=226).contains(&result.samples), "{}", result.samples);
         assert_eq!((result.x, result.y, result.spread, result.x_left), (None, None, None, None));
         let [left, right] = result.openness.unwrap();
         assert!((left - 0.15).abs() < 1e-4 && (right - 0.26).abs() < 1e-4);

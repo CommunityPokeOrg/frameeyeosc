@@ -104,16 +104,18 @@ UiText makeJapanese() {
     t.hintDespike = "視線とまぶた。約 11 ms 遅れる";
 
     t.rowFit = "目を合わせる";
-    t.hintFit = "視線とまぶた・約 30 秒";
+    t.hintFit = "視線とまぶた・約 20 秒";
     t.fitStart = "目を合わせる";
     t.fitAgain = "もう一度合わせる";
     t.fitCenterOnly = "正面だけ合わせ直す";
     t.fitStop = "やめる";
-    t.fitIntro = "ダッシュボードを閉じると始まります。頭は動かさず、点を目で追ってください。最後に 3 秒目を閉じます";
+    t.fitIntro = "ダッシュボードを閉じると始まります。頭は動かさず、点を目で追ってください。最後は 3・2・1 のあと 3 秒間目を閉じ、"
+                 "チャイムで開けます";
     t.fitNeedsRunning = "frameeyeosc が動いているときに使えます";
     t.fitLocked = "視線かまぶたの値がコマンドで固定されているので使えません";
     t.fitWaiting = "ダッシュボードを閉じると始まります";
-    t.fitHowTo = "頭は動かさず、点を目で追ってください。最後に 3 秒目を閉じます。ダッシュボードを開くと止まります";
+    t.fitHowTo = "頭は動かさず、点を目で追ってください。最後は 3・2・1 のあと 3 秒間目を閉じ、チャイムで開けます。"
+                 "ダッシュボードを開くと止まります";
     t.fitWaitingCenter = "正面に点が出ます。頭は動かさず見てください。ダッシュボードを開くと止まります";
     t.fitRunningFormat = "測っています: %s（%d / %d）";
     t.fitRetryFormat = "・%d 回目";
@@ -143,7 +145,7 @@ UiText makeJapanese() {
     t.pointLeft = "左";
     t.pointRight = "右";
     t.pointClosed = "目を閉じる";
-    t.targetClose = "目を閉じて";
+    t.targetClose = "3 秒間\n目を閉じて";
     t.targetKeepClosed = "閉じたまま";
     t.targetOpen = "開けて OK";
     t.fitReset = "元に戻す";
@@ -369,18 +371,18 @@ UiText makeEnglish() {
     t.hintDespike = "Gaze and lids, ~11 ms later";
 
     t.rowFit = "Fit your eyes";
-    t.hintFit = "Gaze and eyelids, about 30 s";
+    t.hintFit = "Gaze and eyelids, about 20 s";
     t.fitStart = "Fit my eyes";
     t.fitAgain = "Fit again";
     t.fitCenterOnly = "Re-center only";
     t.fitStop = "Stop";
     t.fitIntro = "It starts when you close the dashboard. Keep your head still and follow the dot with your eyes. "
-                 "At the end, close your eyes for 3 seconds.";
+                 "At the end, after 3, 2, 1, close your eyes for 3 seconds and open them at the chime.";
     t.fitNeedsRunning = "Works while frameeyeosc is running";
     t.fitLocked = "Not available: gaze or eyelid values are locked by the command line";
     t.fitWaiting = "Close the dashboard to start";
-    t.fitHowTo = "Keep your head still and follow the dot with your eyes. At the end, close your eyes for 3 seconds. "
-                 "Opening the dashboard stops it.";
+    t.fitHowTo = "Keep your head still and follow the dot with your eyes. At the end, after 3, 2, 1, close your eyes "
+                 "for 3 seconds and open them at the chime. Opening the dashboard stops it.";
     t.fitWaitingCenter = "A dot appears straight ahead. Keep your head still and look at it. Opening the dashboard "
                          "stops it.";
     t.fitRunningFormat = "Measuring: %s (%d of %d)";
@@ -411,7 +413,7 @@ UiText makeEnglish() {
     t.pointLeft = "left";
     t.pointRight = "right";
     t.pointClosed = "eyes closed";
-    t.targetClose = "Close your eyes";
+    t.targetClose = "Close your eyes\nfor 3 s";
     t.targetKeepClosed = "Keep them closed";
     t.targetOpen = "Open them";
     t.fitReset = "Reset";

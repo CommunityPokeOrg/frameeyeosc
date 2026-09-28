@@ -208,7 +208,6 @@ void Session::captureSent(long long id, double now) {
     requested_ = false;
     captureId_ = id;
     phaseAt_ = now;
-    runningSeenAt_ = -1;
 }
 
 void Session::next(double now, Actions& actions) {
@@ -306,10 +305,11 @@ Actions Session::tick(double now, bool dashboardOpen, const EyeStatus& status) {
         captureId_ = 0;
         actions.writeCapture = true;
         actions.target = target(point()).name;
+        actions.captureSec = captureSec();
+        actions.skipSec = point() == Point::Closed ? kClosedSkipSec : kCaptureSkipSec;
     } else if (phase_ == Phase::Capturing && !requested_) {
         const GazeCaptureStatus& capture = status.capture;
         const bool ours = captureId_ != 0 && capture.present && capture.id == captureId_;
-        if (ours && !capture.done && runningSeenAt_ < 0) runningSeenAt_ = now;
         if (ours && capture.done) {
             Measured measured;
             measured.samples = capture.samples;
@@ -349,17 +349,21 @@ Actions Session::tick(double now, bool dashboardOpen, const EyeStatus& status) {
     if (phase_ == Phase::Settling || phase_ == Phase::Capturing || phase_ == Phase::Reopen) {
         const bool closedStep = point() == Point::Closed;
         const double settle = settleSec();
-        double left = kCaptureSec;
+        const double capture = captureSec();
+        // Seconds left in the step, the capture counted from when it was asked for (frameeyeosc starts it within a
+        // tenth of a second), so the ring runs down evenly
+        double left = capture;
         if (phase_ == Phase::Settling) {
             left += std::max(0.0, settle - (now - phaseAt_));
         } else if (phase_ == Phase::Reopen) {
             left = 0.0;
-        } else if (runningSeenAt_ >= 0) {
-            left = std::max(0.0, kCaptureSec - (now - runningSeenAt_));
+        } else {
+            left = std::max(0.0, capture - (now - phaseAt_));
         }
         actions.showTarget = true;
-        actions.progress = std::clamp(left / (settle + kCaptureSec), 0.0, 1.0);
-        actions.seconds = std::max(1, static_cast<int>(std::ceil(left - 1e-9)));
+        actions.progress = std::clamp(left / (settle + capture), 0.0, 1.0);
+        // Under the dot, the seconds being measured (2, 1); nothing while it glides over and the eyes find it
+        actions.seconds = phase_ == Phase::Capturing ? std::max(1, static_cast<int>(std::ceil(left - 1e-9))) : 0;
         if (closedStep) {
             actions.style = phase_ == Phase::Settling    ? TargetStyle::CloseEyes
                             : phase_ == Phase::Capturing ? TargetStyle::KeepClosed

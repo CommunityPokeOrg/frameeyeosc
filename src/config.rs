@@ -12,8 +12,9 @@ use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-// How often the config file's modification time is checked.
-const CHECK_INTERVAL: Duration = Duration::from_secs(1);
+// How often the config file's modification time is checked (one stat; the file is only read when it changed).
+// Often, so a gaze capture the panel asks for starts within a tenth of a second.
+const CHECK_INTERVAL: Duration = Duration::from_millis(100);
 // Allowed gaze zero points and gains (the panel's steppers stay inside these too).
 const GAZE_OFFSET_RANGE: std::ops::RangeInclusive<f32> = -0.5..=0.5;
 const GAZE_GAIN_RANGE: std::ops::RangeInclusive<f32> = 0.5..=2.0;
@@ -21,6 +22,13 @@ const GAZE_GAIN_RANGE: std::ops::RangeInclusive<f32> = 0.5..=2.0;
 const LID_FIT_MIN_RANGE: f32 = 0.1;
 // A gaze capture's target name is only echoed back, so it is kept short.
 const MAX_TARGET_CHARS: usize = 16;
+// A gaze capture lasts this long (sample time) unless the request says otherwise...
+pub const CAPTURE_SECONDS: f64 = 2.0;
+// ...within these limits...
+const CAPTURE_SECONDS_RANGE: std::ops::RangeInclusive<f64> = 0.5..=5.0;
+// ...and skips its first half second, while the eyes settle, unless the request says otherwise (at most all but
+// the last 0.2 s).
+pub const CAPTURE_SKIP: f64 = 0.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
@@ -320,6 +328,9 @@ pub struct GazeCapture {
     pub id: i64,
     /// Which target the user looks at ("center", "up", ...); only passed back with the result.
     pub target: String,
+    /// How long it lasts (sample time) and how much of its start is skipped, in seconds.
+    pub seconds: f64,
+    pub skip: f64,
 }
 
 /// Keys the panel uses to send one-off requests rather than settings.
@@ -328,7 +339,8 @@ pub struct GazeCapture {
 struct Requests {
     /// Bumped to make the learned eyelid calibration start over.
     calibration_reset: i64,
-    /// `{"id": 3, "target": "center"}`. Read loosely, so a bad value never rejects the settings.
+    /// `{"id": 3, "target": "center", "seconds": 2.0, "skip": 0.3}` (the last two optional). Read loosely, so a bad
+    /// value never rejects the settings.
     gaze_capture: serde_json::Value,
 }
 
@@ -337,12 +349,19 @@ impl Requests {
     fn gaze_capture(&self) -> (i64, Option<GazeCapture>) {
         let id = self.gaze_capture.get("id").and_then(serde_json::Value::as_i64);
         let target = self.gaze_capture.get("target").and_then(serde_json::Value::as_str);
+        let number = |key: &str| self.gaze_capture.get(key).and_then(serde_json::Value::as_f64);
+        let seconds = number("seconds")
+            .unwrap_or(CAPTURE_SECONDS)
+            .clamp(*CAPTURE_SECONDS_RANGE.start(), *CAPTURE_SECONDS_RANGE.end());
+        let skip = number("skip").unwrap_or(CAPTURE_SKIP).clamp(0.0, seconds - 0.2);
         match (id, target) {
             (Some(id), Some(target)) => (
                 id,
                 Some(GazeCapture {
                     id,
                     target: target.chars().take(MAX_TARGET_CHARS).collect(),
+                    seconds,
+                    skip,
                 }),
             ),
             _ => (0, None),
@@ -741,8 +760,19 @@ mod tests {
         let expected = GazeCapture {
             id: 4,
             target: "up".into(),
+            seconds: CAPTURE_SECONDS,
+            skip: CAPTURE_SKIP,
         };
         assert_eq!((asked.capture_id, asked.capture), (4, Some(expected)));
+        // The length and the skipped start, kept within limits.
+        let length = |text: &str| {
+            let capture = parse(text).unwrap().1.capture.unwrap();
+            (capture.seconds, capture.skip)
+        };
+        assert_eq!(length(r#"{"gaze_capture": {"id": 1, "target": "up", "seconds": 3, "skip": 0.3}}"#), (3.0, 0.3));
+        assert_eq!(length(r#"{"gaze_capture": {"id": 1, "target": "up", "seconds": 60, "skip": -1}}"#), (5.0, 0.0));
+        assert_eq!(length(r#"{"gaze_capture": {"id": 1, "target": "up", "seconds": 0.1, "skip": 9}}"#), (0.5, 0.3));
+        assert_eq!(length(r#"{"gaze_capture": {"id": 1, "target": "up", "seconds": "x"}}"#), (2.0, 0.5));
         // Anything odd is no request, and never breaks the settings.
         for odd in [r#"{"gaze_capture": 3}"#, r#"{"gaze_capture": {"id": "x", "target": "up"}}"#] {
             let (settings, asked) = parse(odd).unwrap();

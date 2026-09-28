@@ -46,7 +46,8 @@ constexpr int kExitCodeUserQuit = 3;
 constexpr int kThumbnailSize = 256;       ///< dashboard thumbnail edge (px)
 constexpr double kPanelPollSec = 0.033;   ///< event polling while the panel is visible
 constexpr double kClosedPollSec = 0.25;   ///< event polling while it is not
-constexpr double kFitPollSec = 1.0 / 90;  ///< every display frame while the eye fit's target is up
+constexpr double kFitPollSec = 1.0 / 90;  ///< every display frame while the eye fit's target is up (without frame sync)
+constexpr uint32_t kFrameSyncTimeoutMs = 50;  ///< the longest wait for the compositor's next frame
 constexpr double kStatusReadSec = 0.1;    ///< status.json is read this often while the panel is visible
 constexpr double kUpdateSettleSec = 60.0; ///< --update-live: longest wait for a check or an install to finish
 
@@ -166,7 +167,8 @@ void printUsage() {
         "      --target-style dot|close|keep|open  The dot, or the eyes-shut step (words from --language)\n"
         "      --target-seconds N  The countdown on it (default 3; 0 = none)\n"
         "      --target-progress F  How much of its ring is left, 0..1 (default 0.7)\n"
-        "      --target-bench N  Also draw it N times and print how long one takes\n"
+        "      --target-bench N  Also draw it N times and print how long one takes, then one gaze point\n"
+        "                        paced at 90 frames/s\n"
         "      --language ja|en  Draw in this language instead of the config's\n"
         "      --tab basic|gaze|eyefit|lids|advanced  Draw this tab\n"
         "      --fit-details [gaze|lids]  Open \"Fine-tune\" on the Eye fit tab (default: its gaze page)\n"
@@ -726,13 +728,33 @@ int runDumpPng(const Options& options) {
         std::printf("Wrote %s (%dx%d)\n", options.targetPngPath.c_str(), kTargetImageSize, kTargetImageSize);
         if (options.targetBench > 0) {
             // What one frame of the target costs to draw (the VR loop draws one per display frame while it is up)
-            const double start = nowSeconds();
+            double start = nowSeconds();
             for (int i = 0; i < options.targetBench; ++i) {
                 renderTarget(fonts, style, label, 3, 1.0 - static_cast<double>(i) / options.targetBench, rgba);
             }
             const double each = (nowSeconds() - start) / options.targetBench;
             std::printf("target: %.3f ms per frame over %d frames (%.0f frames/s possible)\n", each * 1000,
                         options.targetBench, 1.0 / each);
+            // As the VR loop draws it: one gaze point's ring running down over kPointSec at 90 frames/s, paced to
+            // frame deadlines (as WaitFrameSync would), drawing only when the picture changes
+            TargetPainter painter;
+            const double frame = 1.0 / 90;
+            const int frames = static_cast<int>(std::lround(gaze_fit::kPointSec / frame));
+            int drawn = 0;
+            double busy = 0.0;
+            start = nowSeconds();
+            for (int i = 0; i < frames; ++i) {
+                const double workStart = nowSeconds();
+                const double left = gaze_fit::kPointSec - i * frame;
+                const int seconds = left <= gaze_fit::kCaptureSec ? static_cast<int>(std::ceil(left - 1e-9)) : 0;
+                if (painter.paint(fonts, style, label, seconds, left / gaze_fit::kPointSec)) ++drawn;
+                busy += nowSeconds() - workStart;
+                std::this_thread::sleep_until(std::chrono::steady_clock::time_point(std::chrono::duration_cast<
+                    std::chrono::steady_clock::duration>(std::chrono::duration<double>(start + (i + 1) * frame))));
+            }
+            const double took = nowSeconds() - start;
+            std::printf("paced: %d frames in %.3f s (%.1f frames/s), %d pictures drawn, %.3f ms busy per frame\n",
+                        frames, took, frames / took, drawn, busy / frames * 1000);
         }
     }
     if (!options.thumbnailPngPath.empty()) {
@@ -843,17 +865,20 @@ bool writeConfig(PanelModel& model, const std::function<void(JsonValue&)>& chang
 }
 
 /**
- * Ask frameeyeosc for a gaze capture: gaze_capture = {"id": the next id, "target": target}.
+ * Ask frameeyeosc for a gaze capture: gaze_capture = {"id": the next id, "target": target, "seconds": how long,
+ * "skip": how much of the start to skip}.
  * @param model the model
  * @param target the target name
+ * @param seconds how long it lasts
+ * @param skip how much of its start is skipped
  * @param lastId the last id asked for (updated)
  * @return the new id, or 0 if the write failed
  */
-long long writeCaptureRequest(PanelModel& model, const char* target, long long& lastId) {
+long long writeCaptureRequest(PanelModel& model, const char* target, double seconds, double skip, long long& lastId) {
     long long id = 0;
     const std::string name = target;
     const long long last = lastId;
-    const bool ok = writeConfig(model, [&id, name, last](JsonValue& root) {
+    const bool ok = writeConfig(model, [&id, name, last, seconds, skip](JsonValue& root) {
         // Always a new id, also after a restart of the panel or a hand-edited file
         const JsonValue* old = root.get(key::kGazeCapture);
         const JsonValue* oldId = old != nullptr && old->isObject() ? old->get("id") : nullptr;
@@ -863,11 +888,13 @@ long long writeCaptureRequest(PanelModel& model, const char* target, long long& 
         request.type = JsonValue::Type::Object;
         request.set("id", JsonValue::makeNumber(static_cast<double>(id), true));
         request.set("target", JsonValue::makeString(name));
+        request.set("seconds", JsonValue::makeNumber(seconds));
+        request.set("skip", JsonValue::makeNumber(skip));
         root.set(key::kGazeCapture, request);
     });
     if (!ok) return 0;
     lastId = id;
-    std::fprintf(stderr, "[fit] asked for gaze capture %lld (%s)\n", id, target);
+    std::fprintf(stderr, "[fit] asked for gaze capture %lld (%s, %.1f s)\n", id, target, seconds);
     return id;
 }
 
@@ -1371,9 +1398,13 @@ int runOverlay(const Options& options) {
     sounds::Player player;
     player.init(soundsDir(model.statusPath));
     sounds::FitCues cues;
-    std::vector<uint8_t> targetImage;
-    int targetFrames = 0;           // drawn since the target came up, to log the frame rate
+    TargetPainter targetPainter;
+    bool targetUp = false;          // shown this loop: then the loop waits for the compositor's next frame
+    int targetFrames = 0;           // frames since the target came up, to log the rate...
+    int targetDraws = 0;            // ...and how many of them drew a new picture
     double targetShownAt = 0.0;
+    double loggedYaw = NAN;         // where the target was last logged as settled
+    double loggedPitch = NAN;
     std::string lastFitState;
     // The debug gaze dots: their socket, the three dot images (drawn once), which image each overlay has
     gaze_dots::Receiver dots;
@@ -1489,7 +1520,8 @@ int runOverlay(const Options& options) {
             }
             player.reap();
             if (actions.writeCapture) {
-                const long long id = writeCaptureRequest(model, actions.target, lastCaptureId);
+                const long long id =
+                    writeCaptureRequest(model, actions.target, actions.captureSec, actions.skipSec, lastCaptureId);
                 if (id != 0) {
                     fit.captureSent(id, nowSeconds());
                 } else {
@@ -1501,19 +1533,34 @@ int runOverlay(const Options& options) {
                 if (!writeFitValues(model, actions.values, fit.view().mode)) fit.writeFailed();
                 lastStamp = configStamp(model.configPath);
             }
+            targetUp = false;
             if (actions.showTarget) {
-                // Every frame, so the ring runs down and the dot glides smoothly
+                // Every display frame, so the ring runs down and the dot glides smoothly; the picture is only drawn
+                // and sent when it changed
                 const std::string label = targetLabel(uiText(model.language), actions.style);
-                renderTarget(fonts, actions.style, label, actions.seconds, actions.progress, targetImage);
-                vr.showTarget(actions.yawDeg, actions.pitchDeg, targetImage.data(), kTargetImageSize);
+                const bool drawn =
+                    targetPainter.paint(fonts, actions.style, label, actions.seconds, actions.progress);
+                targetUp = vr.showTarget(actions.yawDeg, actions.pitchDeg,
+                                         drawn ? targetPainter.rgba().data() : nullptr, kTargetImageSize);
+                if (drawn && !targetUp) targetPainter.reset();
                 if (targetFrames++ == 0) targetShownAt = nowSeconds();
+                if (drawn) ++targetDraws;
+                if (actions.arrived && (actions.yawDeg != loggedYaw || actions.pitchDeg != loggedPitch)) {
+                    std::fprintf(stderr, "[VR] target at %.0f deg right, %.0f deg up\n", actions.yawDeg,
+                                 actions.pitchDeg);
+                    loggedYaw = actions.yawDeg;
+                    loggedPitch = actions.pitchDeg;
+                }
             } else {
                 vr.hideTarget();
                 if (targetFrames > 0) {
                     const double seconds = nowSeconds() - targetShownAt;
-                    std::fprintf(stderr, "[fit] target drawn %d times in %.1f s (%.0f per second)\n", targetFrames,
-                                 seconds, targetFrames / std::max(seconds, 0.001));
+                    std::fprintf(stderr, "[fit] target up %.1f s: %d frames (%.0f per second), %d pictures drawn\n",
+                                 seconds, targetFrames, targetFrames / std::max(seconds, 0.001), targetDraws);
                     targetFrames = 0;
+                    targetDraws = 0;
+                    loggedYaw = loggedPitch = NAN;
+                    targetPainter.reset();
                 }
             }
             const gaze_fit::View view = fit.view();
@@ -1592,9 +1639,12 @@ int runOverlay(const Options& options) {
             }
         }
         wasVisible = visible;
-        // Every display frame while the fit's target or the debug dots are up
+        // Every display frame while the fit's target or the debug dots are up: with the target, paced by the
+        // compositor itself (a fixed sleep plus the loop's work fell behind the display, and the ring stuttered)
         const bool everyFrame = fit.active() || dots.isOpen();
-        sleepInterruptible(everyFrame ? kFitPollSec : (visible ? kPanelPollSec : kClosedPollSec));
+        if (!(targetUp && vr.waitFrameSync(kFrameSyncTimeoutMs))) {
+            sleepInterruptible(everyFrame ? kFitPollSec : (visible ? kPanelPollSec : kClosedPollSec));
+        }
     }
 
     // The same shutdown for SIGTERM / SIGINT, SteamVR quitting, vrserver gone, "close" and "Quit"
