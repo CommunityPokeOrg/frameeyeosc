@@ -641,7 +641,7 @@ PanelModel fakeModel(const Options& options) {
 }
 
 void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, AutostartWorker& autostart,
-              frame_updater::UpdateChecker* updater, gaze_fit::Session* fit, VrOverlay* vr);
+              frame_updater::UpdateChecker* updater, gaze_fit::Session* fit, const VrOverlay* vr);
 std::string targetLabel(const UiText& t, gaze_fit::TargetStyle style);
 
 /**
@@ -1001,10 +1001,7 @@ std::string hostErrorText(const UiText& t, host_entry::HostError problem) {
     switch (problem) {
         case HostError::None: return "";
         case HostError::Empty: return t.hostErrEmpty;
-        case HostError::Space: return t.hostErrSpace;
-        case HostError::Port: return t.hostErrPort;
         case HostError::Ipv4: return t.hostErrIpv4;
-        case HostError::Name: return t.hostErrName;
     }
     return "";
 }
@@ -1017,10 +1014,10 @@ std::string hostErrorText(const UiText& t, host_entry::HostError problem) {
  * @param autostart the autostart worker
  * @param updater the update checker (null in --dump-png without --update-live)
  * @param fit the eye fit session (null in --dump-png)
- * @param vr the connection to SteamVR, for the IPD and the keyboard (null in --dump-png)
+ * @param vr the connection to SteamVR, for the IPD (null in --dump-png)
  */
 void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, AutostartWorker& autostart,
-              frame_updater::UpdateChecker* updater, gaze_fit::Session* fit, VrOverlay* vr) {
+              frame_updater::UpdateChecker* updater, gaze_fit::Session* fit, const VrOverlay* vr) {
     const SettingsView view(model);
     std::function<void(JsonValue&)> change;
     std::string openPrompt;
@@ -1198,16 +1195,10 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
         case PanelAction::HostKey:
         case PanelAction::HostCancel: return;
         case PanelAction::HostEnter: {
-            // Start from the host set now (not "auto")
+            // Start from the IP address set now (a host name can only be changed in config.json)
             const std::string host = view.text(key::kHost);
-            panel.openHostEntry(host == "auto" ? "" : host);
-            return;
-        }
-        case PanelAction::HostKeyboard: {
-            const UiText& t = uiText(model.language);
-            if (vr == nullptr || !vr->showKeyboard(t.hostEntryTitle, panel.hostEntryText())) {
-                panel.setHostEntryError(t.hostErrKeyboard);
-            }
+            const bool ip = !host.empty() && host.find_first_not_of("0123456789.") == std::string::npos;
+            panel.openHostEntry(ip ? host : "");
             return;
         }
         case PanelAction::HostOk: {
@@ -1549,13 +1540,6 @@ int runOverlay(const Options& options) {
             }
         }
 
-        // The SteamVR keyboard's Done: what was typed goes into the keypad and is used like its OK
-        if (events.keyboardDone && panel.hostEntryOpen()) {
-            panel.setHostEntryText(events.keyboardText);
-            applyHit({PanelAction::HostOk, nullptr, 0}, model, panel, autostart, &updater, &fit, &vr);
-            lastStamp = configStamp(model.configPath);
-            dirty = true;
-        }
         for (const PointerInput& input : events.pointer) {
             switch (input.type) {
                 case PointerInput::Type::Move: dirty |= panel.pointerMove(input.x, input.y); break;

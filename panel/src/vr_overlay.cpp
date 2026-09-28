@@ -267,24 +267,8 @@ VrEvents VrOverlay::pollEvents() {
     VrEvents result;
     if (!connected_) return result;
     vr::VREvent_t event {};
-    // The keyboard's events come both globally and to the overlay; the first one counts
-    const auto keyboardEvent = [&](const vr::VREvent_t& e) {
-        if (!keyboardOpen_) return;
-        if (e.eventType == vr::VREvent_KeyboardDone) {
-            char text[512] = {};
-            vr::VROverlay()->GetKeyboardText(text, sizeof(text));
-            result.keyboardDone = true;
-            result.keyboardText = text;
-            keyboardOpen_ = false;
-            std::fprintf(stderr, "[VR] keyboard done\n");
-        } else if (e.eventType == vr::VREvent_KeyboardClosed || e.eventType == vr::VREvent_KeyboardClosed_Global) {
-            keyboardOpen_ = false;
-            std::fprintf(stderr, "[VR] keyboard closed\n");
-        }
-    };
     while (vr::VRSystem()->PollNextEvent(&event, sizeof(event))) {
         if (event.eventType == vr::VREvent_Quit) result.quit = true;
-        keyboardEvent(event);
     }
     if (dashboardHandle_ != 0) {
         while (vr::VROverlay()->PollNextOverlayEvent(dashboardHandle_, &event, sizeof(event))) {
@@ -312,7 +296,7 @@ VrEvents VrOverlay::pollEvents() {
                     break;
                 case vr::VREvent_OverlayShown: std::fprintf(stderr, "[VR] panel shown\n"); break;
                 case vr::VREvent_OverlayHidden: std::fprintf(stderr, "[VR] panel hidden\n"); break;
-                default: keyboardEvent(event); break;
+                default: break;
             }
         }
     }
@@ -326,16 +310,6 @@ VrEvents VrOverlay::pollEvents() {
 bool VrOverlay::steamVrAlive() const {
     if (vrserverPid_ <= 0) return true;  // treat as alive if it can't be checked
     return ::kill(vrserverPid_, 0) == 0 || errno == EPERM;
-}
-
-bool VrOverlay::showKeyboard(const std::string& description, const std::string& text) {
-    if (!connected_ || dashboardHandle_ == 0) return false;
-    const vr::EVROverlayError error = vr::VROverlay()->ShowKeyboardForOverlay(
-        dashboardHandle_, vr::k_EGamepadTextInputModeNormal, vr::k_EGamepadTextInputLineModeSingleLine,
-        vr::KeyboardFlag_Modal, description.c_str(), 253, text.c_str(), 0);
-    std::fprintf(stderr, "[VR] ShowKeyboardForOverlay -> %s\n", overlayErrorName(error));
-    keyboardOpen_ = error == vr::VROverlayError_None;
-    return keyboardOpen_;
 }
 
 bool VrOverlay::panelVisible() const {

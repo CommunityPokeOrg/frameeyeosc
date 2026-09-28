@@ -81,17 +81,12 @@ struct UiText {
     const char* targetFixNow;       ///< "Fix to current PC"
     const char* targetEnter;        ///< "Enter IP"
     const char* targetManualFormat;  ///< "Manual %s": a host set by hand (typed or fixed)
-    const char* hostEntryTitle;     ///< the keypad for the target PC
+    const char* hostEntryTitle;     ///< the keypad for the target PC (IPv4 only; names go in config.json)
     const char* hostEntryHint;
-    const char* hostEntryKeyboard;  ///< opens the SteamVR keyboard (for host names)
     const char* hostEntryOk;
     const char* hostEntryCancel;
     const char* hostErrEmpty;
-    const char* hostErrSpace;
-    const char* hostErrPort;
     const char* hostErrIpv4;
-    const char* hostErrName;
-    const char* hostErrKeyboard;    ///< the SteamVR keyboard could not be opened
     const char* rowPort;
     const char* portDefaultHint;    ///< port follows the output type
     const char* portReset;          ///< back to default port

@@ -593,11 +593,6 @@ void EyePanel::closeHostEntry() {
     pressed_ = {};
 }
 
-void EyePanel::setHostEntryText(const std::string& text) {
-    hostEntryText_ = text;
-    hostEntryError_.clear();
-}
-
 void EyePanel::showUpdatePrompt(const std::string& version) {
     updatePromptVersion_ = bareVersion(version);
     hover_ = {};
@@ -2095,30 +2090,29 @@ void EyePanel::drawHostEntry(const Pen& pen, const UiText& t) {
         addButton(hit, bx, by, keyW, keyH);
     }
 
-    // OK, the SteamVR keyboard (for host names) and cancel, on the right
+    // On the right, lined up with the keys: OK three rows tall (like a keypad's Enter), cancel by the bottom row
     const double bw = w - 80 - 3 * keyW - 2 * gap - 28;
     const double bx = x + w - 40 - bw;
-    const double bh = kControlH + 8;
     const struct {
         PanelHit hit;
         const char* label;
         bool accent;
-    } side[3] = {{{PanelAction::HostOk, nullptr, 0}, t.hostEntryOk, true},
-                 {{PanelAction::HostKeyboard, nullptr, 0}, t.hostEntryKeyboard, false},
-                 {{PanelAction::HostCancel, nullptr, 0}, t.hostEntryCancel, false}};
-    for (int i = 0; i < 3; ++i) {
-        const double by = ky + i * (bh + 22);
-        const int pointer = pointerState(side[i].hit);
-        if (side[i].accent) {
-            fillRounded(pen, bx, by, bw, bh, bh / 2, pointer == 2 ? kAccentPressed : kAccent);
+        double y;
+        double h;
+    } side[2] = {{{PanelAction::HostOk, nullptr, 0}, t.hostEntryOk, true, ky, 3 * keyH + 2 * gap},
+                 {{PanelAction::HostCancel, nullptr, 0}, t.hostEntryCancel, false, ky + 3 * (keyH + gap), keyH}};
+    for (const auto& button : side) {
+        const int pointer = pointerState(button.hit);
+        if (button.accent) {
+            fillRounded(pen, bx, button.y, bw, button.h, 16, pointer == 2 ? kAccentPressed : kAccent);
         } else {
-            fillRounded(pen, bx, by, bw, bh, bh / 2, pointer > 0 ? kControlHover : kControl);
-            strokeRounded(pen, bx, by, bw, bh, bh / 2, kBorder, 2);
+            fillRounded(pen, bx, button.y, bw, button.h, 16, pointer > 0 ? kControlHover : kControl);
+            strokeRounded(pen, bx, button.y, bw, button.h, 16, kBorder, 2);
         }
-        const double size = fitSize(pen, side[i].label, 21, 13, bw - 28, true);
-        textCentered(pen, bx + bw / 2, centerBaseline(by, bh, size), side[i].label, size,
-                     side[i].accent ? kOnAccent : kText, true);
-        addButton(side[i].hit, bx, by, bw, bh);
+        const double size = fitSize(pen, button.label, button.accent ? 26 : 21, 13, bw - 28, true);
+        textCentered(pen, bx + bw / 2, centerBaseline(button.y, button.h, size), button.label, size,
+                     button.accent ? kOnAccent : kText, true);
+        addButton(button.hit, bx, button.y, bw, button.h);
     }
 }
 

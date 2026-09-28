@@ -84,7 +84,7 @@ The panel writes `config.json` and reads the status file. To pick its default la
 
 ### Setting the target PC by hand
 
-"Auto" sends to the PC Steam Link is streaming from. If that is the wrong PC, press "Enter IP" in the Target PC row on the Basic tab. A keypad opens: type the PC's IPv4 address (for example `192.168.1.20`) and press "OK". For a host name, "Keyboard (names too)" opens SteamVR's keyboard. Leave the port out; it goes in the Port row. The panel writes it to `host` in `config.json`, and the row shows "Manual 192.168.1.20". "Auto" switches back. You can also set `host` in `config.json` by hand.
+"Auto" sends to the PC Steam Link is streaming from. If that is the wrong PC, press "Enter IP" in the Target PC row on the Basic tab. A keypad opens: type the PC's IPv4 address (for example `192.168.1.20`) and press "OK". Leave the port out; it goes in the Port row. The panel writes it to `host` in `config.json`, and the row shows "Manual 192.168.1.20". "Auto" switches back. To use a host name instead of an address, set `host` in `config.json` by hand; the row then shows "Manual" and the name, and "Auto" still switches back.
 
 ## Settings
 

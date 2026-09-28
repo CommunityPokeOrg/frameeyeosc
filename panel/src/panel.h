@@ -53,7 +53,6 @@ enum class PanelAction {
     HostKey,           ///< a keypad key: arg = '0'-'9', '.' or host_entry::kBackspace (handled inside the panel)
     HostOk,            ///< use the typed host (the caller checks and writes it)
     HostCancel,        ///< close the keypad (handled inside the panel)
-    HostKeyboard,      ///< type it on the SteamVR keyboard instead (the caller opens it)
 };
 
 /** A button: its action, the config key it changes and an argument. */
@@ -167,7 +166,7 @@ public:
     void setFitDetailsPage(int page) { fitDetailsPage_ = page; }
 
     /**
-     * Open the keypad for the target PC (only its buttons work while it is open).
+     * Open the keypad for the target PC's IPv4 address (only its buttons work while it is open).
      * @param text what it starts with (the host set now, or "")
      */
     void openHostEntry(const std::string& text);
@@ -181,11 +180,6 @@ public:
     /** @return what is typed */
     const std::string& hostEntryText() const { return hostEntryText_; }
 
-    /**
-     * Replace what is typed (from the SteamVR keyboard).
-     * @param text the text
-     */
-    void setHostEntryText(const std::string& text);
 
     /**
      * Show why the typed host can't be used (cleared by the next key).

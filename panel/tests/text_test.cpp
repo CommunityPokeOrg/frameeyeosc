@@ -1,4 +1,4 @@
-// Tests for checking a typed target PC (host_entry.cpp) and the eye fit's failure texts in both languages
+// Tests for checking a typed target PC address (host_entry.cpp) and the eye fit's failure texts in both languages
 // (fit_text.cpp). Built with the panel as text-test; exits non-zero on failure.
 #include "fit_text.h"
 #include "host_entry.h"
@@ -43,27 +43,16 @@ using host_entry::HostError;
 using host_entry::checkHost;
 
 void testHosts() {
-    // IPv4 addresses and host names
-    for (const char* good : {"192.168.1.20", "10.0.0.1", "0.0.0.0", "255.255.255.255", "my-pc", "my-pc.local",
-                             "DESKTOP-ABC123", "auto"}) {
+    // IPv4 addresses only (a host name can only be set in config.json)
+    for (const char* good : {"192.168.1.20", "10.0.0.1", "0.0.0.0", "255.255.255.255", "010.0.0.1"}) {
         CHECK(checkHost(good) == HostError::None);
     }
     CHECK(checkHost("") == HostError::Empty);
-    CHECK(checkHost("192.168.1.20 ") == HostError::Space);
-    CHECK(checkHost("my pc") == HostError::Space);
-    // A port goes in the Port row
-    CHECK(checkHost("192.168.1.20:9000") == HostError::Port);
-    CHECK(checkHost("my-pc:9000") == HostError::Port);
-    // Digits and dots that are not four numbers 0-255
-    for (const char* bad : {"256.1.1.1", "1.2.3", "1.2.3.4.5", "1..2.3", ".1.2.3", "1.2.3.", "1234.1.1.1", "192"}) {
+    // Not four numbers 0-255 separated by dots
+    for (const char* bad : {"256.1.1.1", "1.2.3", "1.2.3.4.5", "1..2.3", ".1.2.3", "1.2.3.", "1234.1.1.1", "192", ".",
+                            "192.168.1.20:9000", "my-pc", "auto", "1.2.3.4 "}) {
         CHECK(checkHost(bad) == HostError::Ipv4);
     }
-    // Names with other characters, empty parts or a part starting or ending with "-"
-    for (const char* bad : {"my_pc", "-pc", "pc-", "pc.", "a..b", "pc/1", "ｐｃ"}) {
-        CHECK(checkHost(bad) == HostError::Name);
-    }
-    CHECK(checkHost(std::string(64, 'a')) == HostError::Name);
-    CHECK(checkHost(std::string(63, 'a')) == HostError::None);
 
     // The keypad: digits and dots, backspace, at most 15 characters
     std::string text;
