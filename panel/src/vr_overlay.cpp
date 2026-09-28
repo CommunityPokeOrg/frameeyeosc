@@ -32,12 +32,9 @@ constexpr const char* kTargetName = "Eye target";
 // 2 m ahead (gaze_fit::kTargetDistanceM) and 0.3 m wide (about 8.6 degrees)
 constexpr double kTargetDistanceM = gaze_fit::kTargetDistanceM;
 constexpr float kTargetWidthM = 0.3f;
-// The debug gaze dots: small overlays of their own (their width and distance: gaze_dots.h)
+// The debug gaze dots: small plain overlays of their own, like frame-perf-overlay's panel (no sort order, no
+// dashboard flags); over the dashboard they come near instead (their width and distance: gaze_dots.h)
 constexpr const char* kDotKeys[2] = {"sasaken.frameeyeosc-panel.dot0", "sasaken.frameeyeosc-panel.dot1"};
-// Drawn after other apps' overlays with a lower sort order (overlays of one kind are drawn lowest sort order first).
-// High, with room above for anything that must be on top of them. The dashboard still covered the dots behind it,
-// so while it is open they also come nearer than the panel (gaze_dots::dotDistance)
-constexpr uint32_t kDotSortOrder = 1u << 20;
 // IPDs outside this range (m) are taken as a failed read
 constexpr double kIpdMin = 0.045;
 constexpr double kIpdMax = 0.085;
@@ -437,10 +434,6 @@ bool VrOverlay::showDot(int index, double x, double y, double z, double yawDeg, 
         }
         handle = created;
         dotWidth_[index] = 0.0;
-        // On top of the dashboard, and kept visible while it is open
-        checkOverlay("SetOverlaySortOrder(dot)", overlay->SetOverlaySortOrder(handle, kDotSortOrder));
-        checkOverlay("SetOverlayFlag(dot, VisibleInDashboard)",
-                     overlay->SetOverlayFlag(handle, vr::VROverlayFlags_VisibleInDashboard, true));
         newImage = true;
     }
     if (newImage && !dotTextures_[index].update(handle, rgba, message)) {

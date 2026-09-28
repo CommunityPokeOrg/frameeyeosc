@@ -61,10 +61,10 @@ Pose dotPose(double x, double y, int eye, double ipd, double distance) {
     return pose;
 }
 
-double dotDistance(bool dashboardOpen, double panelDistance) {
+double dotDistance(bool dashboardOpen, double near) {
     if (!dashboardOpen) return kDistanceM;
-    if (!(panelDistance > 0)) return kUnknownDashboardM;
-    return std::clamp(panelDistance - kDashboardGapM, kNearestM, kDistanceM);
+    if (!std::isfinite(near)) return kNearDefaultM;
+    return std::clamp(near, kNearMinM, kNearMaxM);
 }
 
 double dotWidth(double distance) {

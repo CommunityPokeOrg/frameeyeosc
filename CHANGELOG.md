@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1 (unreleased)
+
+- The debug gaze dots now show while the dashboard is open. The dashboard hid them even 0.3 m in front of it, so while it's open they come 0.45 m ahead, as near as frame-perf-overlay's panel, which shows over it. They keep their apparent size. `gaze_debug_dots_near_m` (0.2–1.5 m) changes that distance without a rebuild. With the dashboard closed they stay 2 m ahead. The dots are plain overlays again, with no sort order and no dashboard flag.
+
 ## 0.5.0 (2026-09-28)
 
 Fitting the eyes to you, for when the avatar's eyes look a little off (for example looking too far down, or eyelids that close when you look down).

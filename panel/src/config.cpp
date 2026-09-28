@@ -172,6 +172,7 @@ const std::vector<SettingSpec>& settingSpecs() {
         {key::kGazeGainDown, SettingType::Number, 1.0, "", 0.5, 2.0, 0.05, 2},
         {key::kGazeDownHoldXDeg, SettingType::Number, 24, "", 0.0, 45.0, 1.0, 0},
         {key::kGazeDebugDots, SettingType::Bool, 0, "", 0, 1, 1, 0},
+        {key::kGazeDebugDotsNearM, SettingType::Number, 0.45, "", 0.2, 1.5, 0.05, 2},
         {key::kFitSounds, SettingType::Bool, 1, "", 0, 1, 1, 0},
         {key::kGazeOffsetXLeft, SettingType::NullableNumber, 0, "", -0.5, 0.5, 0.005, 3},
         {key::kGazeOffsetXRight, SettingType::NullableNumber, 0, "", -0.5, 0.5, 0.005, 3},

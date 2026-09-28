@@ -19,13 +19,13 @@ constexpr size_t kPacketSize = 40;
 constexpr double kDistanceM = 2.0;
 /** ...and how wide they are there (about 1 degree); nearer, they shrink to look the same size. */
 constexpr double kWidthM = 0.035;
-/** While the dashboard is open the dots come this much nearer than the panel, which covers anything behind it
- *  whatever the sort order... */
-constexpr double kDashboardGapM = 0.3;
-/** ...but no nearer than this... */
-constexpr double kNearestM = 0.5;
-/** ...and this near if the panel's distance can't be read. */
-constexpr double kUnknownDashboardM = 1.0;
+/** While the dashboard is open the dots come this near (gaze_debug_dots_near_m): the dashboard covered them at
+ *  2 m and at 1.0-1.13 m (0.3 m in front of the panel), whatever their sort order, while frame-perf-overlay's
+ *  panel, about 0.45 m ahead, shows over it... */
+constexpr double kNearDefaultM = 0.45;
+/** ...within this range. */
+constexpr double kNearMinM = 0.2;
+constexpr double kNearMaxM = 1.5;
 /** Without a packet for this long, the dots are hidden (frameeyeosc stopped or tracking is lost). */
 constexpr double kStaleSec = 1.0;
 
@@ -79,13 +79,13 @@ struct Pose {
 Pose dotPose(double x, double y, int eye, double ipd, double distance = kDistanceM);
 
 /**
- * How far along the rays the dots go: kDistanceM with the dashboard closed; with it open, kDashboardGapM nearer
- * than the panel, within kNearestM..kDistanceM.
+ * How far along the rays the dots go: kDistanceM with the dashboard closed; with it open, the near distance
+ * (gaze_debug_dots_near_m, kept within kNearMinM..kNearMaxM; kNearDefaultM if unset).
  * @param dashboardOpen whether the dashboard is open
- * @param panelDistance how far the panel is (m; negative if unknown)
+ * @param near the gaze_debug_dots_near_m setting (m; NaN if unset)
  * @return the distance (m)
  */
-double dotDistance(bool dashboardOpen, double panelDistance);
+double dotDistance(bool dashboardOpen, double near);
 
 /**
  * How wide a dot is at a distance, so it always looks the same size.

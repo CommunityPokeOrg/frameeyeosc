@@ -1416,7 +1416,7 @@ int runOverlay(const Options& options) {
     double lastDotAt = 0.0;
     double dotIpd = gaze_fit::kDefaultIpdM;
     double dotDistance = gaze_dots::kDistanceM;  // how far along the rays the dots are now
-    double panelDistance = -1.0;                 // how far the panel is, read once each time the dashboard opens
+    double panelDistance = -1.0;                 // how far the panel is, read once each time the dashboard opens (logged)
     uint64_t drawnAutostart = autostart.snapshot(model.autostart);
     uint64_t drawnUpdate = 0;
     std::string lastSignature;
@@ -1588,18 +1588,21 @@ int runOverlay(const Options& options) {
                     dotsVisible[i] = false;
                 }
             };
-            // The dashboard covers overlays behind it, so while it is open the dots come nearer than the panel
-            // (read once per opening), and go back to 2 m when it closes
+            // The dashboard covers overlays behind it, even 0.3 m in front of the panel, so while it is open the dots
+            // come as near as frame-perf-overlay's panel (gaze_debug_dots_near_m), and go back to 2 m when it closes
             if (!visible) {
                 panelDistance = -1.0;
             } else if (dots.isOpen() && panelDistance < 0) {
                 panelDistance = vr.panelDistanceM();
             }
-            const double wantedDistance = gaze_dots::dotDistance(visible, panelDistance);
+            const double wantedDistance =
+                gaze_dots::dotDistance(visible, model.config.number(key::kGazeDebugDotsNearM));
             if (dots.isOpen() && wantedDistance != dotDistance) {
                 if (visible) {
-                    std::fprintf(stderr, "[dots] the panel is %.2f m away; dots at %.2f m\n", panelDistance,
-                                 wantedDistance);
+                    std::fprintf(stderr,
+                                 "[dots] dashboard open (the panel is %.2f m away); dots at %.2f m, %.1f mm wide, "
+                                 "plain overlays (no sort order, no dashboard flags)\n",
+                                 panelDistance, wantedDistance, gaze_dots::dotWidth(wantedDistance) * 1000);
                 } else {
                     std::fprintf(stderr, "[dots] dashboard closed; dots at %.2f m\n", wantedDistance);
                 }

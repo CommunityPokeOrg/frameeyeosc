@@ -121,6 +121,7 @@ sudo は要りません。全部ホームフォルダ（`~/.local/bin`、`~/.con
 | `lid_fit_closed_left` 〜 `lid_fit_down_right` | | `null` | 目ごとの Frame の開き具合: 目を閉じたとき、上・正面・下を見て開いているとき（`closed` / `up` / `open` / `down`、`_left` / `_right`）。目を合わせると決まる。`null` = まだ合わせていない。合わせた目は、自動キャリブレーションと `lid_scale_*` の代わりにこれを使い、下を見ただけでは閉じない |
 | `calibration_reset` | | `0` | 増やすと、まぶたの学習をやり直す |
 | `language` | | Steam の言語 | パネルの言語。`"ja"` か `"en"`。書いていないときは、Steam の言語が日本語なら日本語、それ以外なら英語 |
+| `gaze_debug_dots_near_m` | | `0.45` | ダッシュボードを開いている間、視線の点をどこまで手前に出すか（0.2〜1.5 m。それより奥はダッシュボードに隠れる）。パネルが使い、frameeyeosc 本体は使わない |
 | `fit_sounds` | | `true` | 目を合わせている間、パネルが短い音を鳴らす。frameeyeosc 本体は使わない |
 | `update_check` | | `true` | パネルが起動時と 1 日 1 回（確認に失敗したときは 1 時間後）、GitHub に新しい版がないか確かめる。frameeyeosc 本体は使わない |
 

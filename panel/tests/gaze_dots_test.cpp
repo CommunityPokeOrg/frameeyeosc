@@ -106,10 +106,14 @@ void testGeometry() {
     const Pose rightNear = dotPose(gaze_fit::eyeAngle(0.0, 1, 0.063), 0.0, 1, 0.063, 1.0);
     CHECK(near(leftNear.position.x, -0.01575, 1e-4) && near(rightNear.position.x, 0.01575, 1e-4));
 
-    // Which distance: 2 m with the dashboard closed; 0.3 m nearer than the panel while it is open, 0.5..2 m
-    CHECK(near(dotDistance(false, 1.37), 2.0) && near(dotDistance(false, -1), 2.0));
-    CHECK(near(dotDistance(true, 1.37), 1.07) && near(dotDistance(true, 0.6), 0.5) && near(dotDistance(true, 5.0), 2.0));
-    CHECK(near(dotDistance(true, -1), kUnknownDashboardM));
+    // Which distance: 2 m with the dashboard closed; the near setting while it is open (0.45 m if unset), 0.2..1.5 m
+    CHECK(near(dotDistance(false, 0.45), 2.0) && near(dotDistance(false, std::nan("")), 2.0));
+    CHECK(near(dotDistance(true, std::nan("")), 0.45) && near(kNearDefaultM, 0.45));
+    CHECK(near(dotDistance(true, 0.6), 0.6) && near(dotDistance(true, 0.05), 0.2) && near(dotDistance(true, 5.0), 1.5));
+    // At the near distance a dot keeps its size and stays on its eye's ray: 0.45 m straight ahead from the left eye
+    const Pose leftClose = dotPose(0.0, 0.0, -1, 0.063, dotDistance(true, std::nan("")));
+    CHECK(near(leftClose.position.x, -0.0315) && near(leftClose.position.z, -0.45));
+    CHECK(near(dotWidth(0.45), 0.035 * 0.45 / 2.0));
 }
 
 void testSocket() {

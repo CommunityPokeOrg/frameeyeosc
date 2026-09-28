@@ -121,6 +121,7 @@ Settings are in `~/.config/frameeyeosc/config.json`. The panel writes it, and yo
 | `lid_fit_closed_left` ... `lid_fit_down_right` | | `null` | Each eye's Frame openness with the eyes shut, and open while looking up, straight ahead and down (`closed` / `up` / `open` / `down`, `_left` / `_right`). Set by the eye fit; `null` = not fitted. A fitted eye uses these instead of the learned calibration and `lid_scale_*`, and doesn't close when you look down |
 | `calibration_reset` | | `0` | Increase it to make the eyelid calibration start over |
 | `language` | | Steam's language | Panel language, `"ja"` or `"en"`. Without it, the panel is in Japanese if Steam is set to Japanese and in English otherwise |
+| `gaze_debug_dots_near_m` | | `0.45` | How near the debug gaze dots come while the dashboard is open (0.2–1.5 m; it hides anything farther). The panel uses it; frameeyeosc ignores it |
 | `fit_sounds` | | `true` | The panel plays short sounds during the eye fit. frameeyeosc itself ignores it |
 | `update_check` | | `true` | The panel looks for a new release on GitHub at start and once a day (an hour later after a failed check). frameeyeosc itself ignores it |
 
