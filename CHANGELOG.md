@@ -2,7 +2,7 @@
 
 ## 0.5.1 (unreleased)
 
-- The debug gaze dots now show over the dashboard. They are plain overlays again (the sort order and dashboard flag added in 0.5.0 made the dashboard hide them) and sit 1 m ahead instead of 2 m, the same with the dashboard open or closed, so they don't jump. They look the same size as before. "Dot distance" next to the switch on the Advanced tab (`gaze_debug_dots_distance_m`, 0.3–1.2 m in 0.1 m steps) changes the distance, and applies right away.
+- The debug gaze dots now show over the dashboard. They are plain overlays again (the sort order and dashboard flag added in 0.5.0 made the dashboard hide them) and sit 1 m ahead instead of 2 m, the same with the dashboard open or closed, so they don't jump. They look the same size as before. "Dot distance" next to the switch on the Advanced tab (`gaze_debug_dots_distance_m`, 0.3–2.0 m in 0.1 m steps) changes the distance, and applies right away. Beyond about 1.2 m the open dashboard hides them.
 
 ## 0.5.0 (2026-09-28)
 

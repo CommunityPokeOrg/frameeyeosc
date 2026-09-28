@@ -17,11 +17,11 @@ constexpr const char* kSocketName = "gaze-dots.sock";
 constexpr size_t kPacketSize = 40;
 /** How far along each ray the dots are shown (m; gaze_debug_dots_distance_m), the same with the dashboard open or
  *  closed so they never jump. Plain overlays show over the dashboard (about 1.35 m away) up to about 1 m: at 1.2 m
- *  it hid them, depending on where the head was... */
+ *  it hid them, depending on where the head was. Up to 2 m is allowed for use with the dashboard closed... */
 constexpr double kDefaultDistanceM = 1.0;
 /** ...within this range. */
 constexpr double kMinDistanceM = 0.3;
-constexpr double kMaxDistanceM = 1.2;
+constexpr double kMaxDistanceM = 2.0;
 /** A dot is this wide (m) at kWidthAtM (about 1 degree), and scaled with its distance to look the same size. */
 constexpr double kWidthM = 0.035;
 constexpr double kWidthAtM = 2.0;

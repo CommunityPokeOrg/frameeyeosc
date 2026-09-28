@@ -107,9 +107,9 @@ void testGeometry() {
     const Pose rightNear = dotPose(gaze_fit::eyeAngle(0.0, 1, 0.063), 0.0, 1, 0.063, 1.0);
     CHECK(near(leftNear.position.x, -0.01575, 1e-4) && near(rightNear.position.x, 0.01575, 1e-4));
 
-    // Which distance: the setting, 1 m if unset, kept within 0.3..1.2 m
+    // Which distance: the setting, 1 m if unset, kept within 0.3..2 m
     CHECK(near(dotDistance(std::nan("")), 1.0) && near(kDefaultDistanceM, 1.0));
-    CHECK(near(dotDistance(0.8), 0.8) && near(dotDistance(0.05), 0.3) && near(dotDistance(5.0), 1.2));
+    CHECK(near(dotDistance(0.8), 0.8) && near(dotDistance(0.05), 0.3) && near(dotDistance(5.0), 2.0));
     // At the default a dot is 17.5 mm wide (1 degree, as 35 mm at 2 m) on its eye's ray: straight ahead from the left eye
     const Pose leftDefault = dotPose(0.0, 0.0, -1, 0.063, dotDistance(std::nan("")));
     CHECK(near(leftDefault.position.x, -0.0315) && near(leftDefault.position.z, -1.0));
