@@ -14,6 +14,15 @@ use std::time::{Duration, Instant};
 const TIMEOUT_EXTRA: Duration = Duration::from_secs(3);
 // The target that asks for the eyes-shut capture: every sample counts and the gaze is not used.
 pub const CLOSED_TARGET: &str = "closed";
+// A gaze sample counts when both eyes read at least this open (clearly open; a shut eye reads about
+// 0.15-0.26), whatever gaze_hold_below is: an eye that reads less open looking down (0.45 for a face
+// that reads 0.65 straight ahead) must still be measured there.
+const OPEN_FLOOR: f32 = 0.3;
+
+/// Whether a sample's gaze counts in a capture: both eyes open enough and at least one eye's gaze reliable.
+pub fn usable(openness: [f32; 2], reliable: [bool; 2]) -> bool {
+    openness.iter().all(|openness| *openness >= OPEN_FLOOR) && reliable.contains(&true)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -194,6 +203,25 @@ mod tests {
         let line = result.log_line();
         let expected = format!("from {} samples", result.samples);
         assert!(line.starts_with("Gaze capture 7 (up): x +0.") && line.ends_with(&expected), "{line}");
+    }
+
+    #[test]
+    fn eyes_that_read_less_open_are_still_measured() {
+        // Whatever gaze_hold_below is: 0.45 looking down (0.65 straight ahead) counts.
+        assert!(usable([0.45, 0.45], [true; 2]));
+        assert!(usable([0.3, 0.9], [true, false]));
+        // A shut or closing eye does not, nor a sample with no reliable eye.
+        assert!(!usable([0.25, 0.6], [true; 2]));
+        assert!(!usable([0.8, 0.8], [false; 2]));
+        // A whole capture from such a face: every open sample counts.
+        let mut capture = capture();
+        for i in 0..=180 {
+            let openness = [0.45, 0.42];
+            if capture.add(f64::from(i) / 90.0, [0.0, -0.33], [0.0, 0.0], openness, usable(openness, [true; 2])) {
+                break;
+            }
+        }
+        assert!(capture.result(CaptureState::Done).samples >= 134);
     }
 
     #[test]

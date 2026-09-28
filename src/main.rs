@@ -446,16 +446,30 @@ impl Smoother {
     /// ~40° down, 2026-09-28), so the left, right and combined x fade into their values from just before
     /// the gaze went that low: not at all at the threshold, fully 10° further down. Judged on the raw
     /// combined vertical gaze, before the zero point and gains, so the threshold is the tracker's own
-    /// degrees whatever the fit. Starting out that low, the held x is straight ahead as fitted.
-    fn hold_down_x(&mut self, raw_gaze: [f32; 6], settings: &Settings) -> [f32; 6] {
+    /// degrees whatever the fit. Starting out that low, the held x is straight ahead as fitted. Only
+    /// `trusted` eyes' x (open and reliable; the combined x if either is) are remembered, so a blink or an
+    /// unreliable sample just before looking down is not what gets held.
+    fn hold_down_x(&mut self, raw_gaze: [f32; 6], trusted: [bool; 2], settings: &Settings) -> [f32; 6] {
         let threshold = settings.gaze_down_hold_x_deg;
         let x = [raw_gaze[0], raw_gaze[2], raw_gaze[4]];
         let down_deg = -raw_gaze[5] * 45.0;
+        let ahead = [
+            settings.gaze_offset_x_left.unwrap_or(settings.gaze_offset_x),
+            settings.gaze_offset_x_right.unwrap_or(settings.gaze_offset_x),
+            settings.gaze_offset_x,
+        ];
         if threshold <= 0.0 || down_deg <= threshold {
-            self.down_hold_x = Some(x);
+            let keep = [trusted[0], trusted[1], trusted[0] || trusted[1]];
+            let mut remembered = self.down_hold_x.unwrap_or(ahead);
+            for ((slot, value), keep) in remembered.iter_mut().zip(x).zip(keep) {
+                if keep {
+                    *slot = value;
+                }
+            }
+            self.down_hold_x = Some(remembered);
             return raw_gaze;
         }
-        let held = self.down_hold_x.unwrap_or([settings.gaze_offset_x; 3]);
+        let held = self.down_hold_x.unwrap_or(ahead);
         let live = (1.0 - (down_deg - threshold) / DOWN_HOLD_FADE_DEG).clamp(0.0, 1.0);
         let mut out = raw_gaze;
         for (pair, (held, x)) in held.into_iter().zip(x).enumerate() {
@@ -600,9 +614,11 @@ fn expected_open(fit: &LidFit, vertical: f32) -> f32 {
 
 /// A fitted eye's openness on the --lid-closed / --lid-open scale: its closed reading (plus a margin)
 /// maps to --lid-closed and its expected open reading for where the eyes look maps to --lid-open.
-/// Higher readings go on past --lid-open toward widening as before.
+/// Higher readings go on past --lid-open toward widening as before. The range is at least half the
+/// straight-ahead one, so far down, where the expected reading nears the closed one, a small wobble
+/// does not flip the lid between open and shut.
 fn fitted_openness(openness: f32, vertical: f32, fit: &LidFit, settings: &Settings) -> f32 {
-    let range = (expected_open(fit, vertical) - fit.closed).max(0.05);
+    let range = (expected_open(fit, vertical) - fit.closed).max(0.5 * (fit.open - fit.closed));
     let fraction = (openness - fit.closed) / range;
     let fraction = (fraction - LID_FIT_CLOSED_MARGIN) / (1.0 - LID_FIT_CLOSED_MARGIN);
     settings.lid_closed + fraction * (settings.lid_open - settings.lid_closed)
@@ -1070,7 +1086,9 @@ struct Sample {
     lids: [f32; 2],
     // Whether each eye's gaze passed the quality check.
     reliable: [bool; 2],
-    // Whether the combined gaze was held (eyes mostly shut, or both eyes unreliable).
+    // Whether the combined gaze was held (eyes mostly shut, or both eyes unreliable). Only the tests read
+    // it now; a gaze capture judges its samples itself (capture::usable).
+    #[cfg_attr(not(test), allow(dead_code))]
     gaze_held: bool,
 }
 
@@ -1128,7 +1146,9 @@ fn process(settings: &Settings, smoother: &mut Smoother, scales: [f32; 2], data:
     } else {
         let dt = smoother.advance(data.sample_time);
         // Before anything else, so the filters see the gaze the way it will be sent.
-        let corrected = correct_gaze(smoother.hold_down_x(raw_gaze, settings), settings);
+        let open = data.openness.iter().all(|openness| *openness >= settings.gaze_hold_below);
+        let trusted = reliable.map(|reliable| reliable && open);
+        let corrected = correct_gaze(smoother.hold_down_x(raw_gaze, trusted, settings), settings);
         let readings: [f32; 8] =
             std::array::from_fn(|i| if i < 6 { corrected[i] } else { data.openness[i - 6] });
         // Fed even while off, so turning it on does not start from an empty history.
@@ -1329,7 +1349,8 @@ impl Bridge {
         if let Some(capture) = &mut self.capture {
             let gaze = [sample.raw_gaze[4], sample.raw_gaze[5]];
             let eye_x = [sample.raw_gaze[0], sample.raw_gaze[2]];
-            if capture.add(data.sample_time, gaze, eye_x, data.openness, !sample.gaze_held) {
+            let usable = capture::usable(data.openness, sample.reliable);
+            if capture.add(data.sample_time, gaze, eye_x, data.openness, usable) {
                 self.finish_capture();
             }
         }
@@ -1834,29 +1855,84 @@ mod tests {
             let y = -down_deg / 45.0;
             [x, y, x + 0.1, y, x + 0.05, y]
         };
+        let open = [true; 2];
         // Above the threshold nothing changes, and the x values are remembered.
-        assert_eq!(smoother.hold_down_x(at(20.0, 0.1), &settings), at(20.0, 0.1));
-        assert_eq!(smoother.hold_down_x(at(27.5, 0.1), &settings), at(27.5, 0.1));
+        assert_eq!(smoother.hold_down_x(at(20.0, 0.1), open, &settings), at(20.0, 0.1));
+        assert_eq!(smoother.hold_down_x(at(27.5, 0.1), open, &settings), at(27.5, 0.1));
         // Halfway into the fade, halfway to the held values; fully held 10° below the threshold.
-        let half = smoother.hold_down_x(at(33.0, 0.5), &settings);
+        let half = smoother.hold_down_x(at(33.0, 0.5), open, &settings);
         assert!((half[0] - 0.3).abs() < 1e-5 && (half[2] - 0.4).abs() < 1e-5 && (half[4] - 0.35).abs() < 1e-5);
-        let held = smoother.hold_down_x(at(42.0, 0.5), &settings);
+        let held = smoother.hold_down_x(at(42.0, 0.5), open, &settings);
         assert!((held[0] - 0.1).abs() < 1e-6 && (held[2] - 0.2).abs() < 1e-6 && (held[4] - 0.15).abs() < 1e-6);
         // The vertical gaze is left alone.
         assert_eq!([held[1], held[3], held[5]], [at(42.0, 0.5)[1]; 3]);
-        // Starting out that low, straight ahead (as fitted) is held; after a reset too.
+        // Starting out that low, straight ahead (as fitted, each eye's own) is held; after a reset too.
         smoother.reset();
         let fitted = Settings {
             gaze_offset_x: 0.02,
+            gaze_offset_x_left: Some(0.012),
+            gaze_offset_x_right: Some(0.049),
             ..settings.clone()
         };
-        assert!((smoother.hold_down_x(at(42.0, 0.5), &fitted)[4] - 0.02).abs() < 1e-6);
+        let start = smoother.hold_down_x(at(42.0, 0.5), open, &fitted);
+        assert!((start[0] - 0.012).abs() < 1e-6 && (start[2] - 0.049).abs() < 1e-6 && (start[4] - 0.02).abs() < 1e-6);
         // 0 turns it off.
         let off = Settings {
             gaze_down_hold_x_deg: 0.0,
-            ..settings
+            ..settings.clone()
         };
-        assert_eq!(smoother.hold_down_x(at(42.0, 0.5), &off), at(42.0, 0.5));
+        assert_eq!(smoother.hold_down_x(at(42.0, 0.5), open, &off), at(42.0, 0.5));
+    }
+
+    #[test]
+    fn a_blink_before_looking_down_is_not_what_gets_held() {
+        let settings = Settings {
+            gaze_down_hold_x_deg: 24.0,
+            ..settings()
+        };
+        let mut smoother = Smoother::new(&settings);
+        let at = |down_deg: f32, x: f32| {
+            let y = -down_deg / 45.0;
+            [x, y, x + 0.1, y, x + 0.05, y]
+        };
+        // Looking 20° down at x 0.1, then a blink (or an unreliable sample) where x jumps to 0.6.
+        smoother.hold_down_x(at(20.0, 0.1), [true; 2], &settings);
+        smoother.hold_down_x(at(20.0, 0.6), [false; 2], &settings);
+        // Only the right eye is trusted: only its x (and the combined one) is taken.
+        smoother.hold_down_x(at(20.0, 0.2), [false, true], &settings);
+        let held = smoother.hold_down_x(at(40.0, 0.9), [true; 2], &settings);
+        assert!((held[0] - 0.1).abs() < 1e-6 && (held[2] - 0.3).abs() < 1e-6 && (held[4] - 0.25).abs() < 1e-6, "{held:?}");
+        // Through the whole pipeline: a blink (openness below gaze_hold_below) at 20° down is not held.
+        let down = |deg: f32| (deg.to_radians()).tan();
+        let mut readings: Vec<EyeData> = (0..30).map(|i| reading(i, [0.0, -down(20.0)], [0.8; 2])).collect();
+        readings.extend((30..34).map(|i| reading(i, [down(25.0), -down(20.0)], [0.2; 2])));
+        readings.extend((34..60).map(|i| reading(i, [down(30.0), -down(40.0)], [0.8; 2])));
+        // Fully held at 40° down: the x from before the blink (straight ahead), not the blink's 25°.
+        let sent = run(&settings, &readings);
+        let last = sent.last().unwrap();
+        assert!(last.gaze[4].abs() < 0.02, "{:?}", last.gaze);
+    }
+
+    #[test]
+    fn far_down_the_fitted_lid_does_not_flicker() {
+        // A valid fit whose down reading is near its closed one.
+        let settings = Settings {
+            lid_fit_closed_left: Some(0.4),
+            lid_fit_up_left: Some(0.95),
+            lid_fit_open_left: Some(0.9),
+            lid_fit_down_left: Some(0.5),
+            ..settings()
+        };
+        let fit = settings.lid_fit()[0].unwrap();
+        // 22° down the expected open reading is floored at 0.45, only 0.05 above closed; the range is
+        // floored at half the straight-ahead one (0.25), so 0.05 of wobble moves the lid a fifth of the way.
+        let vertical = -22.0 / 45.0;
+        let step_lid = fitted_openness(0.5, vertical, &fit, &settings) - fitted_openness(0.45, vertical, &fit, &settings);
+        let expected = 0.05 / 0.25 / (1.0 - LID_FIT_CLOSED_MARGIN) * (settings.lid_open - settings.lid_closed);
+        assert!((step_lid - expected).abs() < 1e-5, "{step_lid} vs {expected}");
+        // Straight ahead nothing changes: the range there is the whole one.
+        let ahead = fitted_openness(0.9, 0.0, &fit, &settings);
+        assert!((ahead - settings.lid_open).abs() < 1e-5);
     }
 
     #[test]

@@ -53,19 +53,22 @@ std::vector<Tone> tones(Cue cue) {
 }
 
 /**
- * Where on the PATH (or at an absolute path) a program is.
+ * Where a program is: /usr/bin or /bin first, then the absolute folders on the PATH (empty and relative ones are
+ * skipped, so nothing is started from the working folder).
  * @param program the name
  * @return its path, or "" if it is not there
  */
 std::string findProgram(const std::string& program) {
     const char* path = std::getenv("PATH");
-    std::string dirs = path != nullptr ? path : "/usr/bin:/bin";
+    const std::string dirs = std::string("/usr/bin:/bin:") + (path != nullptr ? path : "");
     size_t start = 0;
     while (start <= dirs.size()) {
         const size_t end = dirs.find(':', start);
         const std::string dir = dirs.substr(start, end == std::string::npos ? std::string::npos : end - start);
-        const std::string candidate = (dir.empty() ? "." : dir) + "/" + program;
-        if (::access(candidate.c_str(), X_OK) == 0) return candidate;
+        if (!dir.empty() && dir[0] == '/') {
+            const std::string candidate = dir + "/" + program;
+            if (::access(candidate.c_str(), X_OK) == 0) return candidate;
+        }
         if (end == std::string::npos) break;
         start = end + 1;
     }

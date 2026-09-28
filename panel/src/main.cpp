@@ -1661,7 +1661,9 @@ int runOverlay(const Options& options) {
         wasVisible = visible;
         // Every display frame while the fit's target or the debug dots are up: with the target, paced by the
         // compositor itself (a fixed sleep plus the loop's work fell behind the display, and the ring stuttered)
-        const bool everyFrame = fit.active() || dots.isOpen();
+        // (the dots only while packets arrive: with none for kStaleSec, the usual slow poll)
+        const bool dotsLive = dots.isOpen() && nowSeconds() - lastDotAt <= gaze_dots::kStaleSec;
+        const bool everyFrame = fit.active() || dotsLive;
         if (!(targetUp && vr.waitFrameSync(kFrameSyncTimeoutMs))) {
             sleepInterruptible(everyFrame ? kFitPollSec : (visible ? kPanelPollSec : kClosedPollSec));
         }
