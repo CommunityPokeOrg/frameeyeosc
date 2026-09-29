@@ -107,6 +107,19 @@ const char* const kLidFitKeys[2][4] = {
     {key::kLidFitClosedRight, key::kLidFitUpRight, key::kLidFitOpenRight, key::kLidFitDownRight},
 };
 
+bool fitKeysLocked(const SettingsView& view) {
+    for (const char* name : {key::kGazeOffsetX, key::kGazeOffsetY, key::kGazeGainX, key::kGazeGainUp, key::kGazeGainDown,
+                             key::kGazeOffsetXLeft, key::kGazeOffsetXRight, key::kGazeGainXLeft, key::kGazeGainXRight}) {
+        if (view.locked(name)) return true;
+    }
+    for (const auto& eye : kLidFitKeys) {
+        for (const char* name : eye) {
+            if (view.locked(name)) return true;
+        }
+    }
+    return false;
+}
+
 FitInConfig fitInConfig(const SettingsView& view) {
     FitInConfig fit;
     gaze_fit::Values& v = fit.values;

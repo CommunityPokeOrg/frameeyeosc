@@ -106,6 +106,13 @@ extern const char* const kLidFitKeys[2][4];
  */
 FitInConfig fitInConfig(const SettingsView& view);
 
+/**
+ * Whether a key the eye fit writes is set on frameeyeosc's command line (then the fit can't run).
+ * @param view the settings
+ * @return true if any is locked
+ */
+bool fitKeysLocked(const SettingsView& view);
+
 /** A gaze smoothing preset (the three One Euro values). */
 struct GazePreset {
     double minCutoff;

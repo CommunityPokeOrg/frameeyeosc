@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The panel re-centers the gaze by itself when you put the headset on. Straight ahead shifts each time the headset is put on (up to 6.7° up-down and 3.2° sideways between wearings were measured) while the gains stay within a few %, so the one-dot "Re-center only" is enough. Once the eyes have been tracked for 3 seconds and the dashboard has been closed for a second, the dot shows straight ahead once; look at it for 2.5 seconds. Putting the headset on is read from the eye data, which stops while the headset is off: tracking that comes back after at least 5 seconds without it counts (taking the headset off was seen as gaps of 19–344 s, the tracker's own hiccups as 1.2–2.2 s), and so does the first wearing after the panel starts. It runs once per wearing, with no retry if it fails or is stopped, and only when the gaze has been fitted and frameeyeosc is running; a frameeyeosc restart while the headset is on doesn't count as putting it on. "Re-center when put on" on the Eye fit tab turns it off (`auto_recenter`, `true` by default; frameeyeosc itself ignores it). To notice it, the panel reads the status file every 0.5 s while the dashboard is closed, only while this is on and the gaze is fitted.
+
 ## 0.5.3 (2026-09-29)
 
 - The eye fit works with a slower eye tracker. A Frame was seen delivering only 15 samples a second (instead of 90 or more), so every dot came back with 26 samples and failed the fixed minimum of 45. A measurement is now judged against the samples that came in: at least 60% of them usable (eyes open, gaze reliable), at least 12 and never more than the 45 needed before, so the usual rates are judged as in 0.5.2. The spread limit is unchanged. frameeyeosc reports how many came in and the tracker's rate with each measurement, and the panel shows them when a dot fails ("10 of 26 samples usable at 15 Hz (needs 16)") and in the log.

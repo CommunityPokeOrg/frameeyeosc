@@ -192,6 +192,8 @@ struct UiText {
     const char* fitDetails;          ///< the fold with the values by hand
     const char* fitSoundsOn;         ///< the sound switch, on ("Sounds: on")
     const char* fitSoundsOff;
+    const char* autoRecenterOn;      ///< the switch for re-centering when the headset is put on, on...
+    const char* autoRecenterOff;     ///< ...and off
     const char* rowOffset;
     const char* hintOffset;
     const char* rowGain;

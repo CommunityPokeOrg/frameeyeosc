@@ -27,6 +27,7 @@ pkg_check_modules(VULKAN REQUIRED IMPORTED_TARGET vulkan)
 
 add_executable(frameeyeosc-panel
   src/main.cpp
+  src/auto_recenter.cpp
   src/autostart.cpp
   src/command.cpp
   src/config.cpp
@@ -83,6 +84,13 @@ add_executable(sounds-test tests/sounds_test.cpp src/sounds.cpp src/gaze_fit.cpp
 target_include_directories(sounds-test PRIVATE src)
 target_compile_options(sounds-test PRIVATE -Wall -Wextra)
 add_test(NAME sounds COMMAND sounds-test)
+
+# Re-centering by itself when the headset is put on (when it arms and fires), without OpenVR:
+# panel/build/auto-recenter-test
+add_executable(auto-recenter-test tests/auto_recenter_test.cpp src/auto_recenter.cpp)
+target_include_directories(auto-recenter-test PRIVATE src)
+target_compile_options(auto-recenter-test PRIVATE -Wall -Wextra)
+add_test(NAME auto-recenter COMMAND auto-recenter-test)
 
 # Checking a typed target PC and the eye fit's failure texts (both languages): panel/build/text-test
 add_executable(text-test tests/text_test.cpp src/host_entry.cpp src/fit_text.cpp src/i18n.cpp src/gaze_fit.cpp

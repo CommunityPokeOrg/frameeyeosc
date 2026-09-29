@@ -1,5 +1,6 @@
 // frameeyeosc-panel: a SteamVR dashboard panel for frameeyeosc's settings. It only writes config.json and reads
 // status.json; frameeyeosc keeps sending when the panel is closed, crashes or is not installed.
+#include "auto_recenter.h"
 #include "autostart.h"
 #include "config.h"
 #include "draw.h"
@@ -49,7 +50,9 @@ constexpr double kPanelPollSec = 0.033;   ///< event polling while the panel is 
 constexpr double kClosedPollSec = 0.25;   ///< event polling while it is not
 constexpr double kFitPollSec = 1.0 / 90;  ///< every display frame while the eye fit's target is up (without frame sync)
 constexpr uint32_t kFrameSyncTimeoutMs = 50;  ///< the longest wait for the compositor's next frame
-constexpr double kStatusReadSec = 0.1;    ///< status.json is read this often while the panel is visible
+constexpr double kStatusReadSec = 0.1;    ///< status.json is read this often while the panel is visible...
+/** ...and this often while it is closed and only watching for the headset being put on (auto_recenter) */
+constexpr double kWatchStatusReadSec = 0.5;
 constexpr double kUpdateSettleSec = 60.0; ///< --update-live: longest wait for a check or an install to finish
 
 /** The command line. */
@@ -1014,6 +1017,19 @@ std::string hostErrorText(const UiText& t, host_entry::HostError problem) {
 }
 
 /**
+ * Start an eye fit session (it waits for the dashboard to close, or goes straight to the first target if it is).
+ * @param fit the session
+ * @param mode the whole fit, or re-centering only
+ * @param view the settings (the fit now)
+ * @param vr the connection to SteamVR, for the IPD (null: the default)
+ */
+void startFit(gaze_fit::Session& fit, gaze_fit::Mode mode, const SettingsView& view, const VrOverlay* vr) {
+    const double ipd = vr != nullptr ? vr->userIpdMeters() : gaze_fit::kDefaultIpdM;
+    std::fprintf(stderr, "[fit] IPD %.1f mm\n", ipd * 1000);
+    fit.start(mode, fitInConfig(view).values, nowSeconds(), ipd);
+}
+
+/**
  * Carry out a button press: re-read config.json, change keys, write it back; or ask the autostart worker.
  * @param hit the button
  * @param model the model (config and error are updated)
@@ -1195,12 +1211,7 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
         case PanelAction::FitCenter: {
             const bool full = hit.action == PanelAction::FitStart;
             std::fprintf(stderr, "[fit] %s: waiting for the dashboard to close\n", full ? "eye fit" : "re-center");
-            if (fit != nullptr) {
-                const double ipd = vr != nullptr ? vr->userIpdMeters() : gaze_fit::kDefaultIpdM;
-                std::fprintf(stderr, "[fit] IPD %.1f mm\n", ipd * 1000);
-                fit->start(full ? gaze_fit::Mode::Full : gaze_fit::Mode::Center, fitInConfig(view).values, nowSeconds(),
-                           ipd);
-            }
+            if (fit != nullptr) startFit(*fit, full ? gaze_fit::Mode::Full : gaze_fit::Mode::Center, view, vr);
             return;
         }
         case PanelAction::FitDetails:
@@ -1470,6 +1481,8 @@ int runOverlay(const Options& options) {
     }
 
     gaze_fit::Session fit;
+    // Re-centering by itself when the headset is put on (auto_recenter); armed now for the first wearing
+    auto_recenter::Watcher recenter;
     long long lastCaptureId = 0;
     // The eye fit's sound cues: files written once now, played while the fit runs (if fit_sounds is on)
     sounds::Player player;
@@ -1498,7 +1511,7 @@ int runOverlay(const Options& options) {
     std::string lastSignature;
     std::string lastStamp = configStamp(model.configPath);
     bool lastRunning = false;
-    double nextStatusRead = 0.0;
+    double lastStatusRead = -1e9;
     bool dirty = true;
     bool wasVisible = false;
     bool firstSubmit = true;
@@ -1526,9 +1539,13 @@ int runOverlay(const Options& options) {
         const bool visible = vr.panelVisible();
         autostart.setActive(visible);
         const bool fitting = fit.active();
-        // (also while the debug dots are on, so their switch and distance apply without opening the dashboard)
-        if ((visible || fitting || dots.isOpen()) && ((visible && !wasVisible) || nowSeconds() >= nextStatusRead)) {
-            nextStatusRead = nowSeconds() + kStatusReadSec;
+        // (also while the debug dots are on, so their switch and distance apply without opening the dashboard; and
+        // every kWatchStatusReadSec while there is a fit to re-center when the headset is put on)
+        const bool often = visible || fitting || dots.isOpen();
+        const bool watching = model.config.flag(key::kAutoRecenter) && fitInConfig(SettingsView(model)).gazeFitted;
+        const double readEvery = often ? kStatusReadSec : kWatchStatusReadSec;
+        if ((often || watching) && ((visible && !wasVisible) || nowSeconds() >= lastStatusRead + readEvery)) {
+            lastStatusRead = nowSeconds();
             model.status = readStatus(model.statusPath, unixNow());
             if (model.status.running != lastRunning) {
                 if (model.status.running) {
@@ -1588,10 +1605,28 @@ int runOverlay(const Options& options) {
             dirty = true;
         }
 
+        const bool dashboardOpen = vr.dashboardVisible();
+        // Re-centering by itself once the headset is put on and the eyes have settled: the same one-dot fit as
+        // "Re-center only", once per wearing (see auto_recenter.h)
+        {
+            const SettingsView view(model);
+            auto_recenter::Inputs in;
+            in.enabled = model.config.flag(key::kAutoRecenter);
+            in.fitted = fitInConfig(view).gazeFitted;
+            in.locked = fitKeysLocked(view);
+            in.running = model.status.running;
+            in.tracking = model.status.tracking;
+            in.dashboardOpen = dashboardOpen;
+            in.fitActive = fit.active();
+            const auto_recenter::Step step = recenter.update(nowSeconds(), in);
+            if (!step.log.empty()) std::fprintf(stderr, "[fit] %s\n", step.log.c_str());
+            if (step.start) startFit(fit, gaze_fit::Mode::Center, view, &vr);
+        }
+
         // The eye fit: requests and results go through config.json and status.json; the target is only shown
         // while the dashboard is closed
         {
-            const gaze_fit::Actions actions = fit.tick(nowSeconds(), vr.dashboardVisible(), model.status);
+            const gaze_fit::Actions actions = fit.tick(nowSeconds(), dashboardOpen, model.status);
             if (!actions.log.empty()) std::fprintf(stderr, "[fit] %s\n", actions.log.c_str());
             // Cues follow what the target shows (a dot arriving, the countdown, the eyes-shut ending)
             const bool soundsOn = model.config.flag(key::kFitSounds);

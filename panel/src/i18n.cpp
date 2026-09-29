@@ -180,6 +180,8 @@ UiText makeJapanese() {
     t.fitDetails = "細かく直す";
     t.fitSoundsOn = "♪ 音を鳴らす: オン";
     t.fitSoundsOff = "♪ 音を鳴らす: オフ";
+    t.autoRecenterOn = "被ったら合わせ直す: オン";
+    t.autoRecenterOff = "被ったら合わせ直す: オフ";
     t.rowOffset = "正面の位置";
     t.hintOffset = "＋ は右・上";
     t.rowGain = "動く幅";
@@ -477,6 +479,8 @@ UiText makeEnglish() {
     t.fitDetails = "Fine-tune";
     t.fitSoundsOn = "♪ Sounds: on";
     t.fitSoundsOff = "♪ Sounds: off";
+    t.autoRecenterOn = "Re-center when put on: on";
+    t.autoRecenterOff = "Re-center when put on: off";
     t.rowOffset = "Straight ahead";
     t.hintOffset = "+ is right / up";
     t.rowGain = "Range";

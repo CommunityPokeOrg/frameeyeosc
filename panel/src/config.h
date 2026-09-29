@@ -81,6 +81,8 @@ constexpr const char* kGazeDebugDots = "gaze_debug_dots";
 constexpr const char* kGazeDebugDotsDistanceM = "gaze_debug_dots_distance_m";
 /** The panel's own: play sound cues during the eye fit (frameeyeosc ignores it). */
 constexpr const char* kFitSounds = "fit_sounds";
+/** The panel's own: re-center the gaze by itself when the headset is put on (frameeyeosc ignores it). */
+constexpr const char* kAutoRecenter = "auto_recenter";
 constexpr const char* kLidFitClosedLeft = "lid_fit_closed_left";
 constexpr const char* kLidFitClosedRight = "lid_fit_closed_right";
 constexpr const char* kLidFitUpLeft = "lid_fit_up_left";

@@ -1271,22 +1271,13 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
     const bool anyFitted = saved.gazeFitted || saved.lidsFitted[0] || saved.lidsFitted[1];
     double y = kRowTop;
     const double cy = (kRowH - kControlH) / 2;
-    const char* offsetKeys[2] = {key::kGazeOffsetX, key::kGazeOffsetY};
-    const char* gainKeys[3] = {key::kGazeGainX, key::kGazeGainUp, key::kGazeGainDown};
-    bool anyLocked = false;
-    for (const char* name : offsetKeys) anyLocked |= v.locked(name);
-    for (const char* name : gainKeys) anyLocked |= v.locked(name);
-    for (const auto& eye : kLidFitKeys) {
-        for (const char* name : eye) anyLocked |= v.locked(name);
-    }
-    for (const char* name : {key::kGazeOffsetXLeft, key::kGazeOffsetXRight, key::kGazeGainXLeft, key::kGazeGainXRight}) {
-        anyLocked |= v.locked(name);
-    }
+    const bool anyLocked = fitKeysLocked(v);
     const bool busy = fit.phase == Phase::Waiting || fit.phase == Phase::Settling || fit.phase == Phase::Capturing ||
                       fit.phase == Phase::Reopen;
     const bool canRun = m.status.running && !anyLocked && !busy;
 
-    // The one button to press: fit (again); and re-centering only, for after putting the headset back on
+    // The one button to press: fit (again); and re-centering only (also run by itself when the headset is put on,
+    // see auto_recenter.h)
     {
         drawRowLabel(pen, t, y, kRowH, t.rowFit, t.hintFit, false);
         const double gap = 12;
@@ -1423,20 +1414,45 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
         }
         y += h + (compact ? 8 : 12);
     }
-    // "Fine-tune": the values by hand, folded away by default
+    // "Fine-tune": the values by hand, folded away by default. Next to it two switches for the fit, each as wide as
+    // its longer wording, and once it is open the page switch on the right: then the two switches are narrowed alike
+    // to make room ("Fine-tune" itself stays put)
     {
+        const double gap = 10;
+        const double detailsW = 150;
+        const double pagesW = 190;
+        const auto switchW = [&](const char* on, const char* off) {
+            return std::max(pen.measure(on, 19, true), pen.measure(off, 19, true)) + 32;
+        };
+        double soundsW = switchW(t.fitSoundsOn, t.fitSoundsOff);
+        double autoW = switchW(t.autoRecenterOn, t.autoRecenterOff);
+        const double room = kInnerRight - kInnerX - detailsW - gap * 2 - (fitDetails_ ? pagesW + gap : 0);
+        if (soundsW + autoW > room) {
+            const double scale = room / (soundsW + autoW);
+            soundsW *= scale;
+            autoW *= scale;
+        }
         const std::string label = std::string(t.fitDetails) + (fitDetails_ ? "  ▲" : "  ▼");
-        drawButton(pen, kInnerX, y, 200, 38, label, {PanelAction::FitDetails, nullptr, 0}, true, false);
+        drawButton(pen, kInnerX, y, detailsW, 38, label, {PanelAction::FitDetails, nullptr, 0}, true, false);
         // Sound cues on / off: one button that says the state and flips it
+        double x = kInnerX + detailsW + gap;
         {
             const bool on = v.flag(key::kFitSounds);
             const bool locked = v.locked(key::kFitSounds);
-            drawButton(pen, kInnerX + 212, y, 190, 38, on ? t.fitSoundsOn : t.fitSoundsOff,
+            drawButton(pen, x, y, soundsW, 38, on ? t.fitSoundsOn : t.fitSoundsOff,
                        {PanelAction::SetBool, key::kFitSounds, on ? 0 : 1}, !locked, false);
+        }
+        x += soundsW + gap;
+        // Re-centering by itself when the headset is put on, the same kind of switch
+        {
+            const bool on = v.flag(key::kAutoRecenter);
+            const bool locked = v.locked(key::kAutoRecenter);
+            drawButton(pen, x, y, autoW, 38, on ? t.autoRecenterOn : t.autoRecenterOff,
+                       {PanelAction::SetBool, key::kAutoRecenter, on ? 0 : 1}, !locked, false);
         }
         // Once open: the gaze values, or the eyelid values
         if (fitDetails_) {
-            drawSegmented(pen, kInnerRight - 300, y, 300, 38,
+            drawSegmented(pen, kInnerRight - pagesW, y, pagesW, 38,
                           {{t.detailsGaze, {PanelAction::FitDetailsPage, nullptr, 0}},
                            {t.detailsLids, {PanelAction::FitDetailsPage, nullptr, 1}}},
                           fitDetailsPage_, 18);
