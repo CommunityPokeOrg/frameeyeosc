@@ -71,6 +71,7 @@ constexpr const char* kGazeOffsetY = "gaze_offset_y";
 constexpr const char* kGazeGainX = "gaze_gain_x";
 constexpr const char* kGazeGainUp = "gaze_gain_up";
 constexpr const char* kGazeGainDown = "gaze_gain_down";
+constexpr const char* kGazeRollDeg = "gaze_roll_deg";
 constexpr const char* kGazeDownHoldXDeg = "gaze_down_hold_x_deg";
 constexpr const char* kGazeOffsetXLeft = "gaze_offset_x_left";
 constexpr const char* kGazeOffsetXRight = "gaze_offset_x_right";
@@ -81,7 +82,8 @@ constexpr const char* kGazeDebugDots = "gaze_debug_dots";
 constexpr const char* kGazeDebugDotsDistanceM = "gaze_debug_dots_distance_m";
 /** The panel's own: play sound cues during the eye fit (frameeyeosc ignores it). */
 constexpr const char* kFitSounds = "fit_sounds";
-/** The panel's own: re-center the gaze by itself when the headset is put on (frameeyeosc ignores it). */
+/** The panel's own: the fit run by itself when the headset is put on, "tilt", "center" or "off" (see
+ *  kAutoRecenterModes; frameeyeosc ignores it). */
 constexpr const char* kAutoRecenter = "auto_recenter";
 constexpr const char* kLidFitClosedLeft = "lid_fit_closed_left";
 constexpr const char* kLidFitClosedRight = "lid_fit_closed_right";
@@ -103,6 +105,8 @@ constexpr const char* kOutputVrchat = "vrchat";
 constexpr const char* kOutputEtvr = "etvr";
 /** eye_tracking_active values: how EyeTrackingActive is sent in VRChat mode */
 constexpr const char* kActiveTypes[3] = {"bool", "float", "off"};
+/** auto_recenter values, in the order its button steps through them: nothing, one dot, the dot and the side dots */
+constexpr const char* kAutoRecenterModes[3] = {"off", "center", "tilt"};
 /** Default ports of the output types (used while "port" is null). */
 constexpr int kPortVrchat = 9000;
 constexpr int kPortEtvr = 8889;

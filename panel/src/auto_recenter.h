@@ -1,6 +1,7 @@
-// Re-centering the gaze by itself when the headset is put on (auto_recenter): straight ahead shifts a little each
-// time the headset is put on (up to 6.7° up-down and 3.2° sideways seen between wearings) while the gains stay
-// within a few %, so the one-dot re-center is run once the eyes are tracked again. "Put on" is read from
+// Re-fitting by itself when the headset is put on (auto_recenter): straight ahead shifts a little each time the
+// headset is put on (up to 6.7° up-down and 3.2° sideways seen between wearings), and so does its tilt, while the
+// gains stay within a few %, so the re-wear fit (straight ahead, and the side dots for the tilt, or the one dot only)
+// is run once the eyes are tracked again. "Put on" is read from
 // status.json: frameeyeosc's `tracking` goes false a second after the last eye sample, and the Frame's eye server
 // stops delivering samples while the headset is off. Nothing here talks to OpenVR or reads files, so it can be
 // tested on its own (auto_recenter_test.cpp).
@@ -21,7 +22,7 @@ constexpr double kClosedSec = 1.0;
 
 /** What the watcher needs to know, every loop. */
 struct Inputs {
-    bool enabled = true;         ///< auto_recenter is on
+    bool enabled = true;         ///< auto_recenter is not "off"
     bool fitted = false;         ///< there is a gaze fit to re-center
     bool locked = false;         ///< a fit key is set on frameeyeosc's command line
     bool running = false;        ///< frameeyeosc is running
@@ -32,7 +33,7 @@ struct Inputs {
 
 /** What to do after an update. */
 struct Step {
-    bool start = false;  ///< start the one-dot re-center now
+    bool start = false;  ///< start the re-wear fit now
     std::string log;     ///< a line for the log (without "[fit] "), or empty
 };
 

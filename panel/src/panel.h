@@ -45,8 +45,9 @@ enum class PanelAction {
     UpdateCancel,
     UpdateDismiss,     ///< close the "installed" / "failed" message
     FitStart,          ///< eye fit: the whole fit (the caller starts the session)
-    FitCenter,         ///< eye fit: re-center the gaze only
+    FitCenter,         ///< eye fit: the re-wear fit, as auto_recenter says (re-center and the tilt when it is off)
     FitStop,           ///< eye fit: stop waiting for the dashboard to close
+    SetAutoRecenter,   ///< auto_recenter = kAutoRecenterModes[arg]
     FitReset,          ///< gaze_offset_x/y = 0, gaze_gain_x/up/down = 1, lid_fit_* = null
     FitDetails,        ///< open / close "Fine-tune" (handled inside the panel)
     FitDetailsPage,    ///< show arg (0 gaze, 1 eyelids) under "Fine-tune" (handled inside the panel)

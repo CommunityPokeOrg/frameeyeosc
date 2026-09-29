@@ -109,7 +109,8 @@ const char* const kLidFitKeys[2][4] = {
 
 bool fitKeysLocked(const SettingsView& view) {
     for (const char* name : {key::kGazeOffsetX, key::kGazeOffsetY, key::kGazeGainX, key::kGazeGainUp, key::kGazeGainDown,
-                             key::kGazeOffsetXLeft, key::kGazeOffsetXRight, key::kGazeGainXLeft, key::kGazeGainXRight}) {
+                             key::kGazeRollDeg, key::kGazeOffsetXLeft, key::kGazeOffsetXRight, key::kGazeGainXLeft,
+                             key::kGazeGainXRight}) {
         if (view.locked(name)) return true;
     }
     for (const auto& eye : kLidFitKeys) {
@@ -120,6 +121,15 @@ bool fitKeysLocked(const SettingsView& view) {
     return false;
 }
 
+AutoRecenter autoRecenter(const ConfigFile& config) {
+    const JsonValue* written = config.root.get(key::kAutoRecenter);
+    if (written != nullptr && written->isBool()) return written->boolean ? AutoRecenter::Tilt : AutoRecenter::Off;
+    const std::string mode = config.text(key::kAutoRecenter);
+    if (mode == kAutoRecenterModes[0]) return AutoRecenter::Off;
+    if (mode == kAutoRecenterModes[1]) return AutoRecenter::Center;
+    return AutoRecenter::Tilt;
+}
+
 FitInConfig fitInConfig(const SettingsView& view) {
     FitInConfig fit;
     gaze_fit::Values& v = fit.values;
@@ -128,8 +138,9 @@ FitInConfig fitInConfig(const SettingsView& view) {
     v.gainX = view.number(key::kGazeGainX);
     v.gainUp = view.number(key::kGazeGainUp);
     v.gainDown = view.number(key::kGazeGainDown);
+    v.rollDeg = view.number(key::kGazeRollDeg);
     fit.gazeFitted = std::fabs(v.offsetX) > 1e-9 || std::fabs(v.offsetY) > 1e-9 || std::fabs(v.gainX - 1) > 1e-9 ||
-                     std::fabs(v.gainUp - 1) > 1e-9 || std::fabs(v.gainDown - 1) > 1e-9;
+                     std::fabs(v.gainUp - 1) > 1e-9 || std::fabs(v.gainDown - 1) > 1e-9 || std::fabs(v.rollDeg) > 1e-9;
     for (int eye = 0; eye < 2; ++eye) {
         double readings[4];
         bool all = true;

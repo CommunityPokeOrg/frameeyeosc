@@ -132,7 +132,8 @@ struct UiText {
     const char* hintFit;
     const char* fitStart;            ///< the one big button before any fit
     const char* fitAgain;            ///< the same button once fitted
-    const char* fitCenterOnly;       ///< small button: re-center the gaze only
+    const char* fitCenterOnly;       ///< small button: re-center the gaze only...
+    const char* fitCenterTilt;       ///< ...or re-center and measure the tilt (as auto_recenter says)
     const char* fitStop;
     const char* fitIntro;            ///< before any fit
     const char* fitNeedsRunning;
@@ -140,13 +141,15 @@ struct UiText {
     const char* fitWaiting;          ///< "Close the dashboard to start"
     const char* fitHowTo;            ///< while waiting / running (full fit)
     const char* fitWaitingCenter;    ///< while waiting / running (re-centering)
+    const char* fitWaitingTilt;      ///< while waiting / running (re-centering and the tilt)
     const char* fitRunningFormat;    ///< "Measuring: %s (%d of %d)"
     const char* fitRetryFormat;      ///< appended: ", try %d"
     const char* fitDone;             ///< right after a full fit
     const char* fitDoneCenter;       ///< right after re-centering
+    const char* fitDoneTilt;         ///< right after re-centering and the tilt
     const char* fitFitted;           ///< a fit is in config.json
     const char* fitNotYet;           ///< the folded result line before any fit
-    const char* fitGazeCenterFormat; ///< "Gaze center: L-R %s, U-D %s"
+    const char* fitGazeCenterFormat; ///< "Gaze center: L-R %s, U-D %s, tilt %s"
     const char* fitGazeRangeFormat;  ///< "Gaze range: L-R %s, up %s, down %s"
     const char* fitGazeNone;
     const char* fitEyeXFormat;       ///< "Each eye: L %s x%s, R %s x%s" (zero point, gain)
@@ -192,8 +195,9 @@ struct UiText {
     const char* fitDetails;          ///< the fold with the values by hand
     const char* fitSoundsOn;         ///< the sound switch, on ("Sounds: on")
     const char* fitSoundsOff;
-    const char* autoRecenterOn;      ///< the switch for re-centering when the headset is put on, on...
-    const char* autoRecenterOff;     ///< ...and off
+    const char* autoRecenterOff;     ///< the button for what runs when the headset is put on: nothing...
+    const char* autoRecenterCenter;  ///< ...re-centering...
+    const char* autoRecenterTilt;    ///< ...or re-centering and the tilt
     const char* rowOffset;
     const char* hintOffset;
     const char* rowGain;
@@ -208,6 +212,8 @@ struct UiText {
     const char* hintEyeX;
     const char* rowDownHold;         ///< holding the sideways gaze when looking far down
     const char* hintDownHold;
+    const char* rowTilt;             ///< the headset's tilt (gaze_roll_deg), next to the far-down hold
+    const char* hintTilt;
     const char* downHoldFormat;      ///< "Below %s°"
     const char* rowLidFit;
     const char* hintLidFit;

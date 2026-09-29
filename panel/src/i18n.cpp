@@ -120,6 +120,7 @@ UiText makeJapanese() {
     t.fitStart = "目を合わせる";
     t.fitAgain = "もう一度合わせる";
     t.fitCenterOnly = "正面だけ合わせ直す";
+    t.fitCenterTilt = "正面と傾きを合わせ直す";
     t.fitStop = "やめる";
     t.fitIntro = "ダッシュボードを閉じると始まります。頭は動かさず、点を目で追ってください。最後は 3・2・1 のあと 3 秒間目を閉じ、"
                  "チャイムで開けます";
@@ -129,13 +130,15 @@ UiText makeJapanese() {
     t.fitHowTo = "頭は動かさず、点を目で追ってください。最後は 3・2・1 のあと 3 秒間目を閉じ、チャイムで開けます。"
                  "ダッシュボードを開くと止まります";
     t.fitWaitingCenter = "正面に点が出ます。頭は動かさず見てください。ダッシュボードを開くと止まります";
+    t.fitWaitingTilt = "正面、左、右の順に点が出ます。頭は動かさず、点を目で追ってください。ダッシュボードを開くと止まります";
     t.fitRunningFormat = "測っています: %s（%d / %d）";
     t.fitRetryFormat = "・%d 回目";
     t.fitDone = "合わせました";
     t.fitDoneCenter = "正面を合わせ直しました";
+    t.fitDoneTilt = "正面と傾きを合わせ直しました";
     t.fitFitted = "合わせてあります";
     t.fitNotYet = "まだ合わせていません";
-    t.fitGazeCenterFormat = "視線の正面: 左右 %s・上下 %s";
+    t.fitGazeCenterFormat = "視線の正面: 左右 %s・上下 %s・傾き %s";
     t.fitGazeRangeFormat = "視線の幅: 左右 %s・上 %s・下 %s";
     t.fitGazeNone = "視線: 合わせていません";
     t.fitEyeXFormat = "目ごとの左右: 左 %s・×%s　右 %s・×%s";
@@ -180,8 +183,9 @@ UiText makeJapanese() {
     t.fitDetails = "細かく直す";
     t.fitSoundsOn = "♪ 音を鳴らす: オン";
     t.fitSoundsOff = "♪ 音を鳴らす: オフ";
-    t.autoRecenterOn = "被ったら合わせ直す: オン";
-    t.autoRecenterOff = "被ったら合わせ直す: オフ";
+    t.autoRecenterOff = "被ったら: 何もしない";
+    t.autoRecenterCenter = "被ったら: 正面だけ";
+    t.autoRecenterTilt = "被ったら: 正面と傾き";
     t.rowOffset = "正面の位置";
     t.hintOffset = "＋ は右・上";
     t.rowGain = "動く幅";
@@ -196,6 +200,8 @@ UiText makeJapanese() {
     t.hintEyeX = "左右の目を別々に動かすときに使う";
     t.rowDownHold = "真下で左右を止める";
     t.hintDownHold = "0 = オフ";
+    t.rowTilt = "傾き";
+    t.hintTilt = "＋ は右が上";
     t.downHoldFormat = "%s° より下";
     t.rowLidFit = "まぶたの読んだ値";
     t.hintLidFit = "Frame の生の開き具合";
@@ -418,6 +424,7 @@ UiText makeEnglish() {
     t.fitStart = "Fit my eyes";
     t.fitAgain = "Fit again";
     t.fitCenterOnly = "Re-center only";
+    t.fitCenterTilt = "Re-center + tilt";
     t.fitStop = "Stop";
     t.fitIntro = "It starts when you close the dashboard. Keep your head still and follow the dot with your eyes. "
                  "At the end, after 3, 2, 1, close your eyes for 3 seconds and open them at the chime.";
@@ -428,13 +435,16 @@ UiText makeEnglish() {
                  "for 3 seconds and open them at the chime. Opening the dashboard stops it.";
     t.fitWaitingCenter = "A dot appears straight ahead. Keep your head still and look at it. Opening the dashboard "
                          "stops it.";
+    t.fitWaitingTilt = "A dot appears straight ahead, then left and right. Keep your head still and follow it with "
+                       "your eyes. Opening the dashboard stops it.";
     t.fitRunningFormat = "Measuring: %s (%d of %d)";
     t.fitRetryFormat = ", try %d";
     t.fitDone = "Fitted";
     t.fitDoneCenter = "Re-centered";
+    t.fitDoneTilt = "Re-centered and leveled";
     t.fitFitted = "Fitted";
     t.fitNotYet = "Not fitted yet";
-    t.fitGazeCenterFormat = "Gaze center: L-R %s, U-D %s";
+    t.fitGazeCenterFormat = "Gaze center: L-R %s, U-D %s, tilt %s";
     t.fitGazeRangeFormat = "Gaze range: L-R %s, up %s, down %s";
     t.fitGazeNone = "Gaze: not fitted";
     t.fitEyeXFormat = "Each eye sideways: L %s x%s, R %s x%s";
@@ -479,8 +489,9 @@ UiText makeEnglish() {
     t.fitDetails = "Fine-tune";
     t.fitSoundsOn = "♪ Sounds: on";
     t.fitSoundsOff = "♪ Sounds: off";
-    t.autoRecenterOn = "Re-center when put on: on";
-    t.autoRecenterOff = "Re-center when put on: off";
+    t.autoRecenterOff = "When put on: nothing";
+    t.autoRecenterCenter = "When put on: re-center";
+    t.autoRecenterTilt = "When put on: re-center + tilt";
     t.rowOffset = "Straight ahead";
     t.hintOffset = "+ is right / up";
     t.rowGain = "Range";
@@ -495,6 +506,8 @@ UiText makeEnglish() {
     t.hintEyeX = "Used when the eyes move separately";
     t.rowDownHold = "Hold sideways far down";
     t.hintDownHold = "0 = off";
+    t.rowTilt = "Tilt";
+    t.hintTilt = "+ = right up";
     t.downHoldFormat = "Below %s°";
     t.rowLidFit = "Eyelid readings";
     t.hintLidFit = "Frame openness";

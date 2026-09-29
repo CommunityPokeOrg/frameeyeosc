@@ -58,6 +58,109 @@ const Measured& at(const Measured points[kPointCount], Point point) {
     return points[static_cast<int>(point)];
 }
 
+/** The re-wear fit's steps. */
+constexpr Point kTiltPoints[3] = {Point::Center, Point::Left, Point::Right};
+
+/**
+ * Whether the three captures a per-eye fit needs all have each eye's x.
+ * @param points the captures
+ * @return true if they do
+ */
+bool haveEyeX(const Measured points[kPointCount]) {
+    for (Point point : kTiltPoints) {
+        if (!at(points, point).hasEyeX) return false;
+    }
+    return true;
+}
+
+/**
+ * How far a point moved from the center in its own direction, after leveling with the tilt.
+ * @param points the captures
+ * @param point which (Up, Down, Left or Right)
+ * @param rollDeg the tilt
+ * @return the distance (negative: the wrong way)
+ */
+double movedFromCenter(const Measured points[kPointCount], Point point, double rollDeg) {
+    const Measured& center = at(points, Point::Center);
+    const Measured& m = at(points, point);
+    double x = 0.0;
+    double y = 0.0;
+    level(m.x - center.x, m.y - center.y, rollDeg, x, y);
+    switch (point) {
+        case Point::Up: return y;
+        case Point::Down: return -y;
+        case Point::Left: return -x;
+        case Point::Right: return x;
+        default: return 0.0;
+    }
+}
+
+/**
+ * Whether the given points moved at least kMinMoveFraction of their target angle the right way.
+ * @param points the captures
+ * @param which the points to check, in order
+ * @param count how many
+ * @param rollDeg the tilt
+ * @param failed the first that did not
+ * @param detail its numbers (may be null)
+ * @return true if all did
+ */
+bool pointsMoved(const Measured points[kPointCount], const Point* which, int count, double rollDeg, Point& failed,
+                 FailureDetail* detail) {
+    for (int i = 0; i < count; ++i) {
+        const Point point = which[i];
+        const double targetAngle = (point == Point::Up || point == Point::Down ? kUpDownDeg : kSideDeg) / kFullScaleDeg;
+        const double moved = movedFromCenter(points, point, rollDeg);
+        if (!(moved >= kMinMoveFraction * targetAngle)) {
+            failed = point;
+            if (detail != nullptr) {
+                detail->eye = -1;
+                detail->movedDeg = moved * kFullScaleDeg;
+                detail->neededDeg = kMinMoveFraction * targetAngle * kFullScaleDeg;
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * How far an eye's own leveled x moved from the left dot to the right one.
+ * @param points the captures (per-eye x set)
+ * @param eye 0 = left, 1 = right
+ * @param rollDeg the tilt
+ * @return the distance
+ */
+double eyeSpan(const Measured points[kPointCount], int eye, double rollDeg) {
+    const Measured& left = at(points, Point::Left);
+    const Measured& right = at(points, Point::Right);
+    double x = 0.0;
+    double y = 0.0;
+    level(right.xEye[eye] - left.xEye[eye], right.y - left.y, rollDeg, x, y);
+    return x;
+}
+
+/**
+ * Whether an eye's own sideways gaze moved far enough between the side dots.
+ * @param points the captures (per-eye x set)
+ * @param eye 0 = left, 1 = right
+ * @param rollDeg the tilt
+ * @param ipd the distance between the eyes (m)
+ * @param detail on failure, which eye and how far it moved (may be null)
+ * @return true if it did
+ */
+bool eyeMoved(const Measured points[kPointCount], int eye, double rollDeg, double ipd, FailureDetail* detail) {
+    const double span = eyeSpan(points, eye, rollDeg);
+    const double expectedSpan = eyeAngle(kSideDeg, eye, ipd) - eyeAngle(-kSideDeg, eye, ipd);
+    if (span >= kMinMoveFraction * expectedSpan) return true;
+    if (detail != nullptr) {
+        detail->eye = eye;
+        detail->movedDeg = span * kFullScaleDeg;
+        detail->neededDeg = kMinMoveFraction * expectedSpan * kFullScaleDeg;
+    }
+    return false;
+}
+
 }  // namespace
 
 const Target& target(Point point) {
@@ -65,11 +168,17 @@ const Target& target(Point point) {
 }
 
 int pointCount(Mode mode) {
-    return mode == Mode::Center ? 1 : kPointCount;
+    switch (mode) {
+        case Mode::Center: return 1;
+        case Mode::Tilt: return 3;
+        case Mode::Full: break;
+    }
+    return kPointCount;
 }
 
 Point pointAt(Mode mode, int index) {
     if (mode == Mode::Center) return Point::Center;
+    if (mode == Mode::Tilt) return kTiltPoints[std::clamp(index, 0, 2)];
     return kTargets[std::clamp(index, 0, kPointCount - 1)].point;
 }
 
@@ -126,30 +235,42 @@ double eyeAngle(double yawDeg, int eye, double ipd) {
     return std::atan2(side, kTargetDistanceM * std::cos(yaw)) * 180.0 / M_PI / kFullScaleDeg;
 }
 
+double rollFromSides(const Measured& left, const Measured& right) {
+    const double deg = std::atan2(right.y - left.y, right.x - left.x) * 180.0 / M_PI;
+    return roundTo(std::clamp(deg, -kRollLimitDeg, kRollLimitDeg), 1);
+}
+
+double rollFromUpDown(const Measured& up, const Measured& down) {
+    // Tilted by θ, a move straight up along the headset leans the other way: dx = -sinθ·dy
+    return std::atan2(-(up.x - down.x), up.y - down.y) * 180.0 / M_PI;
+}
+
+void level(double dx, double dy, double rollDeg, double& x, double& y) {
+    const double roll = rollDeg * M_PI / 180.0;
+    const double c = std::cos(roll);
+    const double s = std::sin(roll);
+    x = dx * c + dy * s;
+    y = -dx * s + dy * c;
+}
+
+double eyeOffset(const Measured& center, int eye, double offsetY, double rollDeg, double gain, double ipd) {
+    // frameeyeosc sends ((xEye - offset)·cosθ + (y - offsetY)·sinθ)·gain; straight ahead that has to be the eye's own
+    // angle to the dot
+    const double roll = rollDeg * M_PI / 180.0;
+    return center.xEye[eye] + (center.y - offsetY) * std::tan(roll) - eyeAngle(0.0, eye, ipd) / (gain * std::cos(roll));
+}
+
 bool fitEyes(const Measured points[kPointCount], double ipd, Values& out, FailureDetail* detail) {
-    const Point used[3] = {Point::Center, Point::Left, Point::Right};
-    for (Point point : used) {
-        if (!at(points, point).hasEyeX) return true;  // an older frameeyeosc: nothing to fit, not a failure
-    }
+    if (!haveEyeX(points)) return true;  // an older frameeyeosc: nothing to fit, not a failure
     Values fitted = out;
     for (int eye = 0; eye < 2; ++eye) {
-        const double center = at(points, Point::Center).xEye[eye];
-        const double left = at(points, Point::Left).xEye[eye];
-        const double right = at(points, Point::Right).xEye[eye];
-        const double expectedCenter = eyeAngle(0.0, eye, ipd);
+        if (!eyeMoved(points, eye, out.rollDeg, ipd, detail)) return false;
+        // The leveled span sets the gain, and the center then lands on the eye's own angle
         const double expectedSpan = eyeAngle(kSideDeg, eye, ipd) - eyeAngle(-kSideDeg, eye, ipd);
-        if (!(right - left >= kMinMoveFraction * expectedSpan)) {
-            if (detail != nullptr) {
-                detail->eye = eye;
-                detail->movedDeg = (right - left) * kFullScaleDeg;
-                detail->neededDeg = kMinMoveFraction * expectedSpan * kFullScaleDeg;
-            }
-            return false;
-        }
-        // (x - offset) * gain: the span sets the gain, and the center then lands on the eye's own angle
-        const double gain = gainSetting(expectedSpan / (right - left));
+        const double gain = gainSetting(expectedSpan / eyeSpan(points, eye, out.rollDeg));
         fitted.eyeGainX[eye] = gain;
-        fitted.eyeOffsetX[eye] = offsetSetting(center - expectedCenter / gain);
+        fitted.eyeOffsetX[eye] =
+            offsetSetting(eyeOffset(at(points, Point::Center), eye, out.offsetY, out.rollDeg, gain, ipd));
     }
     fitted.hasEyeX = true;
     out = fitted;
@@ -162,43 +283,54 @@ Values fitCenter(const Measured& center, const Values& current, double ipd) {
     values.offsetY = offsetSetting(center.y);
     if (current.hasEyeX && center.hasEyeX) {
         for (int eye = 0; eye < 2; ++eye) {
-            values.eyeOffsetX[eye] = offsetSetting(center.xEye[eye] - eyeAngle(0.0, eye, ipd) / current.eyeGainX[eye]);
+            values.eyeOffsetX[eye] =
+                offsetSetting(eyeOffset(center, eye, values.offsetY, current.rollDeg, current.eyeGainX[eye], ipd));
         }
     }
     return values;
 }
 
 bool fitGaze(const Measured points[kPointCount], Values& out, Point& failed, FailureDetail* detail) {
-    const Measured& center = at(points, Point::Center);
     const double side = kSideDeg / kFullScaleDeg;
     const double upDown = kUpDownDeg / kFullScaleDeg;
-    // How far each point moved from the center, counted in its own direction
-    const double right = at(points, Point::Right).x - center.x;
-    const double left = center.x - at(points, Point::Left).x;
-    const double up = at(points, Point::Up).y - center.y;
-    const double down = center.y - at(points, Point::Down).y;
-    const struct {
-        Point point;
-        double moved;
-        double target;
-    } checks[4] = {{Point::Up, up, upDown}, {Point::Down, down, upDown}, {Point::Left, left, side},
-                   {Point::Right, right, side}};
-    for (const auto& check : checks) {
-        if (!(check.moved >= kMinMoveFraction * check.target)) {
-            failed = check.point;
-            if (detail != nullptr) {
-                detail->eye = -1;
-                detail->movedDeg = check.moved * kFullScaleDeg;
-                detail->neededDeg = kMinMoveFraction * check.target * kFullScaleDeg;
-            }
-            return false;
-        }
-    }
+    const double roll = rollFromSides(at(points, Point::Left), at(points, Point::Right));
+    // How far each point moved from the center, leveled and counted in its own direction
+    const Point checks[4] = {Point::Up, Point::Down, Point::Left, Point::Right};
+    if (!pointsMoved(points, checks, 4, roll, failed, detail)) return false;
+    const Measured& center = at(points, Point::Center);
     out.offsetX = offsetSetting(center.x);
     out.offsetY = offsetSetting(center.y);
+    out.rollDeg = roll;
+    const double left = movedFromCenter(points, Point::Left, roll);
+    const double right = movedFromCenter(points, Point::Right, roll);
     out.gainX = gainSetting(2.0 * side / (left + right));
-    out.gainUp = gainSetting(upDown / up);
-    out.gainDown = gainSetting(upDown / down);
+    out.gainUp = gainSetting(upDown / movedFromCenter(points, Point::Up, roll));
+    out.gainDown = gainSetting(upDown / movedFromCenter(points, Point::Down, roll));
+    return true;
+}
+
+bool fitTilt(const Measured points[kPointCount], const Values& current, double ipd, Values& out, Point& failed,
+             FailureDetail* detail) {
+    const double roll = rollFromSides(at(points, Point::Left), at(points, Point::Right));
+    const Point checks[2] = {Point::Left, Point::Right};
+    if (!pointsMoved(points, checks, 2, roll, failed, detail)) return false;
+    Values values = current;
+    const Measured& center = at(points, Point::Center);
+    values.offsetX = offsetSetting(center.x);
+    values.offsetY = offsetSetting(center.y);
+    values.rollDeg = roll;
+    // Each eye's own zero point for the new tilt, keeping its gain
+    if (current.hasEyeX && haveEyeX(points)) {
+        for (int eye = 0; eye < 2; ++eye) {
+            if (!eyeMoved(points, eye, roll, ipd, detail)) {
+                failed = Point::Right;
+                return false;
+            }
+            values.eyeOffsetX[eye] =
+                offsetSetting(eyeOffset(center, eye, values.offsetY, roll, current.eyeGainX[eye], ipd));
+        }
+    }
+    out = values;
     return true;
 }
 
@@ -254,6 +386,13 @@ void Session::fail(Failure failure) {
     failedPoint_ = point();
 }
 
+void Session::failMovement(Point point) {
+    for (int i = 0; i < pointCount(mode_); ++i) {
+        if (pointAt(mode_, i) == point) index_ = i;
+    }
+    fail(Failure::NoMovement);
+}
+
 void Session::writeFailed() {
     // After the final write too: the result is then not in effect
     if (active() || phase_ == Phase::Done) fail(Failure::WriteFailed);
@@ -285,13 +424,11 @@ void Session::next(double now, Actions& actions) {
         Values gaze = current_;
         Point failed = Point::Center;
         if (!fitGaze(measured_, gaze, failed, &detail_)) {
-            index_ = static_cast<int>(failed);
-            fail(Failure::NoMovement);
+            failMovement(failed);
             return;
         }
         if (!fitEyes(measured_, ipd_, gaze, &detail_)) {
-            index_ = static_cast<int>(Point::Right);
-            fail(Failure::NoMovement);
+            failMovement(Point::Right);
             return;
         }
     }
@@ -300,21 +437,38 @@ void Session::next(double now, Actions& actions) {
 }
 
 void Session::finish(Actions& actions) {
+    // The tilt goes to the log with the last try's numbers
+    const auto note = [&actions](const char* line) {
+        if (!actions.log.empty()) actions.log += '\n';
+        actions.log += line;
+    };
+    char text[128];
+    Point failed = Point::Center;
     if (mode_ == Mode::Center) {
         result_ = fitCenter(measured_[static_cast<int>(Point::Center)], current_, ipd_);
+    } else if (mode_ == Mode::Tilt) {
+        std::snprintf(text, sizeof(text), "tilt %+.1f° from the sides (was %+.1f°)",
+                      rollFromSides(at(measured_, Point::Left), at(measured_, Point::Right)), current_.rollDeg);
+        note(text);
+        if (!fitTilt(measured_, current_, ipd_, result_, failed, &detail_)) {
+            failMovement(failed);
+            return;
+        }
     } else {
+        // Both ways of seeing the tilt, to tell how well they agree (only the sides' is used)
+        std::snprintf(text, sizeof(text), "tilt %+.1f° from the sides, %+.1f° from up/down",
+                      rollFromSides(at(measured_, Point::Left), at(measured_, Point::Right)),
+                      rollFromUpDown(at(measured_, Point::Up), at(measured_, Point::Down)));
+        note(text);
         result_ = current_;
-        Point failed = Point::Center;
         if (!fitGaze(measured_, result_, failed, &detail_)) {
-            index_ = static_cast<int>(failed);
-            fail(Failure::NoMovement);
+            failMovement(failed);
             return;
         }
         // Each eye's own sideways fit replaces the one before; without per-eye data there is none
         result_.hasEyeX = false;
         if (!fitEyes(measured_, ipd_, result_, &detail_)) {
-            index_ = static_cast<int>(Point::Right);
-            fail(Failure::NoMovement);
+            failMovement(Point::Right);
             return;
         }
         if (!fitLids(measured_, result_, &detail_)) {
@@ -386,7 +540,7 @@ Actions Session::tick(double now, bool dashboardOpen, const EyeStatus& status) {
             // The full fit needs each gaze point's openness too, for the lid fit
             const Measured& center = measured_[static_cast<int>(Point::Center)];
             const bool ok = closedStep ? usableClosed(measured, center)
-                                       : usable(measured) && (mode_ == Mode::Center || measured.hasOpenness);
+                                       : usable(measured) && (mode_ != Mode::Full || measured.hasOpenness);
             const bool last = attempt_ >= kMaxAttempts;
             actions.log = tryText(point(), attempt_, measured, center, ok ? "ok" : (last ? "failed" : "again"));
             if (ok) {

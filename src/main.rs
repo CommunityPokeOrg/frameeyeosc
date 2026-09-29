@@ -216,6 +216,10 @@ struct Args {
     /// How far the gaze goes down, from --gaze-offset-y (0.5..2)
     #[arg(long, default_value_t = 1.0)]
     gaze_gain_down: f32,
+    /// How far the headset sits tilted, in degrees (-20..20; positive: looking right reads higher). Undone
+    /// around the zero point, before the gains
+    #[arg(long, default_value_t = 0.0, allow_negative_numbers = true)]
+    gaze_roll_deg: f32,
     /// Hold the sideways gaze when looking more than this many degrees down (fully 10° further down),
     /// where the Frame's x jumps; 0 disables
     #[arg(long, default_value_t = 24.0)]
@@ -1150,30 +1154,35 @@ fn gaze_angles([x, y, z]: [f32; 3]) -> [f32; 2] {
     ]
 }
 
-/// Move each gaze pair's zero point to --gaze-offset-x/y and scale how far it goes from there;
-/// up and down have their own gains, and each eye's x may have its own zero point and gain (the
-/// combined x always uses the shared ones). The defaults leave the gaze exactly as it is.
+/// Move each gaze pair's zero point to --gaze-offset-x/y, undo the headset's tilt (--gaze-roll-deg) around it,
+/// and scale how far it goes from there; up and down have their own gains, and each eye's x may have its own zero
+/// point and gain (the combined x always uses the shared ones). The defaults leave the gaze exactly as it is.
 fn correct_gaze(angles: [f32; 6], settings: &Settings) -> [f32; 6] {
     let eye_offsets = [settings.gaze_offset_x_left, settings.gaze_offset_x_right];
     let eye_gains = [settings.gaze_gain_x_left, settings.gaze_gain_x_right];
-    std::array::from_fn(|i| {
-        let value = angles[i];
-        let corrected = if i % 2 == 0 {
-            let eye = i / 2;
-            let offset = eye_offsets.get(eye).copied().flatten().unwrap_or(settings.gaze_offset_x);
-            let gain = eye_gains.get(eye).copied().flatten().unwrap_or(settings.gaze_gain_x);
-            (value - offset) * gain
+    // Tilted by θ, looking along the headset's own level line reads as (d, d·tanθ); turning back by θ makes it level
+    let (sin, cos) = settings.gaze_roll_deg.to_radians().sin_cos();
+    let mut corrected = [0.0; 6];
+    for pair in 0..3 {
+        let offset = eye_offsets.get(pair).copied().flatten().unwrap_or(settings.gaze_offset_x);
+        let gain_x = eye_gains.get(pair).copied().flatten().unwrap_or(settings.gaze_gain_x);
+        let dx = angles[pair * 2] - offset;
+        let dy = angles[pair * 2 + 1] - settings.gaze_offset_y;
+        // No tilt: exactly the values from before there was one
+        let (x, y) = if settings.gaze_roll_deg == 0.0 {
+            (dx, dy)
         } else {
-            let from_center = value - settings.gaze_offset_y;
-            let gain = if from_center >= 0.0 {
-                settings.gaze_gain_up
-            } else {
-                settings.gaze_gain_down
-            };
-            from_center * gain
+            (dx * cos + dy * sin, -dx * sin + dy * cos)
         };
-        corrected.clamp(-1.0, 1.0)
-    })
+        let gain_y = if y >= 0.0 {
+            settings.gaze_gain_up
+        } else {
+            settings.gaze_gain_down
+        };
+        corrected[pair * 2] = (x * gain_x).clamp(-1.0, 1.0);
+        corrected[pair * 2 + 1] = (y * gain_y).clamp(-1.0, 1.0);
+    }
+    corrected
 }
 
 /// One eye-server sample worked through the eyelid mapping and the filters.
@@ -1833,6 +1842,98 @@ mod tests {
         }
         // Still within -1..1.
         assert_eq!(correct_gaze([1.0, 1.0, -1.0, -1.0, 0.0, 0.0], &fitted)[..4], [1.0, 1.0, -1.0, -0.45]);
+    }
+
+    #[test]
+    fn gaze_correction_without_tilt_is_unchanged_to_the_bit() {
+        // The correction as it was before gaze_roll_deg
+        let before = |angles: [f32; 6], settings: &Settings| -> [f32; 6] {
+            let eye_offsets = [settings.gaze_offset_x_left, settings.gaze_offset_x_right];
+            let eye_gains = [settings.gaze_gain_x_left, settings.gaze_gain_x_right];
+            std::array::from_fn(|i| {
+                let value = angles[i];
+                let corrected = if i % 2 == 0 {
+                    let offset = eye_offsets.get(i / 2).copied().flatten().unwrap_or(settings.gaze_offset_x);
+                    let gain = eye_gains.get(i / 2).copied().flatten().unwrap_or(settings.gaze_gain_x);
+                    (value - offset) * gain
+                } else {
+                    let from_center = value - settings.gaze_offset_y;
+                    let gain = if from_center >= 0.0 {
+                        settings.gaze_gain_up
+                    } else {
+                        settings.gaze_gain_down
+                    };
+                    from_center * gain
+                };
+                corrected.clamp(-1.0, 1.0)
+            })
+        };
+        let fitted = Settings {
+            gaze_offset_x: 0.013,
+            gaze_offset_y: -0.021,
+            gaze_gain_x: 0.93,
+            gaze_gain_up: 1.1,
+            gaze_gain_down: 0.88,
+            gaze_offset_x_left: Some(0.031),
+            gaze_gain_x_right: Some(0.9),
+            ..settings()
+        };
+        for settings in [settings(), fitted] {
+            for step in -24i32..=24 {
+                let a = step as f32 * 0.043;
+                let angles = [a, -a * 0.7, a * 0.9, a * 0.3, -a, a, 0.0, -0.0, 0.013, -0.021];
+                let angles: [f32; 6] = std::array::from_fn(|i| angles[(i + step.unsigned_abs() as usize) % 10]);
+                let now = correct_gaze(angles, &settings).map(f32::to_bits);
+                assert_eq!(now, before(angles, &settings).map(f32::to_bits), "{angles:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn gaze_correction_undoes_the_tilt_around_the_zero_point() {
+        let tilted = Settings {
+            gaze_offset_x: 0.02,
+            gaze_offset_y: -0.03,
+            gaze_roll_deg: 8.0,
+            ..settings()
+        };
+        let tan = 8f32.to_radians().tan();
+        let cos = 8f32.to_radians().cos();
+        // Looking 20° right along the tilted headset's level line: it reads higher, and comes out level and as far
+        let d = 20.0 / 45.0;
+        let angles = [0.02 + d, -0.03 + d * tan, 0.02 - d, -0.03 - d * tan, 0.02 + d, -0.03 + d * tan];
+        let corrected = correct_gaze(angles, &tilted);
+        for (value, expected) in corrected.iter().zip([d / cos, 0.0, -d / cos, 0.0, d / cos, 0.0]) {
+            assert!((value - expected).abs() < 1e-6, "{corrected:?}");
+        }
+        // Straight up along the tilted headset leans left (dx = -sinθ·dy); it comes out straight up
+        let up = 15.0 / 45.0;
+        let (sin, cos) = 8f32.to_radians().sin_cos();
+        let corrected = correct_gaze([0.02 - sin * up, -0.03 + cos * up, 0.0, 0.0, 0.0, 0.0], &tilted);
+        assert!(corrected[0].abs() < 1e-6 && (corrected[1] - up).abs() < 1e-6, "{corrected:?}");
+        // The zero point stays put, and the gains apply after the turn (up / down by the turned y)
+        let fitted = Settings {
+            gaze_gain_x: 2.0,
+            gaze_gain_up: 1.5,
+            gaze_gain_down: 0.5,
+            ..tilted.clone()
+        };
+        assert_eq!(correct_gaze([0.02, -0.03, 0.02, -0.03, 0.02, -0.03], &fitted), [0.0; 6]);
+        let corrected = correct_gaze(angles, &fitted);
+        assert!((corrected[0] - 2.0 * d / cos).abs() < 1e-6 && corrected[1].abs() < 1e-6, "{corrected:?}");
+        let corrected = correct_gaze([0.02, 0.07, 0.02, -0.13, 0.0, 0.0], &fitted);
+        assert!((corrected[1] - 1.5 * 0.1 * cos).abs() < 1e-6, "{corrected:?}");
+        assert!((corrected[3] + 0.5 * 0.1 * cos).abs() < 1e-6, "{corrected:?}");
+        // Each eye turns around its own sideways zero point; the combined gaze around the shared one
+        let per_eye = Settings {
+            gaze_offset_x_left: Some(0.05),
+            gaze_offset_x_right: Some(-0.01),
+            ..tilted
+        };
+        let corrected = correct_gaze([0.05 + d, -0.03 + d * tan, -0.01 + d, -0.03 + d * tan, 0.02, -0.03], &per_eye);
+        for (value, expected) in corrected.iter().zip([d / cos, 0.0, d / cos, 0.0, 0.0, 0.0]) {
+            assert!((value - expected).abs() < 1e-6, "{corrected:?}");
+        }
     }
 
     #[test]

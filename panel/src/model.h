@@ -90,7 +90,7 @@ private:
 
 /** The eye fit as config.json holds it (shown on the Eye fit tab even when frameeyeosc is not running). */
 struct FitInConfig {
-    bool gazeFitted = false;              ///< the zero point or a gain is not the default
+    bool gazeFitted = false;              ///< the zero point, a gain or the tilt is not the default
     bool eyeXFitted = false;              ///< each eye's own sideways zero point and gain are set
     bool lidsFitted[2] = {false, false};  ///< all four readings of that eye are set
     gaze_fit::Values values;              ///< hasLids when both eyes are fitted
@@ -112,6 +112,17 @@ FitInConfig fitInConfig(const SettingsView& view);
  * @return true if any is locked
  */
 bool fitKeysLocked(const SettingsView& view);
+
+/** The fit run by itself when the headset is put on (auto_recenter). */
+enum class AutoRecenter { Off, Center, Tilt };
+
+/**
+ * auto_recenter as written: "off", "center" or "tilt". A true / false from before it had three values reads as
+ * "tilt" / "off", and anything else as the default, "tilt".
+ * @param config the config
+ * @return the kind
+ */
+AutoRecenter autoRecenter(const ConfigFile& config);
 
 /** A gaze smoothing preset (the three One Euro values). */
 struct GazePreset {

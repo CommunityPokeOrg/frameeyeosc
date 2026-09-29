@@ -18,6 +18,8 @@ const CHECK_INTERVAL: Duration = Duration::from_millis(100);
 // Allowed gaze zero points and gains (the panel's steppers stay inside these too).
 const GAZE_OFFSET_RANGE: std::ops::RangeInclusive<f32> = -0.5..=0.5;
 const GAZE_GAIN_RANGE: std::ops::RangeInclusive<f32> = 0.5..=2.0;
+// Allowed headset tilt (degrees).
+const GAZE_ROLL_RANGE: std::ops::RangeInclusive<f32> = -20.0..=20.0;
 // A fitted eye's open readings must be at least this far above its closed one.
 const LID_FIT_MIN_RANGE: f32 = 0.1;
 // A gaze capture's target name is only echoed back, so it is kept short.
@@ -102,6 +104,9 @@ pub struct Settings {
     pub gaze_gain_x: f32,
     pub gaze_gain_up: f32,
     pub gaze_gain_down: f32,
+    /// How far the headset sits tilted, in degrees (positive: looking right reads higher). Undone around the zero
+    /// point before the gains; see `correct_gaze`.
+    pub gaze_roll_deg: f32,
     /// Degrees below straight ahead (the tracker's own, before the zero point and gains) from where the
     /// sideways gaze is held; 0 disables. See `Smoother::hold_down_x`.
     pub gaze_down_hold_x_deg: f32,
@@ -170,6 +175,7 @@ impl Default for Settings {
             gaze_gain_x: 1.0,
             gaze_gain_up: 1.0,
             gaze_gain_down: 1.0,
+            gaze_roll_deg: 0.0,
             gaze_down_hold_x_deg: 24.0,
             gaze_offset_x_left: None,
             gaze_offset_x_right: None,
@@ -254,6 +260,7 @@ impl Settings {
             self.gaze_gain_x,
             self.gaze_gain_up,
             self.gaze_gain_down,
+            self.gaze_roll_deg,
             self.gaze_down_hold_x_deg,
         ];
         let scales = [self.lid_scale_left, self.lid_scale_right];
@@ -318,6 +325,9 @@ impl Settings {
         let gains = [self.gaze_gain_x, self.gaze_gain_up, self.gaze_gain_down];
         if !gains.iter().all(|gain| GAZE_GAIN_RANGE.contains(gain)) {
             return Err("gaze_gain_x/up/down must be between 0.5 and 2".into());
+        }
+        if !GAZE_ROLL_RANGE.contains(&self.gaze_roll_deg) {
+            return Err("gaze_roll_deg must be between -20 and 20".into());
         }
         if !(0.0..=45.0).contains(&self.gaze_down_hold_x_deg) {
             return Err("gaze_down_hold_x_deg must be between 0 and 45".into());
@@ -490,6 +500,7 @@ pub fn apply_args(settings: &mut Settings, args: &Args, given: &HashSet<String>)
         gaze_gain_x,
         gaze_gain_up,
         gaze_gain_down,
+        gaze_roll_deg,
         gaze_down_hold_x_deg,
         gaze_offset_x_left,
         gaze_offset_x_right,
@@ -729,6 +740,8 @@ mod tests {
         assert!(merged(r#"{"gaze_gain_x": 0.4}"#, &[]).is_err());
         assert!(merged(r#"{"gaze_offset_x": 0.5, "gaze_gain_down": 0.5}"#, &[]).is_ok());
         assert!(merged(r#"{"gaze_down_hold_x_deg": -1}"#, &[]).is_err());
+        assert!(merged(r#"{"gaze_roll_deg": 20.5}"#, &[]).is_err());
+        assert!(merged(r#"{"gaze_roll_deg": -20}"#, &[]).is_ok());
         assert!(merged(r#"{"gaze_down_hold_x_deg": 0}"#, &[]).is_ok());
         assert!(merged(r#"{"gaze_offset_x_left": 0.6}"#, &[]).is_err());
         assert!(merged(r#"{"gaze_gain_x_right": 3}"#, &[]).is_err());
@@ -781,6 +794,10 @@ mod tests {
         let (settings, locked) = merged("{}", &["--gaze-offset-y", "-0.1", "--gaze-gain-down", "1.2"]).unwrap();
         assert_eq!((settings.gaze_offset_y, settings.gaze_gain_down), (-0.1, 1.2));
         assert_eq!(locked, ["gaze_offset_y", "gaze_gain_down"]);
+        let (settings, locked) = merged(r#"{"gaze_roll_deg": 3.5}"#, &["--gaze-roll-deg", "-6.5"]).unwrap();
+        assert_eq!(settings.gaze_roll_deg, -6.5);
+        assert_eq!(locked, ["gaze_roll_deg"]);
+        assert_eq!(merged(r#"{"gaze_roll_deg": 3.5}"#, &[]).unwrap().0.gaze_roll_deg, 3.5);
     }
 
     #[test]

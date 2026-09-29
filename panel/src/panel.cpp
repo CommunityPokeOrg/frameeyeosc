@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 #include <iterator>
 #include <ctime>
 
@@ -449,6 +450,34 @@ std::string offsetText(double value) {
     std::snprintf(text, sizeof(text), shown == 0.0 ? "%.3f (%.1f°)" : "%+.3f (%+.1f°)", shown,
                   shown * gaze_fit::kFullScaleDeg);
     return text;
+}
+
+/**
+ * The headset's tilt as shown: 1 decimal and degrees ("+6.7°"; zero without a sign).
+ * @param deg the setting
+ * @return the text
+ */
+std::string rollText(double deg) {
+    if (!std::isfinite(deg)) return "—";
+    const double shown = std::fabs(deg) < 0.05 ? 0.0 : deg;
+    char text[32];
+    std::snprintf(text, sizeof(text), shown == 0.0 ? "%.1f°" : "%+.1f°", shown);
+    return text;
+}
+
+/**
+ * What to do while a fit waits or runs.
+ * @param t texts
+ * @param mode the fit
+ * @return the words
+ */
+const char* waitingText(const UiText& t, gaze_fit::Mode mode) {
+    switch (mode) {
+        case gaze_fit::Mode::Center: return t.fitWaitingCenter;
+        case gaze_fit::Mode::Tilt: return t.fitWaitingTilt;
+        case gaze_fit::Mode::Full: break;
+    }
+    return t.fitHowTo;
 }
 
 }  // namespace
@@ -1275,17 +1304,20 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
     const bool busy = fit.phase == Phase::Waiting || fit.phase == Phase::Settling || fit.phase == Phase::Capturing ||
                       fit.phase == Phase::Reopen;
     const bool canRun = m.status.running && !anyLocked && !busy;
+    const AutoRecenter rewear = autoRecenter(m.config);
 
-    // The one button to press: fit (again); and re-centering only (also run by itself when the headset is put on,
-    // see auto_recenter.h)
+    // The one button to press: fit (again); and the re-wear fit, the kind auto_recenter runs by itself when the
+    // headset is put on (see auto_recenter.h), re-centering and the tilt when that is off
     {
         drawRowLabel(pen, t, y, kRowH, t.rowFit, t.hintFit, false);
         const double gap = 12;
-        const double smallW = 190;
+        const double smallW = std::max({190.0, pen.measure(t.fitCenterOnly, 19, true) + 32,
+                                        pen.measure(t.fitCenterTilt, 19, true) + 32});
         const double bigW = kControlW - smallW - gap;
         drawButton(pen, kControlX, y + cy, bigW, kControlH, anyFitted ? t.fitAgain : t.fitStart,
                    {PanelAction::FitStart, nullptr, 0}, canRun, true);
-        drawButton(pen, kControlX + bigW + gap, y + cy, smallW, kControlH, t.fitCenterOnly,
+        drawButton(pen, kControlX + bigW + gap, y + cy, smallW, kControlH,
+                   rewear == AutoRecenter::Center ? t.fitCenterOnly : t.fitCenterTilt,
                    {PanelAction::FitCenter, nullptr, 0}, canRun, false);
     }
     y += kRowH + kRowGap + 6;
@@ -1306,7 +1338,7 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
         switch (fit.phase) {
             case Phase::Waiting:
                 title = t.fitWaiting;
-                paragraphs.push_back(fit.mode == Mode::Center ? t.fitWaitingCenter : t.fitHowTo);
+                paragraphs.push_back(waitingText(t, fit.mode));
                 stop = true;
                 break;
             case Phase::Settling:
@@ -1318,7 +1350,7 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
                     std::snprintf(text, sizeof(text), t.fitRetryFormat, fit.attempt);
                     title += text;
                 }
-                paragraphs.push_back(fit.mode == Mode::Center ? t.fitWaitingCenter : t.fitHowTo);
+                paragraphs.push_back(waitingText(t, fit.mode));
                 break;
             case Phase::Failed:
                 error = true;
@@ -1333,12 +1365,14 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
                     check = true;
                     reset = true;
                     title = fit.phase != Phase::Done ? t.fitFitted
-                                                     : (fit.mode == Mode::Center ? t.fitDoneCenter : t.fitDone);
+                                                     : (fit.mode == Mode::Center ? t.fitDoneCenter
+                                                        : fit.mode == Mode::Tilt ? t.fitDoneTilt
+                                                                                 : t.fitDone);
                     const gaze_fit::Values& r = saved.values;
                     // One line each: the gaze center, the gaze range, and each eye's lid readings
                     if (saved.gazeFitted) {
                         std::snprintf(text, sizeof(text), t.fitGazeCenterFormat, offsetText(r.offsetX).c_str(),
-                                      offsetText(r.offsetY).c_str());
+                                      offsetText(r.offsetY).c_str(), rollText(r.rollDeg).c_str());
                         paragraphs.push_back(text);
                         std::snprintf(text, sizeof(text), t.fitGazeRangeFormat, twoDecimals(r.gainX).c_str(),
                                       twoDecimals(r.gainUp).c_str(), twoDecimals(r.gainDown).c_str());
@@ -1421,11 +1455,13 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
         const double gap = 10;
         const double detailsW = 150;
         const double pagesW = 190;
-        const auto switchW = [&](const char* on, const char* off) {
-            return std::max(pen.measure(on, 19, true), pen.measure(off, 19, true)) + 32;
+        const auto switchW = [&](std::initializer_list<const char*> labels) {
+            double widest = 0;
+            for (const char* label : labels) widest = std::max(widest, pen.measure(label, 19, true));
+            return widest + 32;
         };
-        double soundsW = switchW(t.fitSoundsOn, t.fitSoundsOff);
-        double autoW = switchW(t.autoRecenterOn, t.autoRecenterOff);
+        double soundsW = switchW({t.fitSoundsOn, t.fitSoundsOff});
+        double autoW = switchW({t.autoRecenterOff, t.autoRecenterCenter, t.autoRecenterTilt});
         const double room = kInnerRight - kInnerX - detailsW - gap * 2 - (fitDetails_ ? pagesW + gap : 0);
         if (soundsW + autoW > room) {
             const double scale = room / (soundsW + autoW);
@@ -1443,12 +1479,13 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
                        {PanelAction::SetBool, key::kFitSounds, on ? 0 : 1}, !locked, false);
         }
         x += soundsW + gap;
-        // Re-centering by itself when the headset is put on, the same kind of switch
+        // What runs by itself when the headset is put on: one button that says it and steps to the next,
+        // nothing -> re-centering -> re-centering and the tilt
         {
-            const bool on = v.flag(key::kAutoRecenter);
-            const bool locked = v.locked(key::kAutoRecenter);
-            drawButton(pen, x, y, autoW, 38, on ? t.autoRecenterOn : t.autoRecenterOff,
-                       {PanelAction::SetBool, key::kAutoRecenter, on ? 0 : 1}, !locked, false);
+            const int index = static_cast<int>(rewear);
+            const char* labels[3] = {t.autoRecenterOff, t.autoRecenterCenter, t.autoRecenterTilt};
+            drawButton(pen, x, y, autoW, 38, labels[index],
+                       {PanelAction::SetAutoRecenter, key::kAutoRecenter, (index + 1) % 3}, true, false);
         }
         // Once open: the gaze values, or the eyelid values
         if (fitDetails_) {
@@ -1510,7 +1547,18 @@ void EyePanel::drawEyeFitGaze(const Pen& pen, const UiText& t, const SettingsVie
         drawRowLabel(pen, t, y, h, t.rowDownHold, t.hintDownHold, locked);
         const std::string text = value > 0 ? formatText(t.downHoldFormat, formatSetting(key::kGazeDownHoldXDeg, value))
                                            : std::string(t.off);
-        drawStepper(pen, kControlX, y + (h - 44) / 2, 240, 44, key::kGazeDownHoldXDeg, value, text, !busy, locked);
+        drawStepper(pen, kControlX, y + (h - 44) / 2, 200, 44, key::kGazeDownHoldXDeg, value, text, !busy, locked);
+        // The headset's tilt, on the same row: its name and hint, then its stepper at the right
+        const bool tiltLocked = v.locked(key::kGazeRollDeg);
+        const double tilt = v.number(key::kGazeRollDeg);
+        const double stepperW = 160;
+        const double labelX = kControlX + 200 + 16;
+        const double labelW = kInnerRight - stepperW - 12 - labelX;
+        const char* hint = tiltLocked ? t.locked : t.hintTilt;
+        pen.text(labelX, y + h / 2 - 3, t.rowTilt, fitSize(pen, t.rowTilt, 20, 14, labelW, true), kText, true);
+        pen.text(labelX, y + h / 2 + 19, hint, fitSize(pen, hint, 15, 11, labelW, false), kTextMuted);
+        drawStepper(pen, kInnerRight - stepperW, y + (h - 44) / 2, stepperW, 44, key::kGazeRollDeg, tilt,
+                    rollText(tilt), !busy, tiltLocked);
         y += h + kRowGap;
     }
     // Each eye's own sideways zero point and gain (for --independent-eyes), across the whole width
