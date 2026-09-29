@@ -42,7 +42,8 @@ constexpr double kDefaultIpdM = 0.063;
 constexpr double kMinUsableShare = 0.6;
 /** ...and there are at least this many (about 0.8 s at 15 a second)... */
 constexpr int kMinSamplesFloor = 12;
-/** ...or, from a frameeyeosc that does not say how many came in (before 0.5.3), at least this many... */
+/** ...but never more than this (0.5.2's fixed count, so the fit is no stricter at the usual rates), which is also
+ *  the count from a frameeyeosc that does not say how many came in (before 0.5.3)... */
 constexpr int kMinSamples = 45;
 /** ...and its gaze spreads no more than this (on the -1..1 scale; 0.06 is about 2.7°). */
 constexpr double kMaxSpread = 0.06;
@@ -122,8 +123,8 @@ struct Measured {
 };
 
 /**
- * How many usable samples a capture needs: kMinUsableShare of those that came in, at least kMinSamplesFloor
- * (kMinSamples if frameeyeosc did not say how many came in).
+ * How many usable samples a capture needs: kMinUsableShare of those that came in, at least kMinSamplesFloor and at
+ * most kMinSamples (kMinSamples if frameeyeosc did not say how many came in).
  * @param measured the capture
  * @return the count
  */

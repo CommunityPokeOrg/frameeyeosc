@@ -75,7 +75,8 @@ Point pointAt(Mode mode, int index) {
 
 int samplesNeeded(const Measured& measured) {
     if (measured.received <= 0) return kMinSamples;
-    return std::max(kMinSamplesFloor, static_cast<int>(std::ceil(kMinUsableShare * measured.received - 1e-9)));
+    const int share = static_cast<int>(std::ceil(kMinUsableShare * measured.received - 1e-9));
+    return std::min(kMinSamples, std::max(kMinSamplesFloor, share));
 }
 
 std::string tryText(Point point, int attempt, const Measured& measured, const Measured& center, const char* outcome) {

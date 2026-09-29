@@ -888,28 +888,58 @@ impl Target {
     }
 }
 
-/// Whether sending works, so a failure (no network yet, say) is logged once when it starts and once
-/// when it ends, and never stops the process.
+// At most one "failed" / "works again" pair of lines this often, so a flapping link can't log a line per packet.
+const SEND_LOG_COOLDOWN: Duration = Duration::from_secs(5);
+
+/// Whether sending works, so a failure (no network yet, say) is logged when it starts and when it
+/// ends, and never stops the process.
 #[derive(Default)]
 struct SendHealth {
     failing: Option<String>,
+    // The current failure was logged (so its end is too).
+    logged: bool,
+    // When the last "failed" line went out, and the changes not logged since.
+    last_logged: Option<Instant>,
+    quiet: u32,
 }
 
 impl SendHealth {
-    /// Note how one send went; returns the line to log, if the state changed. "Connection refused"
-    /// (nothing listening on the PC, e.g. VRChat closed) is neither: it comes back on every other
-    /// packet and is not worth a line.
-    fn record(&mut self, addr: SocketAddr, result: &io::Result<usize>) -> Option<String> {
+    /// Note how one send went; returns the line to log, if any. "Connection refused" (nothing
+    /// listening on the PC, e.g. VRChat closed) is neither a failure nor a recovery: it comes back
+    /// on every other packet.
+    fn record(&mut self, now: Instant, addr: SocketAddr, result: &io::Result<usize>) -> Option<String> {
         match result {
             Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => None,
             Err(error) => {
                 let reason = error.to_string();
-                (self.failing.as_ref() != Some(&reason)).then(|| {
+                let changed = self.failing.as_ref() != Some(&reason);
+                if changed {
                     self.failing = Some(reason.clone());
-                    format!("Sending OSC to {addr} failed ({reason}); retrying with every sample")
-                })
+                    self.logged = false;
+                }
+                if self.logged {
+                    return None;
+                }
+                if self.last_logged.is_some_and(|last| now.duration_since(last) < SEND_LOG_COOLDOWN) {
+                    self.quiet += u32::from(changed);
+                    return None;
+                }
+                self.logged = true;
+                self.last_logged = Some(now);
+                let quiet = std::mem::take(&mut self.quiet);
+                let note = if quiet > 0 { format!(" ({quiet} more changes in the last few seconds not logged)") } else { String::new() };
+                Some(format!("Sending OSC to {addr} failed ({reason}); retrying with every sample{note}"))
             }
-            Ok(_) => self.failing.take().map(|_| format!("Sending OSC to {addr} works again")),
+            Ok(_) => {
+                self.failing.take()?;
+                // Only the end of a failure that was logged; the others are counted
+                if std::mem::take(&mut self.logged) {
+                    Some(format!("Sending OSC to {addr} works again"))
+                } else {
+                    self.quiet += 1;
+                    None
+                }
+            }
         }
     }
 }
@@ -920,8 +950,10 @@ struct Output {
     socket: Option<(UdpSocket, SocketAddr)>,
     last_resolve: Option<Instant>,
     health: SendHealth,
-    // Why the socket to the target could not be set up, so it is logged once per reason.
+    // Why the socket to the target could not be set up, or the host could not be looked up, so each
+    // is logged once per reason.
     connect_error: Option<String>,
+    resolve_error: Option<String>,
 }
 
 impl Output {
@@ -932,6 +964,7 @@ impl Output {
             last_resolve: None,
             health: SendHealth::default(),
             connect_error: None,
+            resolve_error: None,
         }
     }
 
@@ -956,9 +989,18 @@ impl Output {
         self.last_resolve = Some(Instant::now());
         let wanted = match &self.target {
             Target::Fixed { host, port } => match (host.as_str(), *port).to_socket_addrs() {
-                Ok(mut addrs) => addrs.next(),
+                Ok(mut addrs) => {
+                    if self.resolve_error.take().is_some() {
+                        eprintln!("Resolved {host} again");
+                    }
+                    addrs.next()
+                }
                 Err(error) => {
-                    eprintln!("Could not resolve {host}: {error}; retrying");
+                    let reason = error.to_string();
+                    if self.resolve_error.as_ref() != Some(&reason) {
+                        eprintln!("Could not resolve {host}: {reason}; retrying every {} s", RESOLVE_INTERVAL.as_secs());
+                        self.resolve_error = Some(reason);
+                    }
                     None
                 }
             },
@@ -1005,7 +1047,7 @@ impl Output {
         };
         let packet = OscPacket::Message(OscMessage { addr, args });
         let result = socket.send(&encoder::encode(&packet)?);
-        if let Some(line) = self.health.record(*target, &result) {
+        if let Some(line) = self.health.record(Instant::now(), *target, &result) {
             eprintln!("{line}");
         }
         Ok(())
@@ -1470,7 +1512,10 @@ impl Bridge {
             target_mode: if settings.host == "auto" { "auto" } else { "fixed" },
             target: self.output.addr().map(|addr| addr.to_string()),
             rate: per_second(&self.sent),
-            tracker_rate: per_second(&self.received),
+            tracker_rate: self
+                .active_since
+                .is_some_and(|since| since.elapsed() >= RATE_WINDOW)
+                .then(|| per_second(&self.received)),
             tracking: self.active_since.is_some(),
             raw: self.latest.as_ref().map(|sample| RawValues {
                 openness: status::round(sample.openness),
@@ -2011,18 +2056,31 @@ mod tests {
         let addr: SocketAddr = "192.0.2.1:9000".parse().unwrap();
         let mut health = SendHealth::default();
         let unreachable = || Err(io::Error::from(io::ErrorKind::NetworkUnreachable));
-        assert_eq!(health.record(addr, &Ok(20)), None);
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        assert_eq!(health.record(at(0), addr, &Ok(20)), None);
         // Wi-Fi not up yet: one line when it starts failing, then nothing while it keeps failing...
-        let line = health.record(addr, &unreachable()).unwrap();
+        let line = health.record(at(10), addr, &unreachable()).unwrap();
         assert!(line.starts_with("Sending OSC to 192.0.2.1:9000 failed (") && line.ends_with("retrying with every sample"), "{line}");
-        assert_eq!(health.record(addr, &unreachable()), None);
-        // ...a new reason is worth a line...
-        assert!(health.record(addr, &Err(io::Error::from(io::ErrorKind::HostUnreachable))).is_some());
+        assert_eq!(health.record(at(20), addr, &unreachable()), None);
         // ..."refused" (nothing listening) is neither a failure nor a recovery...
-        assert_eq!(health.record(addr, &Err(io::Error::from(io::ErrorKind::ConnectionRefused))), None);
+        assert_eq!(health.record(at(30), addr, &Err(io::Error::from(io::ErrorKind::ConnectionRefused))), None);
         // ...and one line when it works again.
-        assert_eq!(health.record(addr, &Ok(20)).as_deref(), Some("Sending OSC to 192.0.2.1:9000 works again"));
-        assert_eq!(health.record(addr, &Ok(20)), None);
+        assert_eq!(health.record(at(40), addr, &Ok(20)).as_deref(), Some("Sending OSC to 192.0.2.1:9000 works again"));
+        assert_eq!(health.record(at(50), addr, &Ok(20)), None);
+        // A flapping link: within 5 s of that pair nothing more is logged, however often it flips...
+        for i in 0..50 {
+            assert_eq!(health.record(at(100 + i * 20), addr, &unreachable()), None);
+            assert_eq!(health.record(at(110 + i * 20), addr, &Ok(20)), None);
+        }
+        // ...then a failure that lasts is logged, with how many changes were not...
+        let line = health.record(at(5100), addr, &Err(io::Error::from(io::ErrorKind::HostUnreachable))).unwrap();
+        assert!(line.ends_with("(100 more changes in the last few seconds not logged)"), "{line}");
+        // ...and so is its end.
+        assert!(health.record(at(5200), addr, &Ok(20)).is_some());
+        // A failure that began quietly is logged once the 5 s are over, if it still lasts
+        assert_eq!(health.record(at(5300), addr, &unreachable()), None);
+        assert!(health.record(at(10200), addr, &unreachable()).is_some());
 
         // A real send to a port nothing listens on: never an error, however often.
         let listener = UdpSocket::bind("127.0.0.1:0").unwrap();

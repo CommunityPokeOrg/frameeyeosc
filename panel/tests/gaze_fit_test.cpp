@@ -224,13 +224,16 @@ void testCenterAndUsable() {
     slow.samples = 10;
     slow.received = 10;
     CHECK(samplesNeeded(slow) == kMinSamplesFloor && !usable(slow));
-    // At 90 a second, 60% of the 153 that came in
+    // At 90 a second no stricter than 0.5.2: 45 of the 153 that came in (60% would be 92)
     Measured fast = steady(0, 0);
     fast.received = 153;
-    fast.samples = 91;
-    CHECK(samplesNeeded(fast) == 92 && !usable(fast));
-    fast.samples = 92;
+    fast.samples = 44;
+    CHECK(samplesNeeded(fast) == kMinSamples && !usable(fast));
+    fast.samples = 45;
     CHECK(usable(fast));
+    // In between, 60%: 50 came in, 30 needed
+    fast.received = 50;
+    CHECK(samplesNeeded(fast) == 30);
     Measured shaky = steady(0, 0);
     shaky.spread = kMaxSpread + 0.001;
     CHECK(!usable(shaky));

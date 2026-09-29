@@ -1,9 +1,9 @@
 # Changelog
 
-## 0.5.3 (unreleased)
+## 0.5.3 (2026-09-29)
 
-- The eye fit works with a slower eye tracker. A Frame was seen delivering only 15 samples a second (instead of 90 or more), so every dot came back with 26 samples and failed the fixed minimum of 45. A measurement is now judged against the samples that came in: at least 60% of them usable (eyes open, gaze reliable), and at least 12. The spread limit is unchanged. frameeyeosc reports how many came in and the tracker's rate with each measurement, and the panel shows them when a dot fails ("26 of 26 samples usable at 15 Hz (needs 16)") and in the log.
-- The panel's left column shows how many samples a second the eye tracker delivers ("Eye data 90 /s"), marked "low" in red below 60. frameeyeosc reports it in the status file (`tracker_rate`).
+- The eye fit works with a slower eye tracker. A Frame was seen delivering only 15 samples a second (instead of 90 or more), so every dot came back with 26 samples and failed the fixed minimum of 45. A measurement is now judged against the samples that came in: at least 60% of them usable (eyes open, gaze reliable), at least 12 and never more than the 45 needed before, so the usual rates are judged as in 0.5.2. The spread limit is unchanged. frameeyeosc reports how many came in and the tracker's rate with each measurement, and the panel shows them when a dot fails ("10 of 26 samples usable at 15 Hz (needs 16)") and in the log.
+- The panel's left column shows how many samples a second the eye tracker delivers ("Eye data 90 /s"), marked "low" in red below 60. frameeyeosc reports it in the status file (`tracker_rate`, from a second after tracking starts).
 - `EyeTrackingActive` can be sent as a float (1.0 / 0.0) or not at all, for avatars that declare it as a float and stop tracking on a bool (for example Fermata's face tracking setups): "EyeTrackingActive type" on the Basic tab, `eye_tracking_active` (`"bool"` by default, `"float"`, `"off"`), `--eye-tracking-active`. "Off" also skips the one-time "not active" on pausing or losing tracking. ETVR mode never sends it, as before.
 - frameeyeosc no longer exits when it can't send, for example with a fixed target PC while Wi-Fi isn't up yet after boot ("Network is unreachable"). It logs once when sending starts failing, with the reason, and once when it works again, and keeps trying. Eye tracking, the status file and the eye fit keep working meanwhile. Before, it exited and systemd restarted it every 5 seconds.
 
