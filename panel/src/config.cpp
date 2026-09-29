@@ -144,6 +144,7 @@ const std::vector<SettingSpec>& settingSpecs() {
         {key::kHost, SettingType::String, 0, "auto", 0, 0, 0, 0},
         {key::kPort, SettingType::NullableInteger, 0, "", 1, 65535, 1, 0},
         {key::kPrefix, SettingType::String, 0, "/FT", 0, 0, 0, 0},
+        {key::kEyeTrackingActive, SettingType::String, 0, "bool", 0, 0, 0, 0},
         {key::kRaw, SettingType::Bool, 0, "", 0, 1, 1, 0},
         {key::kGazeMinCutoff, SettingType::Number, 0.4, "", 0.05, 5.0, 0.05, 2},
         {key::kGazeBeta, SettingType::Number, 0.8, "", 0.0, 10.0, 0.1, 2},

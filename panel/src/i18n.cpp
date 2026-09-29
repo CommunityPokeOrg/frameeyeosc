@@ -66,6 +66,9 @@ UiText makeJapanese() {
     t.hintOutput = "VRCFT へは ETVR 形式";
     t.outputVrchat = "VRChat に直接";
     t.outputEtvr = "VRCFaceTracking（ETVR）";
+    t.rowActiveType = "EyeTrackingActive の型";
+    t.hintActiveType = "Fermata などのアバターは Float";
+    t.activeOff = "送らない";
     t.rowTarget = "送り先の PC";
     t.hintTarget = "自動 = Steam Link の相手";
     t.targetAuto = "自動";
@@ -359,6 +362,9 @@ UiText makeEnglish() {
     t.hintOutput = "VRCFT gets the ETVR format";
     t.outputVrchat = "VRChat directly";
     t.outputEtvr = "VRCFaceTracking (ETVR)";
+    t.rowActiveType = "EyeTrackingActive type";
+    t.hintActiveType = "Some avatars (e.g. Fermata) need Float";
+    t.activeOff = "Off";
     t.rowTarget = "Target PC";
     t.hintTarget = "Auto = the Steam Link PC";
     t.targetAuto = "Auto";

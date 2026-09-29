@@ -1087,6 +1087,12 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
             openPrompt = output;
             break;
         }
+        case PanelAction::SetActiveType: {
+            if (hit.arg < 0 || hit.arg > 2) return;
+            const std::string type = kActiveTypes[hit.arg];
+            change = [type](JsonValue& root) { root.set(key::kEyeTrackingActive, JsonValue::makeString(type)); };
+            break;
+        }
         case PanelAction::Preset: {
             if (hit.arg < 0 || hit.arg > 2) return;
             const GazePreset preset = gazePresets()[hit.arg];

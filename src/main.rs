@@ -8,7 +8,7 @@ mod status;
 
 use capture::{Capture, CaptureResult, CaptureState};
 use clap::{CommandFactory, FromArgMatches, Parser};
-use config::{Config, LidFit, OutputKind, Reload, Settings};
+use config::{ActiveType, Config, LidFit, OutputKind, Reload, Settings};
 use memmap2::{MmapMut, MmapOptions};
 use rosc::{OscMessage, OscPacket, OscType, encoder};
 use status::{CalibrationStatus, RawValues, SentValues, Status, StatusFile};
@@ -120,6 +120,10 @@ struct Args {
     /// What to send: VRChat avatar parameters, or VRCFaceTracking's ETVR Tracking Module format
     #[arg(long, value_enum, default_value_t = OutputKind::Vrchat)]
     output: OutputKind,
+    /// How EyeTrackingActive is sent in VRChat mode: a bool, a float (1.0 / 0.0; some avatars, e.g.
+    /// Fermata's, need it), or not at all
+    #[arg(long, value_enum, default_value_t = ActiveType::Bool)]
+    eye_tracking_active: ActiveType,
     /// OSC destination as HOST:PORT, or "auto" for the PC that Steam Link is streaming from
     #[arg(long, default_value = "auto")]
     target: String,
@@ -1282,7 +1286,7 @@ fn osc_messages(settings: &Settings, sample: &Sample) -> Vec<(String, OscType)> 
     ];
     let mut messages = Vec::with_capacity(9);
     if settings.output == OutputKind::Vrchat {
-        messages.push((format!("{prefix}/EyeTrackingActive"), OscType::Bool(true)));
+        messages.extend(active_message(settings, true));
         values.extend([("EyeX", x), ("EyeY", y)]);
     }
     messages.extend(
@@ -1293,18 +1297,30 @@ fn osc_messages(settings: &Settings, sample: &Sample) -> Vec<(String, OscType)> 
     messages
 }
 
-fn send_inactive(output: &mut Output, prefix: &str) -> Result<(), Box<dyn Error>> {
-    output.send(
-        format!("/avatar/parameters{prefix}/EyeTrackingActive"),
-        vec![OscType::Bool(false)],
-    )
+/// `EyeTrackingActive` as the settings want it sent (a bool, a float, or nothing).
+fn active_message(settings: &Settings, active: bool) -> Option<(String, OscType)> {
+    let value = match settings.eye_tracking_active {
+        ActiveType::Bool => OscType::Bool(active),
+        ActiveType::Float => OscType::Float(if active { 1.0 } else { 0.0 }),
+        ActiveType::Off => return None,
+    };
+    Some((format!("/avatar/parameters{}/EyeTrackingActive", settings.prefix), value))
+}
+
+/// The one-time "not active" on pausing, switching away or losing tracking (nothing with "off").
+fn send_inactive(output: &mut Output, settings: &Settings) -> Result<(), Box<dyn Error>> {
+    match active_message(settings, false) {
+        Some((addr, value)) => output.send(addr, vec![value]),
+        None => Ok(()),
+    }
 }
 
 /// Where VRChat is being told that eye tracking is active, if anywhere. When this changes,
 /// the old destination gets a final "inactive" so the avatar's eyes do not freeze.
-fn vrchat_stream(settings: &Settings) -> Option<(&str, u16, &str)> {
-    (settings.sending && settings.output == OutputKind::Vrchat)
-        .then(|| (settings.host.as_str(), settings.port(), settings.prefix.as_str()))
+fn vrchat_stream(settings: &Settings) -> Option<(&str, u16, &str, ActiveType)> {
+    (settings.sending && settings.output == OutputKind::Vrchat).then(|| {
+        (settings.host.as_str(), settings.port(), settings.prefix.as_str(), settings.eye_tracking_active)
+    })
 }
 
 /// Why the samples stopped, for the log line when tracking is lost.
@@ -1353,7 +1369,7 @@ impl Bridge {
         }
         let stream = vrchat_stream(&self.settings);
         if self.active_since.is_some() && stream.is_some() && stream != vrchat_stream(&settings) {
-            send_inactive(&mut self.output, &self.settings.prefix)?;
+            send_inactive(&mut self.output, &self.settings)?;
         }
         self.output.set_target(Target::of(&settings));
         self.smoother.configure(&settings);
@@ -1433,7 +1449,7 @@ impl Bridge {
     fn on_lost(&mut self, reason: &str) -> Result<(), Box<dyn Error>> {
         eprintln!("Eye tracking stopped ({reason})");
         if vrchat_stream(&self.settings).is_some() {
-            send_inactive(&mut self.output, &self.settings.prefix)?;
+            send_inactive(&mut self.output, &self.settings)?;
         }
         self.smoother.reset();
         self.active_since = None;
@@ -2233,6 +2249,68 @@ mod tests {
         );
         assert_eq!(messages[0].1, OscType::Bool(true));
         assert_eq!(messages[6].1, OscType::Float(0.75));
+    }
+
+    #[test]
+    fn eye_tracking_active_goes_as_a_bool_a_float_or_not_at_all() {
+        let with = |kind| Settings {
+            eye_tracking_active: kind,
+            ..settings()
+        };
+        let active = "/avatar/parameters/FT/EyeTrackingActive";
+        // While sending
+        let bool_messages = sent(&with(ActiveType::Bool));
+        assert_eq!(bool_messages[0], (active.to_owned(), OscType::Bool(true)));
+        let float_messages = sent(&with(ActiveType::Float));
+        assert_eq!(float_messages[0], (active.to_owned(), OscType::Float(1.0)));
+        assert_eq!(float_messages.len(), 9);
+        let off_messages = sent(&with(ActiveType::Off));
+        assert_eq!(off_messages.len(), 8);
+        assert!(off_messages.iter().all(|(addr, _)| addr != active));
+        // The eye values are the same in every mode
+        assert_eq!(bool_messages[1..], float_messages[1..]);
+        assert_eq!(bool_messages[1..], off_messages[..]);
+        // The one-time "not active" on pausing or losing tracking
+        assert_eq!(active_message(&with(ActiveType::Bool), false), Some((active.to_owned(), OscType::Bool(false))));
+        assert_eq!(active_message(&with(ActiveType::Float), false), Some((active.to_owned(), OscType::Float(0.0))));
+        assert_eq!(active_message(&with(ActiveType::Off), false), None);
+        // Changing the type ends the old stream (it gets its own last "not active")
+        assert_ne!(vrchat_stream(&with(ActiveType::Bool)), vrchat_stream(&with(ActiveType::Float)));
+        // ETVR never gets it
+        let etvr = Settings {
+            output: OutputKind::Etvr,
+            ..with(ActiveType::Float)
+        };
+        assert!(sent(&etvr).iter().all(|(addr, _)| !addr.ends_with("EyeTrackingActive")));
+        assert!(vrchat_stream(&etvr).is_none());
+    }
+
+    #[test]
+    fn a_pause_or_lost_tracking_sends_not_active_only_when_asked() {
+        // A real socket: pausing with "float" sends 0.0, with "off" nothing
+        let listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener.set_read_timeout(Some(Duration::from_millis(500))).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut output = Output::new(Target::Fixed { host: "127.0.0.1".into(), port });
+        output.refresh();
+        let float = Settings {
+            eye_tracking_active: ActiveType::Float,
+            ..settings()
+        };
+        send_inactive(&mut output, &float).unwrap();
+        let mut buffer = [0u8; 256];
+        let size = listener.recv(&mut buffer).unwrap();
+        let (_, packet) = rosc::decoder::decode_udp(&buffer[..size]).unwrap();
+        let OscPacket::Message(message) = packet else { panic!("not a message") };
+        assert_eq!(message.addr, "/avatar/parameters/FT/EyeTrackingActive");
+        assert_eq!(message.args, [OscType::Float(0.0)]);
+        let off = Settings {
+            eye_tracking_active: ActiveType::Off,
+            ..settings()
+        };
+        send_inactive(&mut output, &off).unwrap();
+        listener.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+        assert!(listener.recv(&mut buffer).is_err());
     }
 
     #[test]

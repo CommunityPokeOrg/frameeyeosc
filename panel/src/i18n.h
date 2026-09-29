@@ -77,6 +77,9 @@ struct UiText {
     const char* hintOutput;
     const char* outputVrchat;
     const char* outputEtvr;
+    const char* rowActiveType;      ///< how EyeTrackingActive is sent
+    const char* hintActiveType;
+    const char* activeOff;
     const char* rowTarget;
     const char* hintTarget;
     const char* targetAuto;

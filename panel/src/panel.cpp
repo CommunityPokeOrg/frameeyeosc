@@ -1049,6 +1049,23 @@ void EyePanel::drawBasic(const Pen& pen, const UiText& t, const PanelModel& m, c
                       output == kOutputEtvr ? 1 : (output == kOutputVrchat ? 0 : -1), 19, locked);
     }
     y += kRowH + kRowGap;
+    // How EyeTrackingActive goes out (VRChat only: greyed out for ETVR, which never gets it)
+    {
+        const bool locked = v.locked(key::kEyeTrackingActive);
+        const bool vrchat = v.text(key::kOutput) != kOutputEtvr;
+        const std::string type = v.text(key::kEyeTrackingActive);
+        int selected = -1;
+        for (int i = 0; i < 3; ++i) {
+            if (type == kActiveTypes[i]) selected = i;
+        }
+        drawRowLabel(pen, t, y, kRowH, t.rowActiveType, t.hintActiveType, locked);
+        drawSegmented(pen, kControlX, y + cy, kControlW, kControlH,
+                      {{"Bool", {PanelAction::SetActiveType, key::kEyeTrackingActive, 0}},
+                       {"Float", {PanelAction::SetActiveType, key::kEyeTrackingActive, 1}},
+                       {t.activeOff, {PanelAction::SetActiveType, key::kEyeTrackingActive, 2}}},
+                      selected, 19, locked || !vrchat);
+    }
+    y += kRowH + kRowGap;
     // Target PC: automatic, fixed to the PC frameeyeosc sends to now, or typed on the keypad; any host set by hand
     // shows in the third choice
     {
@@ -1107,7 +1124,7 @@ void EyePanel::drawBasic(const Pen& pen, const UiText& t, const PanelModel& m, c
                        {t.off, {PanelAction::AutostartOff, nullptr, 0}, usable}},
                       a == Autostart::Enabled ? 0 : (a == Autostart::Disabled ? 1 : -1), 20);
     }
-    y += kRowH + kRowGap + 8;
+    y += kRowH + kRowGap + 2;
     // Reset all / quit (both ask for a second press)
     for (int i = 0; i < 2; ++i) {
         const bool isQuit = i == 1;
@@ -1123,7 +1140,7 @@ void EyePanel::drawBasic(const Pen& pen, const UiText& t, const PanelModel& m, c
         textCentered(pen, x + w / 2, centerBaseline(y, kControlH, size), label, size, armed ? kOnAccent : kText, true);
         addButton(hit, x, y, w, kControlH);
     }
-    y += kControlH + 34;
+    y += kControlH + 28;
     const std::vector<std::string> lines = wrapText(pen, t.footer, 15, false, kInnerRight - kInnerX, 2);
     for (size_t i = 0; i < lines.size(); ++i) pen.text(kInnerX, y + i * 22, lines[i], 15, kTextMuted);
 }

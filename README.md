@@ -23,7 +23,7 @@ This is a fork of [konsti219/frameeyeosc](https://github.com/konsti219/frameeyeo
 
 - A Steam Frame with Developer Mode on and SSH access (Settings > System > Developer Mode, then set a password under Developer). Choose a strong password: with SSH on, anyone on your network who knows it can log in to the headset.
 - PC VRChat streamed with Steam Link, OSC enabled in VRChat (Action Menu > Options > OSC > Enabled).
-- An avatar with VRCFaceTracking eye parameters (`FT/v2/EyeLeftX`, `EyeLidLeft`, ...) as floats. Avatars that pack parameters into binary bits are not supported when sending to VRChat directly.
+- An avatar with VRCFaceTracking eye parameters (`FT/v2/EyeLeftX`, `EyeLidLeft`, ...) as floats. Avatars that pack parameters into binary bits are not supported when sending to VRChat directly. frameeyeosc also sends `EyeTrackingActive` as a bool; some avatars (for example Fermata's face tracking setups) declare it as a float and stop tracking on a bool. For those, choose "Float" under "EyeTrackingActive type" on the Basic tab (`eye_tracking_active`), or "Off" to not send it at all.
 - For the VRCFaceTracking (ETVR) mode: VRCFaceTracking on the PC with the ETVR Tracking Module.
 
 ## Install
@@ -96,11 +96,12 @@ Settings are in `~/.config/frameeyeosc/config.json`. The panel writes it, and yo
 
 | Key | Option | Default | What it does |
 |---|---|---|---|
-| `sending` | | `true` | `false` pauses sending (in VRChat mode `EyeTrackingActive=false` is sent once) |
+| `sending` | | `true` | `false` pauses sending (in VRChat mode `EyeTrackingActive=false` is sent once, as `eye_tracking_active` says) |
 | `output` | `--output` | `"vrchat"` | `"vrchat"` sends avatar parameters to VRChat, `"etvr"` sends to VRCFaceTracking's ETVR Tracking Module |
 | `host` | `--target` | `"auto"` | `"auto"` = the PC Steam Link is streaming from, else an IP address or host name without a port |
 | `port` | `--port`, `--target` | `null` | `null` = 9000 for `vrchat`, 8889 for `etvr` |
 | `prefix` | `--prefix` | `"/FT"` | Parameter name prefix; `""` for none |
+| `eye_tracking_active` | `--eye-tracking-active` | `"bool"` | How `EyeTrackingActive` is sent in VRChat mode: `"bool"` (true / false), `"float"` (1.0 / 0.0; some avatars, e.g. Fermata's, need it) or `"off"` (never, not even the one-time "not active" on pausing or losing tracking). ETVR mode never sends it |
 | `raw` | `--raw` | `false` | No smoothing, and none of the time-based steps (glitch removal, gaze holding, the quality check, blink hold, holding the sideways gaze far down) |
 | `gaze_min_cutoff` | `--gaze-min-cutoff` | `0.4` | Lower = steadier gaze at rest, more lag |
 | `gaze_beta` | `--gaze-beta` | `0.8` | Higher = follows fast eye movements with less lag |

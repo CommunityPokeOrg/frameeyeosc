@@ -23,6 +23,7 @@ enum class PanelAction {
     FixHost,           ///< host = the IP frameeyeosc sends to now
     PortDefault,       ///< port = null
     SetOutput,         ///< output = arg (0 vrchat, 1 etvr), port = null, then ask about the recommendation
+    SetActiveType,     ///< eye_tracking_active = kActiveTypes[arg] (bool, float, off)
     Preset,            ///< gaze smoothing preset arg (0 light, 1 medium, 2 strong)
     NumberOn,          ///< key = its default, or its onNumber if that is off (for numbers where 0 means off)
     NumberOff,         ///< key = 0
