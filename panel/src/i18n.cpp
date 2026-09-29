@@ -67,7 +67,7 @@ UiText makeJapanese() {
     t.outputVrchat = "VRChat に直接";
     t.outputEtvr = "VRCFaceTracking（ETVR）";
     t.rowActiveType = "EyeTrackingActive の型";
-    t.hintActiveType = "Fermata などのアバターは Float";
+    t.hintActiveType = "アバターによっては Float が必要";
     t.activeOff = "送らない";
     t.rowTarget = "送り先の PC";
     t.hintTarget = "自動 = Steam Link の相手";
@@ -363,7 +363,7 @@ UiText makeEnglish() {
     t.outputVrchat = "VRChat directly";
     t.outputEtvr = "VRCFaceTracking (ETVR)";
     t.rowActiveType = "EyeTrackingActive type";
-    t.hintActiveType = "Some avatars (e.g. Fermata) need Float";
+    t.hintActiveType = "Some avatars need Float";
     t.activeOff = "Off";
     t.rowTarget = "Target PC";
     t.hintTarget = "Auto = the Steam Link PC";

@@ -120,8 +120,8 @@ struct Args {
     /// What to send: VRChat avatar parameters, or VRCFaceTracking's ETVR Tracking Module format
     #[arg(long, value_enum, default_value_t = OutputKind::Vrchat)]
     output: OutputKind,
-    /// How EyeTrackingActive is sent in VRChat mode: a bool, a float (1.0 / 0.0; some avatars, e.g.
-    /// Fermata's, need it), or not at all
+    /// How EyeTrackingActive is sent in VRChat mode: a bool, a float (1.0 / 0.0; some avatars
+    /// need it), or not at all
     #[arg(long, value_enum, default_value_t = ActiveType::Bool)]
     eye_tracking_active: ActiveType,
     /// OSC destination as HOST:PORT, or "auto" for the PC that Steam Link is streaming from

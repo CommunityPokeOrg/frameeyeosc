@@ -49,7 +49,7 @@ impl OutputKind {
 }
 
 /// How `EyeTrackingActive` goes out in VRChat mode (VRCFaceTracking's templates use a bool; some
-/// avatars, e.g. Fermata's face tracking setups, declare it as a float and stop on a bool).
+/// avatars declare it as a float and stop on a bool).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum ActiveType {
