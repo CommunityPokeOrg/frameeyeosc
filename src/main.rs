@@ -8,7 +8,7 @@ mod status;
 
 use capture::{Capture, CaptureResult, CaptureState};
 use clap::{CommandFactory, FromArgMatches, Parser};
-use config::{Config, LidFit, OutputKind, Reload, Settings};
+use config::{ActiveType, Config, LidFit, OutputKind, Reload, Settings};
 use memmap2::{MmapMut, MmapOptions};
 use rosc::{OscMessage, OscPacket, OscType, encoder};
 use status::{CalibrationStatus, RawValues, SentValues, Status, StatusFile};
@@ -120,6 +120,10 @@ struct Args {
     /// What to send: VRChat avatar parameters, or VRCFaceTracking's ETVR Tracking Module format
     #[arg(long, value_enum, default_value_t = OutputKind::Vrchat)]
     output: OutputKind,
+    /// How EyeTrackingActive is sent in VRChat mode: a bool, a float (1.0 / 0.0; some avatars, e.g.
+    /// Fermata's, need it), or not at all
+    #[arg(long, value_enum, default_value_t = ActiveType::Bool)]
+    eye_tracking_active: ActiveType,
     /// OSC destination as HOST:PORT, or "auto" for the PC that Steam Link is streaming from
     #[arg(long, default_value = "auto")]
     target: String,
@@ -884,11 +888,72 @@ impl Target {
     }
 }
 
+// At most one "failed" / "works again" pair of lines this often, so a flapping link can't log a line per packet.
+const SEND_LOG_COOLDOWN: Duration = Duration::from_secs(5);
+
+/// Whether sending works, so a failure (no network yet, say) is logged when it starts and when it
+/// ends, and never stops the process.
+#[derive(Default)]
+struct SendHealth {
+    failing: Option<String>,
+    // The current failure was logged (so its end is too).
+    logged: bool,
+    // When the last "failed" line went out, and the changes not logged since.
+    last_logged: Option<Instant>,
+    quiet: u32,
+}
+
+impl SendHealth {
+    /// Note how one send went; returns the line to log, if any. "Connection refused" (nothing
+    /// listening on the PC, e.g. VRChat closed) is neither a failure nor a recovery: it comes back
+    /// on every other packet.
+    fn record(&mut self, now: Instant, addr: SocketAddr, result: &io::Result<usize>) -> Option<String> {
+        match result {
+            Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => None,
+            Err(error) => {
+                let reason = error.to_string();
+                let changed = self.failing.as_ref() != Some(&reason);
+                if changed {
+                    self.failing = Some(reason.clone());
+                    self.logged = false;
+                }
+                if self.logged {
+                    return None;
+                }
+                if self.last_logged.is_some_and(|last| now.duration_since(last) < SEND_LOG_COOLDOWN) {
+                    self.quiet += u32::from(changed);
+                    return None;
+                }
+                self.logged = true;
+                self.last_logged = Some(now);
+                let quiet = std::mem::take(&mut self.quiet);
+                let note = if quiet > 0 { format!(" ({quiet} more changes in the last few seconds not logged)") } else { String::new() };
+                Some(format!("Sending OSC to {addr} failed ({reason}); retrying with every sample{note}"))
+            }
+            Ok(_) => {
+                self.failing.take()?;
+                // Only the end of a failure that was logged; the others are counted
+                if std::mem::take(&mut self.logged) {
+                    Some(format!("Sending OSC to {addr} works again"))
+                } else {
+                    self.quiet += 1;
+                    None
+                }
+            }
+        }
+    }
+}
+
 /// UDP sender that re-resolves its target periodically and reconnects when it changes.
 struct Output {
     target: Target,
     socket: Option<(UdpSocket, SocketAddr)>,
     last_resolve: Option<Instant>,
+    health: SendHealth,
+    // Why the socket to the target could not be set up, or the host could not be looked up, so each
+    // is logged once per reason.
+    connect_error: Option<String>,
+    resolve_error: Option<String>,
 }
 
 impl Output {
@@ -897,6 +962,9 @@ impl Output {
             target,
             socket: None,
             last_resolve: None,
+            health: SendHealth::default(),
+            connect_error: None,
+            resolve_error: None,
         }
     }
 
@@ -908,59 +976,94 @@ impl Output {
         }
     }
 
-    fn refresh(&mut self) -> io::Result<()> {
+    /// Look the target up again when due. Never fails: without a network the socket stays unset and
+    /// the next look-up (RESOLVE_INTERVAL later) tries again.
+    fn refresh(&mut self) {
         if let Some(resolved) = self.last_resolve {
             // A fixed host is looked up once (like before the config file existed) unless that failed.
             let settled = matches!(self.target, Target::Fixed { .. }) && self.socket.is_some();
             if settled || resolved.elapsed() < RESOLVE_INTERVAL {
-                return Ok(());
+                return;
             }
         }
         self.last_resolve = Some(Instant::now());
         let wanted = match &self.target {
             Target::Fixed { host, port } => match (host.as_str(), *port).to_socket_addrs() {
-                Ok(mut addrs) => addrs.next(),
+                Ok(mut addrs) => {
+                    if self.resolve_error.take().is_some() {
+                        eprintln!("Resolved {host} again");
+                    }
+                    addrs.next()
+                }
                 Err(error) => {
-                    eprintln!("Could not resolve {host}: {error}; retrying");
+                    let reason = error.to_string();
+                    if self.resolve_error.as_ref() != Some(&reason) {
+                        eprintln!("Could not resolve {host}: {reason}; retrying every {} s", RESOLVE_INTERVAL.as_secs());
+                        self.resolve_error = Some(reason);
+                    }
                     None
                 }
             },
             Target::SteamLink { port } => steam_link_peer().map(|ip| SocketAddr::new(ip, *port)),
         };
         if wanted == self.socket.as_ref().map(|(_, addr)| *addr) {
-            return Ok(());
+            return;
         }
         self.socket = match wanted {
-            Some(addr) => {
-                let socket = UdpSocket::bind(if addr.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" })?;
-                socket.connect(addr)?;
-                eprintln!("Sending OSC to {addr}");
-                Some((socket, addr))
-            }
+            Some(addr) => match connect(addr) {
+                Ok(socket) => {
+                    eprintln!("Sending OSC to {addr}");
+                    self.connect_error = None;
+                    self.health = SendHealth::default();
+                    Some((socket, addr))
+                }
+                // e.g. "Network is unreachable" while Wi-Fi comes up after boot
+                Err(error) => {
+                    let reason = error.to_string();
+                    if self.connect_error.as_ref() != Some(&reason) {
+                        eprintln!("Can't send OSC to {addr} yet ({reason}); retrying every {} s", RESOLVE_INTERVAL.as_secs());
+                        self.connect_error = Some(reason);
+                    }
+                    None
+                }
+            },
             None if matches!(self.target, Target::SteamLink { .. }) => {
                 eprintln!("No Steam Link connection found; waiting for one");
                 None
             }
             None => None,
         };
-        Ok(())
     }
 
     fn addr(&self) -> Option<SocketAddr> {
         self.socket.as_ref().map(|(_, addr)| *addr)
     }
 
-    fn send(&self, addr: String, args: Vec<OscType>) -> Result<(), Box<dyn Error>> {
-        let Some((socket, _)) = &self.socket else {
+    /// Send one message. A network error (unreachable, refused, no address yet...) is logged when it
+    /// starts and ends, and never returned: the next sample simply tries again.
+    fn send(&mut self, addr: String, args: Vec<OscType>) -> Result<(), Box<dyn Error>> {
+        let Some((socket, target)) = &self.socket else {
             return Ok(());
         };
         let packet = OscPacket::Message(OscMessage { addr, args });
-        match socket.send(&encoder::encode(&packet)?) {
-            // Nothing is listening yet (e.g. VRChat is closed); keep running rather than exit.
-            Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => Ok(()),
-            result => result.map(drop).map_err(Into::into),
+        let result = socket.send(&encoder::encode(&packet)?);
+        if let Some(line) = self.health.record(Instant::now(), *target, &result) {
+            eprintln!("{line}");
         }
+        Ok(())
     }
+}
+
+/// How many of these times fall in the last RATE_WINDOW (one second): a rate a second.
+fn per_second(times: &VecDeque<Instant>) -> f32 {
+    times.iter().filter(|time| time.elapsed() < RATE_WINDOW).count() as f32
+}
+
+/// A UDP socket connected to `addr` (connecting only sets where packets go; it fails without a route).
+fn connect(addr: SocketAddr) -> io::Result<UdpSocket> {
+    let socket = UdpSocket::bind(if addr.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" })?;
+    socket.connect(addr)?;
+    Ok(socket)
 }
 
 /// The PC Steam Link is streaming from: the remote end of the `vrlink` client's connected UDP socket.
@@ -1225,7 +1328,7 @@ fn osc_messages(settings: &Settings, sample: &Sample) -> Vec<(String, OscType)> 
     ];
     let mut messages = Vec::with_capacity(9);
     if settings.output == OutputKind::Vrchat {
-        messages.push((format!("{prefix}/EyeTrackingActive"), OscType::Bool(true)));
+        messages.extend(active_message(settings, true));
         values.extend([("EyeX", x), ("EyeY", y)]);
     }
     messages.extend(
@@ -1236,18 +1339,30 @@ fn osc_messages(settings: &Settings, sample: &Sample) -> Vec<(String, OscType)> 
     messages
 }
 
-fn send_inactive(output: &Output, prefix: &str) -> Result<(), Box<dyn Error>> {
-    output.send(
-        format!("/avatar/parameters{prefix}/EyeTrackingActive"),
-        vec![OscType::Bool(false)],
-    )
+/// `EyeTrackingActive` as the settings want it sent (a bool, a float, or nothing).
+fn active_message(settings: &Settings, active: bool) -> Option<(String, OscType)> {
+    let value = match settings.eye_tracking_active {
+        ActiveType::Bool => OscType::Bool(active),
+        ActiveType::Float => OscType::Float(if active { 1.0 } else { 0.0 }),
+        ActiveType::Off => return None,
+    };
+    Some((format!("/avatar/parameters{}/EyeTrackingActive", settings.prefix), value))
+}
+
+/// The one-time "not active" on pausing, switching away or losing tracking (nothing with "off").
+fn send_inactive(output: &mut Output, settings: &Settings) -> Result<(), Box<dyn Error>> {
+    match active_message(settings, false) {
+        Some((addr, value)) => output.send(addr, vec![value]),
+        None => Ok(()),
+    }
 }
 
 /// Where VRChat is being told that eye tracking is active, if anywhere. When this changes,
 /// the old destination gets a final "inactive" so the avatar's eyes do not freeze.
-fn vrchat_stream(settings: &Settings) -> Option<(&str, u16, &str)> {
-    (settings.sending && settings.output == OutputKind::Vrchat)
-        .then(|| (settings.host.as_str(), settings.port(), settings.prefix.as_str()))
+fn vrchat_stream(settings: &Settings) -> Option<(&str, u16, &str, ActiveType)> {
+    (settings.sending && settings.output == OutputKind::Vrchat).then(|| {
+        (settings.host.as_str(), settings.port(), settings.prefix.as_str(), settings.eye_tracking_active)
+    })
 }
 
 /// Why the samples stopped, for the log line when tracking is lost.
@@ -1270,8 +1385,9 @@ struct Bridge {
     active_since: Option<Instant>,
     last_data: Option<Instant>,
     latest: Option<Sample>,
-    // When the samples of the last RATE_WINDOW went out.
+    // When the samples of the last RATE_WINDOW went out, and when they came in from the tracker.
     sent: VecDeque<Instant>,
+    received: VecDeque<Instant>,
     // The gaze capture the panel asked for, while it runs, and the latest one's result.
     capture: Option<Capture>,
     capture_result: Option<CaptureResult>,
@@ -1295,7 +1411,7 @@ impl Bridge {
         }
         let stream = vrchat_stream(&self.settings);
         if self.active_since.is_some() && stream.is_some() && stream != vrchat_stream(&settings) {
-            send_inactive(&self.output, &self.settings.prefix)?;
+            send_inactive(&mut self.output, &self.settings)?;
         }
         self.output.set_target(Target::of(&settings));
         self.smoother.configure(&settings);
@@ -1333,12 +1449,11 @@ impl Bridge {
                 self.sent.push_back(now);
             }
         }
-        while self
-            .sent
-            .front()
-            .is_some_and(|sent| sent.elapsed() >= RATE_WINDOW)
-        {
-            self.sent.pop_front();
+        self.received.push_back(now);
+        for times in [&mut self.sent, &mut self.received] {
+            while times.front().is_some_and(|time| time.elapsed() >= RATE_WINDOW) {
+                times.pop_front();
+            }
         }
         let dot = dots::DotSample {
             time: data.sample_time,
@@ -1376,7 +1491,7 @@ impl Bridge {
     fn on_lost(&mut self, reason: &str) -> Result<(), Box<dyn Error>> {
         eprintln!("Eye tracking stopped ({reason})");
         if vrchat_stream(&self.settings).is_some() {
-            send_inactive(&self.output, &self.settings.prefix)?;
+            send_inactive(&mut self.output, &self.settings)?;
         }
         self.smoother.reset();
         self.active_since = None;
@@ -1396,11 +1511,11 @@ impl Bridge {
             output: settings.output,
             target_mode: if settings.host == "auto" { "auto" } else { "fixed" },
             target: self.output.addr().map(|addr| addr.to_string()),
-            rate: self
-                .sent
-                .iter()
-                .filter(|sent| sent.elapsed() < RATE_WINDOW)
-                .count() as f32,
+            rate: per_second(&self.sent),
+            tracker_rate: self
+                .active_since
+                .is_some_and(|since| since.elapsed() >= RATE_WINDOW)
+                .then(|| per_second(&self.received)),
             tracking: self.active_since.is_some(),
             raw: self.latest.as_ref().map(|sample| RawValues {
                 openness: status::round(sample.openness),
@@ -1498,6 +1613,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         last_data: None,
         latest: None,
         sent: VecDeque::new(),
+        received: VecDeque::new(),
         capture: None,
         capture_result: None,
         dots: dots::DotStream::new(status::status_path().parent().unwrap_or(Path::new("/tmp"))),
@@ -1511,7 +1627,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         if let Some(reload) = bridge.config.poll() {
             bridge.apply(reload)?;
         }
-        bridge.output.refresh()?;
+        bridge.output.refresh();
         match source.next(POLL)? {
             Next::Sample(data) if data.is_finite() => bridge.on_sample(data)?,
             // Short waits are normal; only a whole second without data means tracking stopped.
@@ -1936,6 +2052,64 @@ mod tests {
     }
 
     #[test]
+    fn a_send_error_is_logged_once_and_never_stops_the_process() {
+        let addr: SocketAddr = "192.0.2.1:9000".parse().unwrap();
+        let mut health = SendHealth::default();
+        let unreachable = || Err(io::Error::from(io::ErrorKind::NetworkUnreachable));
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        assert_eq!(health.record(at(0), addr, &Ok(20)), None);
+        // Wi-Fi not up yet: one line when it starts failing, then nothing while it keeps failing...
+        let line = health.record(at(10), addr, &unreachable()).unwrap();
+        assert!(line.starts_with("Sending OSC to 192.0.2.1:9000 failed (") && line.ends_with("retrying with every sample"), "{line}");
+        assert_eq!(health.record(at(20), addr, &unreachable()), None);
+        // ..."refused" (nothing listening) is neither a failure nor a recovery...
+        assert_eq!(health.record(at(30), addr, &Err(io::Error::from(io::ErrorKind::ConnectionRefused))), None);
+        // ...and one line when it works again.
+        assert_eq!(health.record(at(40), addr, &Ok(20)).as_deref(), Some("Sending OSC to 192.0.2.1:9000 works again"));
+        assert_eq!(health.record(at(50), addr, &Ok(20)), None);
+        // A flapping link: within 5 s of that pair nothing more is logged, however often it flips...
+        for i in 0..50 {
+            assert_eq!(health.record(at(100 + i * 20), addr, &unreachable()), None);
+            assert_eq!(health.record(at(110 + i * 20), addr, &Ok(20)), None);
+        }
+        // ...then a failure that lasts is logged, with how many changes were not...
+        let line = health.record(at(5100), addr, &Err(io::Error::from(io::ErrorKind::HostUnreachable))).unwrap();
+        assert!(line.ends_with("(100 more changes in the last few seconds not logged)"), "{line}");
+        // ...and so is its end.
+        assert!(health.record(at(5200), addr, &Ok(20)).is_some());
+        // A failure that began quietly is logged once the 5 s are over, if it still lasts
+        assert_eq!(health.record(at(5300), addr, &unreachable()), None);
+        assert!(health.record(at(10200), addr, &unreachable()).is_some());
+
+        // A real send to a port nothing listens on: never an error, however often.
+        let listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let mut output = Output::new(Target::Fixed { host: "127.0.0.1".into(), port });
+        output.refresh();
+        assert_eq!(output.addr().map(|addr| addr.port()), Some(port));
+        for _ in 0..5 {
+            assert!(output.send("/avatar/parameters/FT/v2/EyeLeftX".into(), vec![OscType::Float(0.1)]).is_ok());
+        }
+        // A target that can't be looked up just waits (no socket, no error).
+        let mut nowhere = Output::new(Target::Fixed { host: "no-such-host.invalid".into(), port: 9000 });
+        nowhere.refresh();
+        assert!(nowhere.addr().is_none());
+        assert!(nowhere.send("/x".into(), vec![OscType::Bool(true)]).is_ok());
+    }
+
+    #[test]
+    fn the_rate_counts_the_last_second() {
+        let now = Instant::now();
+        let times: VecDeque<Instant> = [now - Duration::from_millis(1500), now - Duration::from_millis(900), now]
+            .into_iter()
+            .collect();
+        assert_eq!(per_second(&times), 2.0);
+        assert_eq!(per_second(&VecDeque::new()), 0.0);
+    }
+
+    #[test]
     fn lost_tracking_says_why() {
         assert_eq!(lost_reason(&Next::Stopped), "eye server not producing");
         assert_eq!(lost_reason(&Next::Waiting), "no new samples for 1 s");
@@ -2133,6 +2307,68 @@ mod tests {
         );
         assert_eq!(messages[0].1, OscType::Bool(true));
         assert_eq!(messages[6].1, OscType::Float(0.75));
+    }
+
+    #[test]
+    fn eye_tracking_active_goes_as_a_bool_a_float_or_not_at_all() {
+        let with = |kind| Settings {
+            eye_tracking_active: kind,
+            ..settings()
+        };
+        let active = "/avatar/parameters/FT/EyeTrackingActive";
+        // While sending
+        let bool_messages = sent(&with(ActiveType::Bool));
+        assert_eq!(bool_messages[0], (active.to_owned(), OscType::Bool(true)));
+        let float_messages = sent(&with(ActiveType::Float));
+        assert_eq!(float_messages[0], (active.to_owned(), OscType::Float(1.0)));
+        assert_eq!(float_messages.len(), 9);
+        let off_messages = sent(&with(ActiveType::Off));
+        assert_eq!(off_messages.len(), 8);
+        assert!(off_messages.iter().all(|(addr, _)| addr != active));
+        // The eye values are the same in every mode
+        assert_eq!(bool_messages[1..], float_messages[1..]);
+        assert_eq!(bool_messages[1..], off_messages[..]);
+        // The one-time "not active" on pausing or losing tracking
+        assert_eq!(active_message(&with(ActiveType::Bool), false), Some((active.to_owned(), OscType::Bool(false))));
+        assert_eq!(active_message(&with(ActiveType::Float), false), Some((active.to_owned(), OscType::Float(0.0))));
+        assert_eq!(active_message(&with(ActiveType::Off), false), None);
+        // Changing the type ends the old stream (it gets its own last "not active")
+        assert_ne!(vrchat_stream(&with(ActiveType::Bool)), vrchat_stream(&with(ActiveType::Float)));
+        // ETVR never gets it
+        let etvr = Settings {
+            output: OutputKind::Etvr,
+            ..with(ActiveType::Float)
+        };
+        assert!(sent(&etvr).iter().all(|(addr, _)| !addr.ends_with("EyeTrackingActive")));
+        assert!(vrchat_stream(&etvr).is_none());
+    }
+
+    #[test]
+    fn a_pause_or_lost_tracking_sends_not_active_only_when_asked() {
+        // A real socket: pausing with "float" sends 0.0, with "off" nothing
+        let listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener.set_read_timeout(Some(Duration::from_millis(500))).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut output = Output::new(Target::Fixed { host: "127.0.0.1".into(), port });
+        output.refresh();
+        let float = Settings {
+            eye_tracking_active: ActiveType::Float,
+            ..settings()
+        };
+        send_inactive(&mut output, &float).unwrap();
+        let mut buffer = [0u8; 256];
+        let size = listener.recv(&mut buffer).unwrap();
+        let (_, packet) = rosc::decoder::decode_udp(&buffer[..size]).unwrap();
+        let OscPacket::Message(message) = packet else { panic!("not a message") };
+        assert_eq!(message.addr, "/avatar/parameters/FT/EyeTrackingActive");
+        assert_eq!(message.args, [OscType::Float(0.0)]);
+        let off = Settings {
+            eye_tracking_active: ActiveType::Off,
+            ..settings()
+        };
+        send_inactive(&mut output, &off).unwrap();
+        listener.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+        assert!(listener.recv(&mut buffer).is_err());
     }
 
     #[test]

@@ -36,6 +36,8 @@ struct UiText {
     const char* modeFixed;          ///< target fixed
     const char* rateLabel;          ///< messages per second label
     const char* rateFormat;         ///< "%.0f /s"
+    const char* trackerRateLabel;   ///< samples from the eye tracker per second (label; the value uses rateFormat)
+    const char* trackerRateLowHint;  ///< shown when it is low
     const char* lidsTitle;          ///< eyelids heading
     const char* legendRaw;          ///< raw value (legend)
     const char* legendSent;         ///< sent value (legend)
@@ -75,6 +77,9 @@ struct UiText {
     const char* hintOutput;
     const char* outputVrchat;
     const char* outputEtvr;
+    const char* rowActiveType;      ///< how EyeTrackingActive is sent
+    const char* hintActiveType;
+    const char* activeOff;
     const char* rowTarget;
     const char* hintTarget;
     const char* targetAuto;
@@ -160,7 +165,9 @@ struct UiText {
     // The numbers behind a failure (one line under it)
     const char* failDetailSeparator;      ///< between the parts ("・")
     const char* failDetailPointFormat;    ///< "%s dot"
-    const char* failDetailSamplesFormat;  ///< "%d of %d samples usable"
+    const char* failDetailSamplesFormat;  ///< "%d of %d samples usable" (from frameeyeosc before 0.5.3)
+    const char* failDetailSamplesRateFormat;  ///< "%d of %d samples usable%s (needs %d)", %s = failDetailRateFormat
+    const char* failDetailRateFormat;     ///< " at %.0f Hz"
     const char* failDetailSpreadFormat;   ///< "spread %s (max %.1f°)"
     const char* failDetailTriesFormat;    ///< "%d tries"
     const char* failDetailEyeLeft;        ///< "L"

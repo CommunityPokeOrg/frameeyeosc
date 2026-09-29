@@ -23,7 +23,7 @@ https://github.com/user-attachments/assets/f8969485-161b-40d4-b9e4-689dee6d1955
 
 - 開発者モードを有効にして SSH で入れる Steam Frame（設定 → システム → 開発者モードを有効化、開発者の項目でパスワードを設定）。SSH を有効にすると、同じネットワークにいてパスワードを知っている人は誰でもヘッドセットに入れるので、推測されにくいパスワードにしてください
 - Steam Link でストリーミングしている PC 版 VRChat（Action Menu → Options → OSC → Enabled）
-- VRCFaceTracking の目のパラメータ（`FT/v2/EyeLeftX`、`EyeLidLeft` など）を float で持つアバター。VRChat に直接送るときは、パラメータをビットに詰める「バイナリパラメータ」のアバターには対応していません
+- VRCFaceTracking の目のパラメータ（`FT/v2/EyeLeftX`、`EyeLidLeft` など）を float で持つアバター。VRChat に直接送るときは、パラメータをビットに詰める「バイナリパラメータ」のアバターには対応していません。`EyeTrackingActive` は bool で送ります。これを float で持つアバター（Fermata のフェイストラッキングのセットアップなど）は bool が届くと止まるので、基本タブの「EyeTrackingActive の型」で［Float］を選んでください（`eye_tracking_active`）。［送らない］にすると送りません
 - VRCFaceTracking（ETVR）モードで使うときは、PC に VRCFaceTracking と ETVR Tracking Module
 
 ## インストール
@@ -73,7 +73,7 @@ sudo は要りません。全部ホームフォルダ（`~/.local/bin`、`~/.con
 | **詳細** | |
 | ![詳細のタブ](docs/images/panel-advanced-ja_2026-09-28_06-07-01.png) | |
 
-- 左の列には、いつでも今の状態が出ます: 送信中か止めているか、送り先、毎秒の送信回数、左右のまぶたと視線（生の値と送った値）、設定のエラー
+- 左の列には、いつでも今の状態が出ます: 送信中か止めているか、送り先、毎秒の送信回数、目のデータが毎秒何回来ているか（60 未満は赤で「少なめ」）、左右のまぶたと視線（生の値と送った値）、設定のエラー
 - 基本: 送信の一時停止、VRChat か VRCFaceTracking（ETVR）か、送り先の PC（自動、今送っている PC で固定、または入力。下を参照）、ポート、言語（日本語 / English）、SteamVR と一緒に起動、すべて既定に戻す、アプリを終了
 - 視線: スムージングのオン / オフ、なめらかさの弱 / 中 / 強と 3 つの値、見つめている時の遊び、まばたき中は視線を止める、左右の目を別々に動かす、不確かな視線を使わない、一瞬の途切れを消す
 - 目を合わせる: ボタン 1 つで視線とまぶたを約 20 秒で合わせる（[目を合わせる](#目を合わせる) を参照）、正面だけ合わせ直す、結果と［元に戻す］、「細かく直す」の中で値を手で直す
@@ -96,11 +96,12 @@ sudo は要りません。全部ホームフォルダ（`~/.local/bin`、`~/.con
 
 | キー | オプション | 既定値 | 内容 |
 |---|---|---|---|
-| `sending` | | `true` | `false` で送信を一時停止（VRChat モードでは `EyeTrackingActive=false` を 1 回送る） |
+| `sending` | | `true` | `false` で送信を一時停止（VRChat モードでは `EyeTrackingActive` の「無効」を `eye_tracking_active` の型で 1 回送る） |
 | `output` | `--output` | `"vrchat"` | `"vrchat"` は VRChat にアバターパラメータを送る、`"etvr"` は VRCFaceTracking の ETVR Tracking Module に送る |
 | `host` | `--target` | `"auto"` | `"auto"` は Steam Link の接続先 PC。それ以外は IP アドレスかホスト名（ポートは付けない） |
 | `port` | `--port`、`--target` | `null` | `null` は `vrchat` なら 9000、`etvr` なら 8889 |
 | `prefix` | `--prefix` | `"/FT"` | パラメータ名の頭。`""` で頭なし |
+| `eye_tracking_active` | `--eye-tracking-active` | `"bool"` | VRChat モードで `EyeTrackingActive` をどう送るか: `"bool"`（true / false）、`"float"`（1.0 / 0.0。Fermata などのアバターはこちら）、`"off"`（送らない。止めたときや目を見失ったときの 1 回の「無効」も送らない）。ETVR モードではもともと送らない |
 | `raw` | `--raw` | `false` | スムージングしない。時間を使う処理（途切れ消し、視線を止める、品質チェック、閉じたまま保つ、真下で左右を止める）もしない |
 | `gaze_min_cutoff` | `--gaze-min-cutoff` | `0.4` | 下げるほど止まっている時の視線が安定（その分遅れる） |
 | `gaze_beta` | `--gaze-beta` | `0.8` | 上げるほど素早い視線の動きに遅れず付いていく |
@@ -139,7 +140,7 @@ FRAMEEYEOSC_ARGS="--gaze-min-cutoff 0.3 --lid-sync 0.6"
 
 ## 状態ファイル
 
-frameeyeosc は 1 秒に 10 回、今の様子を `$XDG_RUNTIME_DIR/frameeyeosc/status.json`（ふつうは `/run/user/1000/frameeyeosc/status.json`）に書きます。中身は、送信中か、送り先、毎秒の送信回数、最新の生の値と送った値、キャリブレーション、今効いている設定、コマンドで固定中の項目、設定のエラー、最後の目合わせの測定です。パネルはこれを読んで表示します。フォルダは本人しか読めず、メモリの上にあって再起動すると消えます。残るのは最新の値だけです。
+frameeyeosc は 1 秒に 10 回、今の様子を `$XDG_RUNTIME_DIR/frameeyeosc/status.json`（ふつうは `/run/user/1000/frameeyeosc/status.json`）に書きます。中身は、送信中か、送り先、毎秒の送信回数、目のトラッカーから毎秒届くサンプルの数（`tracker_rate`）、最新の生の値と送った値、キャリブレーション、今効いている設定、コマンドで固定中の項目、設定のエラー、最後の目合わせの測定です。パネルはこれを読んで表示します。フォルダは本人しか読めず、メモリの上にあって再起動すると消えます。残るのは最新の値だけです。
 
 ## VRCFaceTracking（ETVR）モード
 
@@ -171,7 +172,7 @@ frameeyeosc は、VRCFaceTracking 用の ETVR Tracking Module が読む形式で
 - 目ごとの左右（「左右の目を別々に動かす」用。`gaze_offset_x_left/right`・`gaze_gain_x_left/right`）: 点は 2 m 先なので、それぞれの目が点へ向く本当の角度は、両目の真ん中から見た角度とは違います。真ん中から見て正面の点でも、左目は 0.9° ほど右、右目は 0.9° ほど左を向きます（目の間が 63 mm のとき）。SteamVR が持っている目の間の距離（無ければ 63 mm）で、目ごとにその角度へ合わせるので、アバターの目も自然に寄ります
 - まぶた: 目ごとの、閉じたとき・上・正面・下を見て開いているときの開き具合（`lid_fit_*`）。Frame は下を見るだけで開き具合を少なく読みます（20° 下で 3 割ほど）。合わせた目は、見ている向きでふつうの開き具合と比べるので、下を見ただけでは閉じません。閉じた値から開いた値までの 3 割より下で「閉じた」になります。合わせた目には自動キャリブレーションと `lid_scale_*` を使わず、まぶたの目盛りの「閉じ」「普通」の代わりにこれを使います（見開きは今までどおり）。記録で試すと、下を見ている目が 3 分の 1 閉じて送られた回数が 35 から 5 に減り、完全に閉じて送られたまばたきも増えました（60 回中 50 → 53）
 
-点はヘッドセットに固定して 2 m 先に出し、ダッシュボードが閉じている間だけ見えます。しくみ: パネルが `config.json` に `gaze_capture` の依頼を書き、frameeyeosc がトラッカーの視線と目ごとの開き具合を、パネルが頼んだ長さだけ平均して（点は 2 秒で最初の 0.3 秒を除く、目を閉じる手順は 3 秒で最初の 0.5 秒を除く。最後の手順以外では目を閉じているサンプルも除く）状態ファイルで返し、パネルがその平均から設定を計算します。測った値はジャーナルにも残ります（`journalctl --user -u frameeyeosc`）。既定値のままなら何も変わりません。
+点はヘッドセットに固定して 2 m 先に出し、ダッシュボードが閉じている間だけ見えます。しくみ: パネルが `config.json` に `gaze_capture` の依頼を書き、frameeyeosc がトラッカーの視線と目ごとの開き具合を、パネルが頼んだ長さだけ平均して（点は 2 秒で最初の 0.3 秒を除く、目を閉じる手順は 3 秒で最初の 0.5 秒を除く。最後の手順以外では目を閉じているサンプルも除く）、届いたサンプルの数と毎秒の回数と一緒に状態ファイルで返し、パネルがその平均から設定を計算します。点は、届いたサンプルの 6 割以上（12 以上、ただし 45 を超えては求めない）が使えて、視線のばらつきが 2.7° 以内なら使います。トラッカーの回数は決まっていないためです（Steam Link で送っている間は毎秒 90〜136、15 のこともありました）。測った値はジャーナルにも残ります（`journalctl --user -u frameeyeosc`）。既定値のままなら何も変わりません。
 
 ## キャリブレーション
 
@@ -181,6 +182,8 @@ frameeyeosc は、VRCFaceTracking 用の ETVR Tracking Module が読む形式で
 
 - ログ: `journalctl --user -u frameeyeosc -f`（パネルは `journalctl --user -u frameeyeosc-panel -f`）
 - `No Steam Link connection found; waiting for one`: Steam Link がまだつながっていません。または送り先の PC を固定してください
+- `Can't send OSC to ... yet (Network is unreachable)` や `Sending OSC to ... failed (...)`: ネットワークがまだつながっていない（起動直後の Wi-Fi など）か、PC に届きません。frameeyeosc は動き続けて送り直し、送れるようになると `... works again` と出ます
+- 目を合わせると最初の点でサンプルが足りずに止まる、または左の列の「目のデータ」が少なめ: 目のトラッカーからのデータがふだんより少ない状態です。そのとき出ていた回数と、PC から Steam Link で送っていたかどうかを知らせてください
 - ログに `Sending OSC to ...` と出ているのにアバターが反応しない: VRChat の OSC が有効かを確認したうえで、Windows のファイアウォールを確認してください。VRChat の受信許可は「パブリック」だけになっていることが多く、「プライベート」の家のネットワークから届く OSC は止められます。許可の対象が `launch.exe` ではなく `VRChat.exe` になっているかにも注意してください。範囲をしぼって許可するには（管理者の PowerShell で）:
   ```powershell
   New-NetFirewallRule -DisplayName "VRChat OSC (LAN UDP 9000)" -Direction Inbound -Action Allow -Protocol UDP -LocalPort 9000 -RemoteAddress LocalSubnet -Program "C:\Program Files (x86)\Steam\steamapps\common\VRChat\VRChat.exe" -Profile Private

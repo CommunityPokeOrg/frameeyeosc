@@ -28,6 +28,8 @@ UiText makeJapanese() {
     t.modeFixed = "固定";
     t.rateLabel = "送信の回数";
     t.rateFormat = "毎秒 %.0f 回";
+    t.trackerRateLabel = "目のデータ";
+    t.trackerRateLowHint = "少なめ";
     t.lidsTitle = "まぶた";
     t.legendRaw = "生の値";
     t.legendSent = "送った値";
@@ -64,6 +66,9 @@ UiText makeJapanese() {
     t.hintOutput = "VRCFT へは ETVR 形式";
     t.outputVrchat = "VRChat に直接";
     t.outputEtvr = "VRCFaceTracking（ETVR）";
+    t.rowActiveType = "EyeTrackingActive の型";
+    t.hintActiveType = "Fermata などのアバターは Float";
+    t.activeOff = "送らない";
     t.rowTarget = "送り先の PC";
     t.hintTarget = "自動 = Steam Link の相手";
     t.targetAuto = "自動";
@@ -149,6 +154,8 @@ UiText makeJapanese() {
     t.failDetailSeparator = "・";
     t.failDetailPointFormat = "%sの点";
     t.failDetailSamplesFormat = "使えたサンプル %d/%d";
+    t.failDetailSamplesRateFormat = "使えたサンプル %d/%d（%s%d 以上が必要）";
+    t.failDetailRateFormat = "毎秒 %.0f・";
     t.failDetailSpreadFormat = "ばらつき %s（%.1f° まで）";
     t.failDetailTriesFormat = "%d 回";
     t.failDetailEyeLeft = "左";
@@ -317,6 +324,8 @@ UiText makeEnglish() {
     t.modeFixed = "Fixed";
     t.rateLabel = "Send rate";
     t.rateFormat = "%.0f /s";
+    t.trackerRateLabel = "Eye data";
+    t.trackerRateLowHint = "low";
     t.lidsTitle = "Eyelids";
     t.legendRaw = "Raw";
     t.legendSent = "Sent";
@@ -353,6 +362,9 @@ UiText makeEnglish() {
     t.hintOutput = "VRCFT gets the ETVR format";
     t.outputVrchat = "VRChat directly";
     t.outputEtvr = "VRCFaceTracking (ETVR)";
+    t.rowActiveType = "EyeTrackingActive type";
+    t.hintActiveType = "Some avatars (e.g. Fermata) need Float";
+    t.activeOff = "Off";
     t.rowTarget = "Target PC";
     t.hintTarget = "Auto = the Steam Link PC";
     t.targetAuto = "Auto";
@@ -439,6 +451,8 @@ UiText makeEnglish() {
     t.failDetailSeparator = " · ";
     t.failDetailPointFormat = "%s dot";
     t.failDetailSamplesFormat = "%d of %d samples usable";
+    t.failDetailSamplesRateFormat = "%d of %d samples usable%s (needs %d)";
+    t.failDetailRateFormat = " at %.0f Hz";
     t.failDetailSpreadFormat = "spread %s (max %.1f°)";
     t.failDetailTriesFormat = "%d tries";
     t.failDetailEyeLeft = "L";

@@ -82,6 +82,15 @@ void testFailureTexts() {
     SAME(failureText(ja, fit), "正面 の点で視線が落ち着きませんでした（目を閉じていたかも）");
     SAME(failureDetailText(ja, fit), "正面の点: 使えたサンプル 30/45・ばらつき 3.4°（2.7° まで）・3 回");
     SAME(failureDetailText(en, fit), "Center dot: 30 of 45 samples usable · spread 3.4° (max 2.7°) · 3 tries");
+    // From 0.5.3 frameeyeosc says how many came in and how fast; the need is 60% of them, at least 12
+    fit.detail.last.samples = 10;
+    fit.detail.last.received = 26;
+    fit.detail.last.rateHz = 15.2;
+    fit.detail.last.spread = 0.2 / 45;
+    SAME(failureDetailText(ja, fit), "正面の点: 使えたサンプル 10/26（毎秒 15・16 以上が必要）・ばらつき 0.2°（2.7° まで）・3 回");
+    SAME(failureDetailText(en, fit), "Center dot: 10 of 26 samples usable at 15 Hz (needs 16) · spread 0.2° (max 2.7°) · 3 tries");
+    fit.detail.last.received = 0;
+    fit.detail.last.rateHz = NAN;
     // Without any usable sample there is no spread
     fit.detail.last.samples = 0;
     fit.detail.last.spread = NAN;

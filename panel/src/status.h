@@ -4,6 +4,7 @@
 
 #include "json.h"
 
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,8 @@ struct GazeCaptureStatus {
     bool hasOpenness = false;  ///< openness is there (done with samples)
     double openness[2] = {0.0, 0.0};  ///< each eye's average Frame openness, before any scale
     int samples = 0;
+    int received = 0;          ///< samples that came in after the skipped start (0 from frameeyeosc before 0.5.3)
+    double rate = NAN;         ///< the tracker's rate over the capture (samples a second)
 };
 
 /** What the panel knows about frameeyeosc from status.json. */
@@ -46,6 +49,7 @@ struct EyeStatus {
     std::string targetMode; ///< "auto" / "fixed"
     std::string target;     ///< "IP:PORT"; empty while the Steam Link PC is not found
     double rate = 0.0;      ///< samples sent in the last second
+    double trackerRate = NAN;  ///< samples from the eye tracker in the last second (NaN before 0.5.3)
     bool tracking = false;  ///< eye data is coming in
 
     bool hasRaw = false;

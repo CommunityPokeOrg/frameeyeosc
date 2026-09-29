@@ -44,6 +44,7 @@ constexpr const char* kOutput = "output";
 constexpr const char* kHost = "host";
 constexpr const char* kPort = "port";
 constexpr const char* kPrefix = "prefix";
+constexpr const char* kEyeTrackingActive = "eye_tracking_active";
 constexpr const char* kRaw = "raw";
 constexpr const char* kGazeMinCutoff = "gaze_min_cutoff";
 constexpr const char* kGazeBeta = "gaze_beta";
@@ -98,6 +99,8 @@ constexpr const char* kUpdateCheck = "update_check";  ///< panel only: look for 
 /** Output types (the "output" key). */
 constexpr const char* kOutputVrchat = "vrchat";
 constexpr const char* kOutputEtvr = "etvr";
+/** eye_tracking_active values: how EyeTrackingActive is sent in VRChat mode */
+constexpr const char* kActiveTypes[3] = {"bool", "float", "off"};
 /** Default ports of the output types (used while "port" is null). */
 constexpr int kPortVrchat = 9000;
 constexpr int kPortEtvr = 8889;

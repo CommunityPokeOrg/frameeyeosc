@@ -48,6 +48,19 @@ impl OutputKind {
     }
 }
 
+/// How `EyeTrackingActive` goes out in VRChat mode (VRCFaceTracking's templates use a bool; some
+/// avatars, e.g. Fermata's face tracking setups, declare it as a float and stop on a bool).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum ActiveType {
+    /// true / false
+    Bool,
+    /// 1.0 / 0.0
+    Float,
+    /// never sent
+    Off,
+}
+
 /// Everything that can change while running. Field names are the config.json keys, and the
 /// defaults match the command-line defaults in `Args`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -61,6 +74,7 @@ pub struct Settings {
     pub port: Option<u16>,
     /// Without a trailing slash; empty for no prefix.
     pub prefix: String,
+    pub eye_tracking_active: ActiveType,
     pub raw: bool,
     pub gaze_min_cutoff: f32,
     pub gaze_beta: f32,
@@ -129,6 +143,7 @@ impl Default for Settings {
             host: "auto".into(),
             port: None,
             prefix: "/FT".into(),
+            eye_tracking_active: ActiveType::Bool,
             raw: false,
             gaze_min_cutoff: 0.4,
             gaze_beta: 0.8,
@@ -421,7 +436,7 @@ pub fn apply_args(settings: &mut Settings, args: &Args, given: &HashSet<String>)
             }
         )*};
     }
-    pin!(output);
+    pin!(output, eye_tracking_active);
     if given.contains("target") {
         locked.push("host");
         // main() has already rejected anything that is neither "auto" nor HOST:PORT.
@@ -658,6 +673,20 @@ mod tests {
         let (settings, locked) = merged("{}", &[]).unwrap();
         assert_eq!(settings, Settings::default());
         assert!(locked.is_empty());
+        // The option's own default is the setting's
+        let (args, _) = cli(&[]);
+        assert_eq!(args.eye_tracking_active, Settings::default().eye_tracking_active);
+    }
+
+    #[test]
+    fn eye_tracking_active_is_bool_float_or_off() {
+        for (text, kind) in [("bool", ActiveType::Bool), ("float", ActiveType::Float), ("off", ActiveType::Off)] {
+            let (settings, _) = merged(&format!(r#"{{"eye_tracking_active": "{text}"}}"#), &[]).unwrap();
+            assert_eq!(settings.eye_tracking_active, kind);
+        }
+        assert!(merged(r#"{"eye_tracking_active": "int"}"#, &[]).is_err());
+        let (settings, locked) = merged(r#"{"eye_tracking_active": "off"}"#, &["--eye-tracking-active", "float"]).unwrap();
+        assert_eq!((settings.eye_tracking_active, locked), (ActiveType::Float, vec!["eye_tracking_active"]));
     }
 
     #[test]

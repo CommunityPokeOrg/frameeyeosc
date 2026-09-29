@@ -23,7 +23,7 @@ This is a fork of [konsti219/frameeyeosc](https://github.com/konsti219/frameeyeo
 
 - A Steam Frame with Developer Mode on and SSH access (Settings > System > Developer Mode, then set a password under Developer). Choose a strong password: with SSH on, anyone on your network who knows it can log in to the headset.
 - PC VRChat streamed with Steam Link, OSC enabled in VRChat (Action Menu > Options > OSC > Enabled).
-- An avatar with VRCFaceTracking eye parameters (`FT/v2/EyeLeftX`, `EyeLidLeft`, ...) as floats. Avatars that pack parameters into binary bits are not supported when sending to VRChat directly.
+- An avatar with VRCFaceTracking eye parameters (`FT/v2/EyeLeftX`, `EyeLidLeft`, ...) as floats. Avatars that pack parameters into binary bits are not supported when sending to VRChat directly. frameeyeosc also sends `EyeTrackingActive` as a bool; some avatars (for example Fermata's face tracking setups) declare it as a float and stop tracking on a bool. For those, choose "Float" under "EyeTrackingActive type" on the Basic tab (`eye_tracking_active`), or "Off" to not send it at all.
 - For the VRCFaceTracking (ETVR) mode: VRCFaceTracking on the PC with the ETVR Tracking Module.
 
 ## Install
@@ -73,7 +73,7 @@ From 0.4.0 on, the panel's "Update" button does the update. The panel's Advanced
 | **Advanced** | |
 | ![The Advanced tab](docs/images/panel-advanced-en_2026-09-28_06-07-01.png) | |
 
-- The left column always shows what frameeyeosc is doing: sending or paused, where it sends to, messages per second, both eyelids and the gaze (raw and sent), and a config error if there is one.
+- The left column always shows what frameeyeosc is doing: sending or paused, where it sends to, messages per second, how many samples a second the eye tracker delivers (marked "low" below 60), both eyelids and the gaze (raw and sent), and a config error if there is one.
 - Basic: pause sending, VRChat or VRCFaceTracking (ETVR), target PC (automatic, fixed to the PC it sends to now, or typed: see below), port, language (Japanese / English), start with SteamVR, reset all, quit.
 - Gaze: smoothing on or off, light / medium / strong presets and the three filter values, deadzone, holding the gaze while blinking, per-eye gaze, skipping unreliable gaze, removing one-sample glitches.
 - Eye fit: one button that fits your gaze and eyelids in about 20 seconds (see [Eye fit](#eye-fit)), re-centering the gaze only, the result with "Reset", and the values by hand under "Fine-tune".
@@ -96,11 +96,12 @@ Settings are in `~/.config/frameeyeosc/config.json`. The panel writes it, and yo
 
 | Key | Option | Default | What it does |
 |---|---|---|---|
-| `sending` | | `true` | `false` pauses sending (in VRChat mode `EyeTrackingActive=false` is sent once) |
+| `sending` | | `true` | `false` pauses sending (in VRChat mode `EyeTrackingActive=false` is sent once, as `eye_tracking_active` says) |
 | `output` | `--output` | `"vrchat"` | `"vrchat"` sends avatar parameters to VRChat, `"etvr"` sends to VRCFaceTracking's ETVR Tracking Module |
 | `host` | `--target` | `"auto"` | `"auto"` = the PC Steam Link is streaming from, else an IP address or host name without a port |
 | `port` | `--port`, `--target` | `null` | `null` = 9000 for `vrchat`, 8889 for `etvr` |
 | `prefix` | `--prefix` | `"/FT"` | Parameter name prefix; `""` for none |
+| `eye_tracking_active` | `--eye-tracking-active` | `"bool"` | How `EyeTrackingActive` is sent in VRChat mode: `"bool"` (true / false), `"float"` (1.0 / 0.0; some avatars, e.g. Fermata's, need it) or `"off"` (never, not even the one-time "not active" on pausing or losing tracking). ETVR mode never sends it |
 | `raw` | `--raw` | `false` | No smoothing, and none of the time-based steps (glitch removal, gaze holding, the quality check, blink hold, holding the sideways gaze far down) |
 | `gaze_min_cutoff` | `--gaze-min-cutoff` | `0.4` | Lower = steadier gaze at rest, more lag |
 | `gaze_beta` | `--gaze-beta` | `0.8` | Higher = follows fast eye movements with less lag |
@@ -139,7 +140,7 @@ Whatever is set there can't be changed from the file, and the panel shows it as 
 
 ## Status file
 
-frameeyeosc writes what it is doing to `$XDG_RUNTIME_DIR/frameeyeosc/status.json` (usually `/run/user/1000/frameeyeosc/status.json`) ten times a second: whether it is sending, the destination, messages per second, the latest raw and sent values, the calibration, the settings in effect, which of them are locked by the command line, any config error, and the latest eye fit measurement. The panel reads it. The folder is readable only by you, lives in memory, and is gone after a reboot. Only the latest values are kept.
+frameeyeosc writes what it is doing to `$XDG_RUNTIME_DIR/frameeyeosc/status.json` (usually `/run/user/1000/frameeyeosc/status.json`) ten times a second: whether it is sending, the destination, messages per second, the eye tracker's samples per second (`tracker_rate`), the latest raw and sent values, the calibration, the settings in effect, which of them are locked by the command line, any config error, and the latest eye fit measurement. The panel reads it. The folder is readable only by you, lives in memory, and is gone after a reboot. Only the latest values are kept.
 
 ## VRCFaceTracking (ETVR) mode
 
@@ -171,7 +172,7 @@ What the fit sets:
 - Each eye's sideways gaze, for "Move eyes separately" (`gaze_offset_x_left/right`, `gaze_gain_x_left/right`). The dots are 2 m away, so each eye's true angle to a dot is not the angle from between the eyes: seen from between the eyes a dot straight ahead is at 0°, but the left eye turns about 0.9° right and the right eye about 0.9° left to see it (with a 63 mm distance between the eyes). Each eye is fitted to its own angles, using the distance between the eyes that SteamVR reports (63 mm if it doesn't), so the avatar's eyes turn in naturally.
 - Eyelids: each eye's openness with the eyes shut, and open while looking up, straight ahead and down (`lid_fit_*`). The Frame reads an eye as less open when you look down (about 30% less 20° down), so a fitted eye is judged against what is normal for where you look, and doesn't close when you only look down. A fitted eye counts as closed below 30% of the way from its shut to its open reading. The learned calibration and `lid_scale_*` are not used for fitted eyes, and the "Closed" and "Open" lid marks give way to the fit (widening works as before). On a recording, the fit cut the times an eye looking down was sent a third closed from 35 to 5, and more blinks were sent fully closed (53 of 60, from 50).
 
-The dot is fixed to the headset 2 m ahead and only shows while the dashboard is closed. How it works: the panel writes a `gaze_capture` request into `config.json`, frameeyeosc averages the tracker's gaze and each eye's openness for as long as the panel asks (2 seconds skipping the first 0.3 s for a dot, 3 seconds skipping the first 0.5 s with the eyes shut; samples with the eyes shut are skipped except in the last step) and reports the averages in the status file, and the panel turns them into the settings. Each measurement is logged (`journalctl --user -u frameeyeosc`). With the defaults nothing changes.
+The dot is fixed to the headset 2 m ahead and only shows while the dashboard is closed. How it works: the panel writes a `gaze_capture` request into `config.json`, frameeyeosc averages the tracker's gaze and each eye's openness for as long as the panel asks (2 seconds skipping the first 0.3 s for a dot, 3 seconds skipping the first 0.5 s with the eyes shut; samples with the eyes shut are skipped except in the last step) and reports the averages in the status file with how many samples came in and at what rate. A dot counts when at least 60% of the samples that came in were usable (at least 12, and never more than 45 are needed), since the tracker's rate varies (90 to 136 a second while streaming, 15 has been seen), and its gaze spread is at most 2.7°. The panel turns them into the settings. Each measurement is logged (`journalctl --user -u frameeyeosc`). With the defaults nothing changes.
 
 ## Calibration
 
@@ -181,6 +182,8 @@ Eyelid calibration is automatic. For the first 20 seconds after you put the head
 
 - Logs: `journalctl --user -u frameeyeosc -f` (the panel: `journalctl --user -u frameeyeosc-panel -f`)
 - `No Steam Link connection found; waiting for one`: Steam Link isn't streaming yet, or set a fixed host.
+- `Can't send OSC to ... yet (Network is unreachable)` or `Sending OSC to ... failed (...)`: the network isn't up yet (for example Wi-Fi right after boot) or the PC can't be reached. frameeyeosc keeps running and tries again; `... works again` follows once it can send.
+- The eye fit fails at the first dot with few samples, or the left column shows "Eye data" as low: the eye tracker delivers fewer samples than usual. Please report the rate it shows, and whether the PC was streaming over Steam Link at the time.
 - The log says `Sending OSC to ...` but the avatar doesn't react: check that OSC is enabled in VRChat, then check Windows Firewall. VRChat's own inbound rule is often allowed for the "Public" profile only, so OSC from a "Private" home network gets dropped. Note the rule must be for `VRChat.exe`, not `launch.exe`. A narrow rule that fixes it (PowerShell as administrator):
   ```powershell
   New-NetFirewallRule -DisplayName "VRChat OSC (LAN UDP 9000)" -Direction Inbound -Action Allow -Protocol UDP -LocalPort 9000 -RemoteAddress LocalSubnet -Program "C:\Program Files (x86)\Steam\steamapps\common\VRChat\VRChat.exe" -Profile Private

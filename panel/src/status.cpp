@@ -116,6 +116,7 @@ EyeStatus parseStatus(const std::string& text, double now, bool checkPid) {
     status.targetMode = readText(root, "target_mode");
     status.target = readText(root, "target");
     status.rate = readNumber(root, "rate", 0);
+    status.trackerRate = readNumber(root, "tracker_rate", NAN);
     status.tracking = readBool(root, "tracking");
 
     if (const JsonValue* raw = root.get("raw"); raw != nullptr && raw->isObject()) {
@@ -165,6 +166,8 @@ EyeStatus parseStatus(const std::string& text, double now, bool checkPid) {
             c.target = readText(*capture, "target");
             c.done = readText(*capture, "state") == "done";
             c.samples = static_cast<int>(readNumber(*capture, "samples", 0));
+            c.received = static_cast<int>(readNumber(*capture, "received", 0));
+            c.rate = readNumber(*capture, "rate", NAN);
             const double x = readNumber(*capture, "x", NAN);
             const double y = readNumber(*capture, "y", NAN);
             const double spread = readNumber(*capture, "spread", NAN);

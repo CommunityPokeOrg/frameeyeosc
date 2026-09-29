@@ -37,6 +37,8 @@ constexpr double kLabelW = 206;
 constexpr double kControlX = kInnerX + kLabelW + 14;
 constexpr double kControlW = kInnerRight - kControlX;
 constexpr double kRowTop = 116;
+/** Below this many samples a second from the eye tracker, the left column marks the rate as low. */
+constexpr double kLowTrackerRate = 60;
 constexpr double kRowH = 64;
 constexpr double kRowGap = 2;
 constexpr double kCaptionRowH = 84;
@@ -779,16 +781,27 @@ void EyePanel::drawStatus(const Pen& pen, const UiText& t, const PanelModel& m) 
         pen.text(x0, 180, destination, size, kText, true);
         pen.text(x0, 204, s.targetMode == "fixed" ? t.modeFixed : t.modeAuto, 15, kTextMuted);
     }
-    pen.text(x0, 236, t.rateLabel, 15, kTextMuted, true);
+    pen.text(x0, 228, t.rateLabel, 15, kTextMuted, true);
     {
         char rate[64];
         std::snprintf(rate, sizeof(rate), t.rateFormat, s.rate);
-        pen.text(x1, 236, s.running ? std::string(rate) : std::string("—"), 17, kText, true, true);
+        pen.text(x1, 228, s.running ? std::string(rate) : std::string("—"), 17, kText, true, true);
+    }
+    // How fast the eye tracker delivers samples, sent or not: it has been seen at 15 a second instead of 90+
+    pen.text(x0, 250, t.trackerRateLabel, 15, kTextMuted, true);
+    {
+        const bool known = s.running && s.tracking && std::isfinite(s.trackerRate);
+        const bool low = known && s.trackerRate < kLowTrackerRate;
+        char rate[64];
+        std::snprintf(rate, sizeof(rate), t.rateFormat, s.trackerRate);
+        const std::string text = known ? (low ? std::string(t.trackerRateLowHint) + "  " + rate : std::string(rate))
+                                       : std::string("—");
+        pen.text(x1, 250, text, 17, low ? kDanger : kText, true, true);
     }
     pen.color(kDivider);
     cairo_set_line_width(cr, 1);
-    cairo_move_to(cr, x0, 254.5);
-    cairo_line_to(cr, x1, 254.5);
+    cairo_move_to(cr, x0, 262.5);
+    cairo_line_to(cr, x1, 262.5);
     cairo_stroke(cr);
 
     // Eyelids: a thin gray bar for the raw value, a thick accent bar for the sent value
@@ -1036,6 +1049,23 @@ void EyePanel::drawBasic(const Pen& pen, const UiText& t, const PanelModel& m, c
                       output == kOutputEtvr ? 1 : (output == kOutputVrchat ? 0 : -1), 19, locked);
     }
     y += kRowH + kRowGap;
+    // How EyeTrackingActive goes out (VRChat only: greyed out for ETVR, which never gets it)
+    {
+        const bool locked = v.locked(key::kEyeTrackingActive);
+        const bool vrchat = v.text(key::kOutput) != kOutputEtvr;
+        const std::string type = v.text(key::kEyeTrackingActive);
+        int selected = -1;
+        for (int i = 0; i < 3; ++i) {
+            if (type == kActiveTypes[i]) selected = i;
+        }
+        drawRowLabel(pen, t, y, kRowH, t.rowActiveType, t.hintActiveType, locked);
+        drawSegmented(pen, kControlX, y + cy, kControlW, kControlH,
+                      {{"Bool", {PanelAction::SetActiveType, key::kEyeTrackingActive, 0}},
+                       {"Float", {PanelAction::SetActiveType, key::kEyeTrackingActive, 1}},
+                       {t.activeOff, {PanelAction::SetActiveType, key::kEyeTrackingActive, 2}}},
+                      selected, 19, locked || !vrchat);
+    }
+    y += kRowH + kRowGap;
     // Target PC: automatic, fixed to the PC frameeyeosc sends to now, or typed on the keypad; any host set by hand
     // shows in the third choice
     {
@@ -1094,7 +1124,7 @@ void EyePanel::drawBasic(const Pen& pen, const UiText& t, const PanelModel& m, c
                        {t.off, {PanelAction::AutostartOff, nullptr, 0}, usable}},
                       a == Autostart::Enabled ? 0 : (a == Autostart::Disabled ? 1 : -1), 20);
     }
-    y += kRowH + kRowGap + 8;
+    y += kRowH + kRowGap + 2;
     // Reset all / quit (both ask for a second press)
     for (int i = 0; i < 2; ++i) {
         const bool isQuit = i == 1;
@@ -1110,7 +1140,7 @@ void EyePanel::drawBasic(const Pen& pen, const UiText& t, const PanelModel& m, c
         textCentered(pen, x + w / 2, centerBaseline(y, kControlH, size), label, size, armed ? kOnAccent : kText, true);
         addButton(hit, x, y, w, kControlH);
     }
-    y += kControlH + 34;
+    y += kControlH + 28;
     const std::vector<std::string> lines = wrapText(pen, t.footer, 15, false, kInnerRight - kInnerX, 2);
     for (size_t i = 0; i < lines.size(); ++i) pen.text(kInnerX, y + i * 22, lines[i], 15, kTextMuted);
 }

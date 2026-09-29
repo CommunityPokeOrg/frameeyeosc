@@ -73,10 +73,26 @@ Point pointAt(Mode mode, int index) {
     return kTargets[std::clamp(index, 0, kPointCount - 1)].point;
 }
 
+int samplesNeeded(const Measured& measured) {
+    if (measured.received <= 0) return kMinSamples;
+    const int share = static_cast<int>(std::ceil(kMinUsableShare * measured.received - 1e-9));
+    return std::min(kMinSamples, std::max(kMinSamplesFloor, share));
+}
+
 std::string tryText(Point point, int attempt, const Measured& measured, const Measured& center, const char* outcome) {
     char text[256];
-    int n = std::snprintf(text, sizeof(text), "%s try %d: %d samples (min %d), ", target(point).name, attempt,
+    int n = 0;
+    if (measured.received > 0) {
+        n = std::snprintf(text, sizeof(text), "%s try %d: %d of %d samples usable", target(point).name, attempt,
+                          measured.samples, measured.received);
+        if (std::isfinite(measured.rateHz)) {
+            n += std::snprintf(text + n, sizeof(text) - n, " at %.0f Hz", measured.rateHz);
+        }
+        n += std::snprintf(text + n, sizeof(text) - n, " (needs %d), ", samplesNeeded(measured));
+    } else {
+        n = std::snprintf(text, sizeof(text), "%s try %d: %d samples (min %d), ", target(point).name, attempt,
                           measured.samples, kMinSamples);
+    }
     if (point == Point::Closed) {
         const auto limit = [&](int eye) { return kClosedShare * center.openness[eye]; };
         std::snprintf(text + n, sizeof(text) - n, "openness L %.3f R %.3f (below %.3f / %.3f) -> %s",
@@ -91,12 +107,12 @@ std::string tryText(Point point, int attempt, const Measured& measured, const Me
 }
 
 bool usable(const Measured& measured) {
-    return measured.samples >= kMinSamples && std::isfinite(measured.x) && std::isfinite(measured.y) &&
+    return measured.samples >= samplesNeeded(measured) && std::isfinite(measured.x) && std::isfinite(measured.y) &&
            std::isfinite(measured.spread) && measured.spread <= kMaxSpread;
 }
 
 bool usableClosed(const Measured& closed, const Measured& center) {
-    if (closed.samples < kMinSamples || !closed.hasOpenness || !center.hasOpenness) return false;
+    if (closed.samples < samplesNeeded(closed) || !closed.hasOpenness || !center.hasOpenness) return false;
     for (int eye = 0; eye < 2; ++eye) {
         if (!(closed.openness[eye] < kClosedShare * center.openness[eye])) return false;
     }
@@ -353,6 +369,8 @@ Actions Session::tick(double now, bool dashboardOpen, const EyeStatus& status) {
         if (ours && capture.done) {
             Measured measured;
             measured.samples = capture.samples;
+            measured.received = capture.received;
+            measured.rateHz = capture.rate;
             if (capture.hasAverage) {
                 measured.x = capture.x;
                 measured.y = capture.y;
