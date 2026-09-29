@@ -36,7 +36,13 @@ constexpr double kFullScaleDeg = 45.0;
 constexpr double kTargetDistanceM = 2.0;
 /** The distance between the eyes when SteamVR doesn't say (m). */
 constexpr double kDefaultIpdM = 0.063;
-/** A capture is used when it has at least this many samples (of about 135 in the 1.5 s frameeyeosc averages)... */
+/** A capture is used when at least this share of the samples that came in are usable (the eyes open and the gaze
+ *  reliable)... The tracker's rate varies: 90-136 a second while streaming, and 15 has been seen, so no fixed count
+ *  fits all... */
+constexpr double kMinUsableShare = 0.6;
+/** ...and there are at least this many (about 0.8 s at 15 a second)... */
+constexpr int kMinSamplesFloor = 12;
+/** ...or, from a frameeyeosc that does not say how many came in (before 0.5.3), at least this many... */
 constexpr int kMinSamples = 45;
 /** ...and its gaze spreads no more than this (on the -1..1 scale; 0.06 is about 2.7°). */
 constexpr double kMaxSpread = 0.06;
@@ -57,7 +63,8 @@ constexpr double kMoveSec = 0.35;
 constexpr double kCaptureSec = kPointSec - kSettleSec;
 /** ...skipping its first samples while the eyes settle on the dot. */
 constexpr double kCaptureSkipSec = 0.3;
-static_assert((kCaptureSec - kCaptureSkipSec) * 90 >= 2 * 45, "at 90 Hz, twice kMinSamples, so a blink still leaves enough");
+static_assert((kCaptureSec - kCaptureSkipSec) * 15 >= 2 * kMinSamplesFloor,
+              "at 15 Hz, twice kMinSamplesFloor, so a blink still leaves enough");
 /** The eyes-shut step: "close your eyes for 3 s" counts down 3, 2, 1 this long, then the capture is asked for... */
 constexpr double kCloseSettleSec = 3.0;
 /** ...which lasts this long, the time the eyes are shut (what the target says)... */
@@ -109,8 +116,18 @@ struct Measured {
     double xEye[2] = {0.0, 0.0};  ///< each eye's own raw sideways gaze, left / right
     double openness[2] = {0.0, 0.0};  ///< left, right
     bool hasOpenness = false;
-    int samples = 0;
+    int samples = 0;    ///< usable samples averaged...
+    int received = 0;   ///< ...of these that came in (0 = not reported)
+    double rateHz = NAN;  ///< the tracker's rate over the capture
 };
+
+/**
+ * How many usable samples a capture needs: kMinUsableShare of those that came in, at least kMinSamplesFloor
+ * (kMinSamples if frameeyeosc did not say how many came in).
+ * @param measured the capture
+ * @return the count
+ */
+int samplesNeeded(const Measured& measured);
 
 /** The numbers behind a failure, for the panel and the log. */
 struct FailureDetail {

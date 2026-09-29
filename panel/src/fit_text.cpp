@@ -85,7 +85,15 @@ std::string failureDetailText(const UiText& t, const gaze_fit::View& fit) {
     using gaze_fit::Failure;
     const gaze_fit::FailureDetail& d = fit.detail;
     const std::string dot = format(t.failDetailPointFormat, pointName(t, fit.point));
-    const std::string samples = format(t.failDetailSamplesFormat, d.last.samples, gaze_fit::kMinSamples);
+    // "26/26 usable at 15 a second, 16 needed", or from an older frameeyeosc "30/45"
+    std::string samples;
+    if (d.last.received > 0) {
+        const std::string rate = std::isfinite(d.last.rateHz) ? format(t.failDetailRateFormat, d.last.rateHz) : "";
+        samples = format(t.failDetailSamplesRateFormat, d.last.samples, d.last.received, rate.c_str(),
+                         gaze_fit::samplesNeeded(d.last));
+    } else {
+        samples = format(t.failDetailSamplesFormat, d.last.samples, gaze_fit::kMinSamples);
+    }
     const std::string tries = format(t.failDetailTriesFormat, d.tries);
     const char* eyes[2] = {t.failDetailEyeLeft, t.failDetailEyeRight};
     switch (fit.failure) {
@@ -98,7 +106,7 @@ std::string failureDetailText(const UiText& t, const gaze_fit::View& fit) {
         }
         case Failure::NotClosed: {
             std::vector<std::string> parts;
-            if (d.last.samples < gaze_fit::kMinSamples) parts.push_back(samples);
+            if (d.last.samples < gaze_fit::samplesNeeded(d.last)) parts.push_back(samples);
             for (int eye = 0; eye < 2; ++eye) {
                 parts.push_back(format(t.failDetailClosedFormat, eyes[eye], d.last.openness[eye], d.closedBelow[eye]));
             }

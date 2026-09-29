@@ -37,6 +37,8 @@ constexpr double kLabelW = 206;
 constexpr double kControlX = kInnerX + kLabelW + 14;
 constexpr double kControlW = kInnerRight - kControlX;
 constexpr double kRowTop = 116;
+/** Below this many samples a second from the eye tracker, the left column marks the rate as low. */
+constexpr double kLowTrackerRate = 60;
 constexpr double kRowH = 64;
 constexpr double kRowGap = 2;
 constexpr double kCaptionRowH = 84;
@@ -779,16 +781,27 @@ void EyePanel::drawStatus(const Pen& pen, const UiText& t, const PanelModel& m) 
         pen.text(x0, 180, destination, size, kText, true);
         pen.text(x0, 204, s.targetMode == "fixed" ? t.modeFixed : t.modeAuto, 15, kTextMuted);
     }
-    pen.text(x0, 236, t.rateLabel, 15, kTextMuted, true);
+    pen.text(x0, 228, t.rateLabel, 15, kTextMuted, true);
     {
         char rate[64];
         std::snprintf(rate, sizeof(rate), t.rateFormat, s.rate);
-        pen.text(x1, 236, s.running ? std::string(rate) : std::string("—"), 17, kText, true, true);
+        pen.text(x1, 228, s.running ? std::string(rate) : std::string("—"), 17, kText, true, true);
+    }
+    // How fast the eye tracker delivers samples, sent or not: it has been seen at 15 a second instead of 90+
+    pen.text(x0, 250, t.trackerRateLabel, 15, kTextMuted, true);
+    {
+        const bool known = s.running && s.tracking && std::isfinite(s.trackerRate);
+        const bool low = known && s.trackerRate < kLowTrackerRate;
+        char rate[64];
+        std::snprintf(rate, sizeof(rate), t.rateFormat, s.trackerRate);
+        const std::string text = known ? (low ? std::string(t.trackerRateLowHint) + "  " + rate : std::string(rate))
+                                       : std::string("—");
+        pen.text(x1, 250, text, 17, low ? kDanger : kText, true, true);
     }
     pen.color(kDivider);
     cairo_set_line_width(cr, 1);
-    cairo_move_to(cr, x0, 254.5);
-    cairo_line_to(cr, x1, 254.5);
+    cairo_move_to(cr, x0, 262.5);
+    cairo_line_to(cr, x1, 262.5);
     cairo_stroke(cr);
 
     // Eyelids: a thin gray bar for the raw value, a thick accent bar for the sent value

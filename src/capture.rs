@@ -50,6 +50,11 @@ pub struct CaptureResult {
     pub openness: Option<[f32; 2]>,
     /// Samples that went into the average.
     pub samples: u32,
+    /// Samples that came in after the skipped start, usable or not: the panel judges `samples`
+    /// against this, as the tracker's rate varies (about 15 to 136 a second).
+    pub received: u32,
+    /// The tracker's rate over the capture (samples a second); None before two samples.
+    pub rate: Option<f32>,
 }
 
 /// One capture in progress.
@@ -58,6 +63,10 @@ pub struct Capture {
     closed: bool,
     started: Instant,
     first_time: Option<f64>,
+    last_time: f64,
+    // Every sample since the first, and those after the skipped start.
+    all: u32,
+    received: u32,
     sum: [f64; 2],
     sum_squares: [f64; 2],
     eye_x: [f64; 2],
@@ -72,6 +81,9 @@ impl Capture {
             request,
             started: Instant::now(),
             first_time: None,
+            last_time: 0.0,
+            all: 0,
+            received: 0,
             sum: [0.0; 2],
             sum_squares: [0.0; 2],
             eye_x: [0.0; 2],
@@ -87,6 +99,11 @@ impl Capture {
         let elapsed = time - *self.first_time.get_or_insert(time);
         if elapsed >= self.request.seconds {
             return true;
+        }
+        self.all += 1;
+        self.last_time = time;
+        if elapsed >= self.request.skip {
+            self.received += 1;
         }
         let finite = gaze.iter().chain(&eye_x).chain(&openness).all(|value| value.is_finite());
         if elapsed >= self.request.skip && (usable || self.closed) && finite {
@@ -130,15 +147,27 @@ impl Capture {
             x_right: gaze.then_some((self.eye_x[1] / count) as f32),
             openness: known.then(|| self.openness.map(|sum| (sum / count) as f32)),
             samples: if state == CaptureState::Done { self.samples } else { 0 },
+            received: if state == CaptureState::Done { self.received } else { 0 },
+            rate: self.rate(),
         }
+    }
+
+    /// Samples a second between the first and the last one.
+    fn rate(&self) -> Option<f32> {
+        let span = self.last_time - self.first_time?;
+        (self.all > 1 && span > 0.0).then(|| (f64::from(self.all - 1) / span) as f32)
     }
 }
 
 impl CaptureResult {
     /// One line for the journal, so a calibration can be read back later.
     pub fn log_line(&self) -> String {
+        let rate = self.rate.map_or_else(String::new, |rate| format!(" at {rate:.0} Hz"));
         let Some([left, right]) = self.openness else {
-            return format!("Gaze capture {} ({}): no usable samples", self.id, self.target);
+            return format!(
+                "Gaze capture {} ({}): no usable samples ({} received{rate})",
+                self.id, self.target, self.received
+            );
         };
         let gaze = match (self.x, self.y, self.spread, self.x_left, self.x_right) {
             (Some(x), Some(y), Some(spread), Some(left), Some(right)) => {
@@ -147,8 +176,8 @@ impl CaptureResult {
             _ => String::new(),
         };
         format!(
-            "Gaze capture {} ({}): {gaze}openness L {left:.3} R {right:.3} from {} samples",
-            self.id, self.target, self.samples
+            "Gaze capture {} ({}): {gaze}openness L {left:.3} R {right:.3} from {} of {} samples{rate}",
+            self.id, self.target, self.samples, self.received
         )
     }
 }
@@ -200,8 +229,11 @@ mod tests {
         let spread = result.spread.unwrap();
         // Each axis is off by 0.01 either way.
         assert!((spread - 0.0002_f32.sqrt()).abs() < 1e-4, "{spread}");
+        // Every sample after the skipped start came in (the blinking ones too), at 90 a second.
+        assert!((134..=136).contains(&result.received), "{}", result.received);
+        assert!((result.rate.unwrap() - 90.0).abs() < 0.5);
         let line = result.log_line();
-        let expected = format!("from {} samples", result.samples);
+        let expected = format!("from {} of {} samples at 90 Hz", result.samples, result.received);
         assert!(line.starts_with("Gaze capture 7 (up): x +0.") && line.ends_with(&expected), "{line}");
     }
 
@@ -225,6 +257,27 @@ mod tests {
     }
 
     #[test]
+    fn a_slow_tracker_is_measured_at_its_own_rate() {
+        // 15 samples a second (a Frame not streaming): 2 s skipping the first 0.3 s gives about 26 samples,
+        // all of them usable, and the result says so, so the panel can accept them.
+        let mut capture = Capture::new(GazeCapture {
+            id: 3,
+            target: "center".into(),
+            seconds: 2.0,
+            skip: 0.3,
+        });
+        for i in 0..100 {
+            if capture.add(50.0 + f64::from(i) / 15.0, [0.01, 0.02], [0.03, -0.01], [1.0, 0.95], true) {
+                break;
+            }
+        }
+        let result = capture.result(CaptureState::Done);
+        assert_eq!((result.samples, result.received), (25, 25));
+        assert!((result.rate.unwrap() - 15.0).abs() < 0.01);
+        assert!(result.log_line().ends_with("from 25 of 25 samples at 15 Hz"), "{}", result.log_line());
+    }
+
+    #[test]
     fn nothing_usable_reports_no_average() {
         let mut capture = capture();
         for i in 0..200 {
@@ -234,7 +287,7 @@ mod tests {
         }
         let result = capture.result(CaptureState::Done);
         assert_eq!((result.samples, result.x, result.spread, result.openness), (0, None, None, None));
-        assert_eq!(result.log_line(), "Gaze capture 7 (up): no usable samples");
+        assert_eq!(result.log_line(), "Gaze capture 7 (up): no usable samples (135 received at 90 Hz)");
         let running = capture.result(CaptureState::Running);
         assert_eq!((running.state, running.x, running.samples), (CaptureState::Running, None, 0));
     }
@@ -262,6 +315,9 @@ mod tests {
         assert_eq!((result.x, result.y, result.spread, result.x_left), (None, None, None, None));
         let [left, right] = result.openness.unwrap();
         assert!((left - 0.15).abs() < 1e-4 && (right - 0.26).abs() < 1e-4);
-        assert_eq!(result.log_line(), format!("Gaze capture 9 (closed): openness L 0.150 R 0.260 from {} samples", result.samples));
+        assert_eq!(
+            result.log_line(),
+            format!("Gaze capture 9 (closed): openness L 0.150 R 0.260 from {0} of {0} samples at 90 Hz", result.samples)
+        );
     }
 }

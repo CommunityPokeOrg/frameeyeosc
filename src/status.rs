@@ -23,6 +23,9 @@ pub struct Status<'a> {
     pub target_mode: &'static str,
     pub target: Option<String>,
     pub rate: f32,
+    /// Samples from the eye tracker in the last second (sent or not): about 90-136 while streaming,
+    /// and it has been seen at 15.
+    pub tracker_rate: f32,
     pub tracking: bool,
     pub raw: Option<RawValues>,
     pub sent: Option<SentValues>,

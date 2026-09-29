@@ -884,11 +884,40 @@ impl Target {
     }
 }
 
+/// Whether sending works, so a failure (no network yet, say) is logged once when it starts and once
+/// when it ends, and never stops the process.
+#[derive(Default)]
+struct SendHealth {
+    failing: Option<String>,
+}
+
+impl SendHealth {
+    /// Note how one send went; returns the line to log, if the state changed. "Connection refused"
+    /// (nothing listening on the PC, e.g. VRChat closed) is neither: it comes back on every other
+    /// packet and is not worth a line.
+    fn record(&mut self, addr: SocketAddr, result: &io::Result<usize>) -> Option<String> {
+        match result {
+            Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => None,
+            Err(error) => {
+                let reason = error.to_string();
+                (self.failing.as_ref() != Some(&reason)).then(|| {
+                    self.failing = Some(reason.clone());
+                    format!("Sending OSC to {addr} failed ({reason}); retrying with every sample")
+                })
+            }
+            Ok(_) => self.failing.take().map(|_| format!("Sending OSC to {addr} works again")),
+        }
+    }
+}
+
 /// UDP sender that re-resolves its target periodically and reconnects when it changes.
 struct Output {
     target: Target,
     socket: Option<(UdpSocket, SocketAddr)>,
     last_resolve: Option<Instant>,
+    health: SendHealth,
+    // Why the socket to the target could not be set up, so it is logged once per reason.
+    connect_error: Option<String>,
 }
 
 impl Output {
@@ -897,6 +926,8 @@ impl Output {
             target,
             socket: None,
             last_resolve: None,
+            health: SendHealth::default(),
+            connect_error: None,
         }
     }
 
@@ -908,12 +939,14 @@ impl Output {
         }
     }
 
-    fn refresh(&mut self) -> io::Result<()> {
+    /// Look the target up again when due. Never fails: without a network the socket stays unset and
+    /// the next look-up (RESOLVE_INTERVAL later) tries again.
+    fn refresh(&mut self) {
         if let Some(resolved) = self.last_resolve {
             // A fixed host is looked up once (like before the config file existed) unless that failed.
             let settled = matches!(self.target, Target::Fixed { .. }) && self.socket.is_some();
             if settled || resolved.elapsed() < RESOLVE_INTERVAL {
-                return Ok(());
+                return;
             }
         }
         self.last_resolve = Some(Instant::now());
@@ -928,39 +961,63 @@ impl Output {
             Target::SteamLink { port } => steam_link_peer().map(|ip| SocketAddr::new(ip, *port)),
         };
         if wanted == self.socket.as_ref().map(|(_, addr)| *addr) {
-            return Ok(());
+            return;
         }
         self.socket = match wanted {
-            Some(addr) => {
-                let socket = UdpSocket::bind(if addr.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" })?;
-                socket.connect(addr)?;
-                eprintln!("Sending OSC to {addr}");
-                Some((socket, addr))
-            }
+            Some(addr) => match connect(addr) {
+                Ok(socket) => {
+                    eprintln!("Sending OSC to {addr}");
+                    self.connect_error = None;
+                    self.health = SendHealth::default();
+                    Some((socket, addr))
+                }
+                // e.g. "Network is unreachable" while Wi-Fi comes up after boot
+                Err(error) => {
+                    let reason = error.to_string();
+                    if self.connect_error.as_ref() != Some(&reason) {
+                        eprintln!("Can't send OSC to {addr} yet ({reason}); retrying every {} s", RESOLVE_INTERVAL.as_secs());
+                        self.connect_error = Some(reason);
+                    }
+                    None
+                }
+            },
             None if matches!(self.target, Target::SteamLink { .. }) => {
                 eprintln!("No Steam Link connection found; waiting for one");
                 None
             }
             None => None,
         };
-        Ok(())
     }
 
     fn addr(&self) -> Option<SocketAddr> {
         self.socket.as_ref().map(|(_, addr)| *addr)
     }
 
-    fn send(&self, addr: String, args: Vec<OscType>) -> Result<(), Box<dyn Error>> {
-        let Some((socket, _)) = &self.socket else {
+    /// Send one message. A network error (unreachable, refused, no address yet...) is logged when it
+    /// starts and ends, and never returned: the next sample simply tries again.
+    fn send(&mut self, addr: String, args: Vec<OscType>) -> Result<(), Box<dyn Error>> {
+        let Some((socket, target)) = &self.socket else {
             return Ok(());
         };
         let packet = OscPacket::Message(OscMessage { addr, args });
-        match socket.send(&encoder::encode(&packet)?) {
-            // Nothing is listening yet (e.g. VRChat is closed); keep running rather than exit.
-            Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => Ok(()),
-            result => result.map(drop).map_err(Into::into),
+        let result = socket.send(&encoder::encode(&packet)?);
+        if let Some(line) = self.health.record(*target, &result) {
+            eprintln!("{line}");
         }
+        Ok(())
     }
+}
+
+/// How many of these times fall in the last RATE_WINDOW (one second): a rate a second.
+fn per_second(times: &VecDeque<Instant>) -> f32 {
+    times.iter().filter(|time| time.elapsed() < RATE_WINDOW).count() as f32
+}
+
+/// A UDP socket connected to `addr` (connecting only sets where packets go; it fails without a route).
+fn connect(addr: SocketAddr) -> io::Result<UdpSocket> {
+    let socket = UdpSocket::bind(if addr.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" })?;
+    socket.connect(addr)?;
+    Ok(socket)
 }
 
 /// The PC Steam Link is streaming from: the remote end of the `vrlink` client's connected UDP socket.
@@ -1236,7 +1293,7 @@ fn osc_messages(settings: &Settings, sample: &Sample) -> Vec<(String, OscType)> 
     messages
 }
 
-fn send_inactive(output: &Output, prefix: &str) -> Result<(), Box<dyn Error>> {
+fn send_inactive(output: &mut Output, prefix: &str) -> Result<(), Box<dyn Error>> {
     output.send(
         format!("/avatar/parameters{prefix}/EyeTrackingActive"),
         vec![OscType::Bool(false)],
@@ -1270,8 +1327,9 @@ struct Bridge {
     active_since: Option<Instant>,
     last_data: Option<Instant>,
     latest: Option<Sample>,
-    // When the samples of the last RATE_WINDOW went out.
+    // When the samples of the last RATE_WINDOW went out, and when they came in from the tracker.
     sent: VecDeque<Instant>,
+    received: VecDeque<Instant>,
     // The gaze capture the panel asked for, while it runs, and the latest one's result.
     capture: Option<Capture>,
     capture_result: Option<CaptureResult>,
@@ -1295,7 +1353,7 @@ impl Bridge {
         }
         let stream = vrchat_stream(&self.settings);
         if self.active_since.is_some() && stream.is_some() && stream != vrchat_stream(&settings) {
-            send_inactive(&self.output, &self.settings.prefix)?;
+            send_inactive(&mut self.output, &self.settings.prefix)?;
         }
         self.output.set_target(Target::of(&settings));
         self.smoother.configure(&settings);
@@ -1333,12 +1391,11 @@ impl Bridge {
                 self.sent.push_back(now);
             }
         }
-        while self
-            .sent
-            .front()
-            .is_some_and(|sent| sent.elapsed() >= RATE_WINDOW)
-        {
-            self.sent.pop_front();
+        self.received.push_back(now);
+        for times in [&mut self.sent, &mut self.received] {
+            while times.front().is_some_and(|time| time.elapsed() >= RATE_WINDOW) {
+                times.pop_front();
+            }
         }
         let dot = dots::DotSample {
             time: data.sample_time,
@@ -1376,7 +1433,7 @@ impl Bridge {
     fn on_lost(&mut self, reason: &str) -> Result<(), Box<dyn Error>> {
         eprintln!("Eye tracking stopped ({reason})");
         if vrchat_stream(&self.settings).is_some() {
-            send_inactive(&self.output, &self.settings.prefix)?;
+            send_inactive(&mut self.output, &self.settings.prefix)?;
         }
         self.smoother.reset();
         self.active_since = None;
@@ -1396,11 +1453,8 @@ impl Bridge {
             output: settings.output,
             target_mode: if settings.host == "auto" { "auto" } else { "fixed" },
             target: self.output.addr().map(|addr| addr.to_string()),
-            rate: self
-                .sent
-                .iter()
-                .filter(|sent| sent.elapsed() < RATE_WINDOW)
-                .count() as f32,
+            rate: per_second(&self.sent),
+            tracker_rate: per_second(&self.received),
             tracking: self.active_since.is_some(),
             raw: self.latest.as_ref().map(|sample| RawValues {
                 openness: status::round(sample.openness),
@@ -1498,6 +1552,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         last_data: None,
         latest: None,
         sent: VecDeque::new(),
+        received: VecDeque::new(),
         capture: None,
         capture_result: None,
         dots: dots::DotStream::new(status::status_path().parent().unwrap_or(Path::new("/tmp"))),
@@ -1511,7 +1566,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         if let Some(reload) = bridge.config.poll() {
             bridge.apply(reload)?;
         }
-        bridge.output.refresh()?;
+        bridge.output.refresh();
         match source.next(POLL)? {
             Next::Sample(data) if data.is_finite() => bridge.on_sample(data)?,
             // Short waits are normal; only a whole second without data means tracking stopped.
@@ -1933,6 +1988,51 @@ mod tests {
         // Straight ahead nothing changes: the range there is the whole one.
         let ahead = fitted_openness(0.9, 0.0, &fit, &settings);
         assert!((ahead - settings.lid_open).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_send_error_is_logged_once_and_never_stops_the_process() {
+        let addr: SocketAddr = "192.0.2.1:9000".parse().unwrap();
+        let mut health = SendHealth::default();
+        let unreachable = || Err(io::Error::from(io::ErrorKind::NetworkUnreachable));
+        assert_eq!(health.record(addr, &Ok(20)), None);
+        // Wi-Fi not up yet: one line when it starts failing, then nothing while it keeps failing...
+        let line = health.record(addr, &unreachable()).unwrap();
+        assert!(line.starts_with("Sending OSC to 192.0.2.1:9000 failed (") && line.ends_with("retrying with every sample"), "{line}");
+        assert_eq!(health.record(addr, &unreachable()), None);
+        // ...a new reason is worth a line...
+        assert!(health.record(addr, &Err(io::Error::from(io::ErrorKind::HostUnreachable))).is_some());
+        // ..."refused" (nothing listening) is neither a failure nor a recovery...
+        assert_eq!(health.record(addr, &Err(io::Error::from(io::ErrorKind::ConnectionRefused))), None);
+        // ...and one line when it works again.
+        assert_eq!(health.record(addr, &Ok(20)).as_deref(), Some("Sending OSC to 192.0.2.1:9000 works again"));
+        assert_eq!(health.record(addr, &Ok(20)), None);
+
+        // A real send to a port nothing listens on: never an error, however often.
+        let listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let mut output = Output::new(Target::Fixed { host: "127.0.0.1".into(), port });
+        output.refresh();
+        assert_eq!(output.addr().map(|addr| addr.port()), Some(port));
+        for _ in 0..5 {
+            assert!(output.send("/avatar/parameters/FT/v2/EyeLeftX".into(), vec![OscType::Float(0.1)]).is_ok());
+        }
+        // A target that can't be looked up just waits (no socket, no error).
+        let mut nowhere = Output::new(Target::Fixed { host: "no-such-host.invalid".into(), port: 9000 });
+        nowhere.refresh();
+        assert!(nowhere.addr().is_none());
+        assert!(nowhere.send("/x".into(), vec![OscType::Bool(true)]).is_ok());
+    }
+
+    #[test]
+    fn the_rate_counts_the_last_second() {
+        let now = Instant::now();
+        let times: VecDeque<Instant> = [now - Duration::from_millis(1500), now - Duration::from_millis(900), now]
+            .into_iter()
+            .collect();
+        assert_eq!(per_second(&times), 2.0);
+        assert_eq!(per_second(&VecDeque::new()), 0.0);
     }
 
     #[test]

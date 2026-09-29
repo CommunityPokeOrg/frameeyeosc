@@ -82,6 +82,7 @@ struct Options {
     bool fakeNotRunning = false;
     bool fakePaused = false;
     bool fakeNoTracking = false;
+    bool fakeSlowTracker = false; ///< --fake-slow-tracker: the eye tracker delivers 15 samples a second
     bool fakeEtvr = false;
     bool fakeFixed = false;
     bool fakeTargetNull = false;
@@ -180,6 +181,7 @@ void printUsage() {
         "                        Each --fake-* below implies --fake\n"
         "      --fake-not-running / --fake-paused / --fake-no-tracking / --fake-etvr / --fake-fixed\n"
         "      --fake-target-null  Auto target not found yet\n"
+        "      --fake-slow-tracker  The eye tracker delivers only 15 samples a second\n"
         "      --fake-locked     Some keys locked by the command line\n"
         "      --fake-config-error  frameeyeosc reports a config error\n"
         "      --fake-broken     config.json can't be parsed\n"
@@ -298,6 +300,8 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.fake = options.fakeNotRunning = true;
         } else if (arg == "--fake-paused") {
             options.fake = options.fakePaused = true;
+        } else if (arg == "--fake-slow-tracker") {
+            options.fake = options.fakeSlowTracker = true;
         } else if (arg == "--fake-no-tracking") {
             options.fake = options.fakeNoTracking = true;
         } else if (arg == "--fake-etvr") {
@@ -559,7 +563,9 @@ PanelModel fakeModel(const Options& options) {
             if (fit.failure == Failure::Unsteady) {
                 fit.point = Point::Center;
                 d.tries = 3;
-                d.last.samples = 30;
+                d.last.samples = 10;
+                d.last.received = 26;
+                d.last.rateHz = 15.2;
                 d.last.spread = 3.4 / gaze_fit::kFullScaleDeg;
             } else if (fit.failure == Failure::NotClosed) {
                 fit.point = Point::Closed;
@@ -596,7 +602,8 @@ PanelModel fakeModel(const Options& options) {
         if (!options.fakeTargetNull) {
             s.target = std::string("192.168.0.60:") + (etvr ? "8889" : (options.fakeCustom ? "9001" : "9000"));
         }
-        s.rate = options.fakePaused ? 0.0 : 89.6;
+        s.trackerRate = options.fakeSlowTracker ? 15.0 : 89.6;
+        s.rate = options.fakePaused ? 0.0 : s.trackerRate;
         s.tracking = !options.fakeNoTracking;
         if (s.tracking) {
             s.hasRaw = true;
