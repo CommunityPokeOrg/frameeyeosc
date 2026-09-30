@@ -610,6 +610,9 @@ PanelHit EyePanel::pointerDown(double x, double y, double now) {
         case PanelAction::FitDetailsPage:
             fitDetailsPage_ = hit.arg;
             return {};
+        case PanelAction::LidMarks:
+            lidMarksOpen_ = !lidMarksOpen_;
+            return {};
         case PanelAction::HostKey:
             hostEntryText_ = host_entry::keypadInput(hostEntryText_, hit.arg);
             hostEntryError_.clear();
@@ -1594,7 +1597,7 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
     // What is going on: how it works, the run, the result (with "Reset"), or why it stopped
     {
         const bool compact = fitDetails_;
-        const double h = compact ? 50 : 162;
+        const double h = compact ? 50 : 184;
         const double x0 = kInnerX;
         const double x1 = kInnerRight;
         strokeRounded(pen, x0, y, x1 - x0, h, 14, kDivider, 1.5);
@@ -1665,6 +1668,19 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
                                           drop);
                             paragraphs.push_back(text);
                         }
+                        // How each eye widens: its wide reading, or following the other eye
+                        if (r.hasWide) {
+                            std::string wide[2];
+                            for (int eye = 0; eye < 2; ++eye) {
+                                wide[eye] = std::isfinite(r.lidWide[eye])
+                                                ? twoDecimals(r.lidWide[eye])
+                                                : formatText(t.fitWideFollowsFormat, eye == 0 ? t.right : t.left);
+                            }
+                            std::snprintf(text, sizeof(text), t.fitWideFormat, wide[0].c_str(), wide[1].c_str());
+                            paragraphs.push_back(text);
+                        } else {
+                            paragraphs.push_back(t.fitWideNone);
+                        }
                     } else {
                         paragraphs.push_back(t.fitLidsNone);
                     }
@@ -1691,7 +1707,7 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
         const std::vector<std::string> titleLines =
             title.empty() ? std::vector<std::string>() : wrapText(pen, title, 18, true, textW, 1);
         std::vector<std::string> detailLines;
-        const size_t maxDetail = titleLines.empty() ? 6 : 5;
+        const size_t maxDetail = titleLines.empty() ? 7 : 6;
         for (const std::string& paragraph : paragraphs) {
             if (detailLines.size() >= maxDetail) break;
             for (const std::string& line : wrapText(pen, paragraph, 15, false, textW, maxDetail - detailLines.size())) {
@@ -1961,11 +1977,27 @@ void EyePanel::drawLids(const Pen& pen, const UiText& t, const PanelModel& m, co
         }
     }
     y += kRowH + kRowGap;
+    // Both eyes fitted: the fit sets closing, opening and widening for each eye, so the four marks (the raw mapping
+    // from before the fit) fold away behind "Fine-tune"; the live bars stay
+    const FitInConfig marksFit = fitInConfig(v);
+    const bool bothFitted = marksFit.lidsFitted[0] && marksFit.lidsFitted[1];
+    const bool showMarks = !bothFitted || lidMarksOpen_;
+    const double marksShift = bothFitted ? 8 : 0;
+    if (bothFitted) {
+        const double bw = 150;
+        const double bh = 28;
+        const std::string label = std::string(t.fitDetails) + (lidMarksOpen_ ? "  ▲" : "  ▼");
+        drawButton(pen, kInnerRight - bw, y, bw, bh, label, {PanelAction::LidMarks, nullptr, 0}, true, false);
+        pen.text(kInnerX, y + 16, t.lidMarksFitted,
+                 fitSize(pen, t.lidMarksFitted, 15, 11, kInnerRight - bw - 12 - kInnerX, false), kTextMuted);
+    }
     // The raw openness of each eye with the four marks laid over it
     {
-        const double top = y;
-        pen.text(kInnerX, top + 16, t.marksTitle, fitSize(pen, t.marksTitle, 15, 11, kInnerRight - kInnerX, false),
-                 kTextMuted);
+        const double top = y + marksShift;
+        if (!bothFitted) {
+            pen.text(kInnerX, top + 16, t.marksTitle,
+                     fitSize(pen, t.marksTitle, 15, 11, kInnerRight - kInnerX, false), kTextMuted);
+        }
         const double barX = kInnerX + 34;
         const double barW = kInnerRight - barX;
         /**
@@ -1987,7 +2019,7 @@ void EyePanel::drawLids(const Pen& pen, const UiText& t, const PanelModel& m, co
             textCentered(pen, barX + barW / 2, centerBaseline(top + 50, 20, 14), t.noEyeData, 14, kTextMuted, false);
         }
         // Mark lines: a light line with dark edges, visible on the accent fill and on the dark track
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < (showMarks ? 4 : 0); ++i) {
             const double x = std::round(xOf(v.number(marks[i])));
             pen.color(kBg);
             cairo_set_line_width(cr, 6);
@@ -2002,9 +2034,9 @@ void EyePanel::drawLids(const Pen& pen, const UiText& t, const PanelModel& m, co
             drawNumberBadge(pen, x, top + 34, i + 1);
         }
     }
-    y += 110;
+    y += 110 + marksShift;
     // The four marks
-    {
+    if (showMarks) {
         const char* marks[4] = {key::kLidClosed, key::kLidOpen, key::kLidWidenStart, key::kLidWide};
         const char* captions[4] = {t.markClosed, t.markOpen, t.markWidenStart, t.markWide};
         const double gap = 12;
@@ -2019,8 +2051,8 @@ void EyePanel::drawLids(const Pen& pen, const UiText& t, const PanelModel& m, co
             drawStepper(pen, x, y + 28, w, kControlH, marks[i], value, formatSetting(marks[i], value), true,
                         v.locked(marks[i]), low, high);
         }
+        y += kCaptionRowH + kRowGap;
     }
-    y += kCaptionRowH + kRowGap;
     // Sync both lids
     {
         const bool locked = v.locked(key::kLidSync);

@@ -140,19 +140,19 @@ UiText makeJapanese() {
     t.hintDespike = "視線とまぶた。約 11 ms 遅れる";
 
     t.rowFit = "目を合わせる";
-    t.hintFit = "視線とまぶた・約 20 秒";
+    t.hintFit = "視線とまぶた・約 25 秒";
     t.fitStart = "目を合わせる";
     t.fitAgain = "もう一度合わせる";
     t.fitCenterOnly = "正面だけ合わせ直す";
     t.fitCenterTilt = "正面と傾きを合わせ直す";
     t.fitStop = "やめる";
     t.fitIntro = "ダッシュボードを閉じると始まります。頭は動かさず、点を目で追ってください。最後は 3・2・1 のあと 3 秒間目を閉じ、"
-                 "チャイムで開けます";
+                 "チャイムで開けたら、もう一度 3・2・1 のあと目を大きく見開きます";
     t.fitNeedsRunning = "frameeyeosc が動いているときに使えます";
     t.fitLocked = "視線かまぶたの値がコマンドで固定されているので使えません";
     t.fitWaiting = "ダッシュボードを閉じると始まります";
-    t.fitHowTo = "頭は動かさず、点を目で追ってください。最後は 3・2・1 のあと 3 秒間目を閉じ、チャイムで開けます。"
-                 "ダッシュボードを開くと止まります";
+    t.fitHowTo = "頭は動かさず、点を目で追ってください。最後は 3・2・1 のあと 3 秒間目を閉じ、チャイムで開けたら、"
+                 "3・2・1 のあと目を大きく見開きます。ダッシュボードを開くと止まります";
     t.fitWaitingCenter = "正面に点が出ます。頭は動かさず見てください。ダッシュボードを開くと止まります";
     t.fitWaitingTilt = "正面、上、下の順に点が出ます。頭は動かさず、点を目で追ってください。ダッシュボードを開くと止まります";
     t.fitRunningFormat = "測っています: %s（%d / %d）";
@@ -202,6 +202,13 @@ UiText makeJapanese() {
     t.pointClosed = "目を閉じる";
     t.targetClose = "3 秒間\n目を閉じて";
     t.targetKeepClosed = "閉じたまま";
+    t.targetWide = "目を大きく\n見開いて";
+    t.targetKeepWide = "見開いたまま";
+    t.pointWide = "目を見開く";
+    t.fitWideFormat = "見開き: 左 %s・右 %s";
+    t.fitWideFollowsFormat = "測れず（%sに合わせる）";
+    t.fitWideNone = "見開き: 測れていません（目盛りの③④を使います）";
+    t.lidMarksFitted = "目を合わせると、閉じ・開き・見開きを目ごとに決めます";
     t.targetOpen = "開けて OK";
     t.fitReset = "元に戻す";
     t.fitDetails = "細かく直す";
@@ -484,19 +491,21 @@ UiText makeEnglish() {
     t.hintDespike = "Gaze and lids, ~11 ms later";
 
     t.rowFit = "Fit your eyes";
-    t.hintFit = "Gaze and eyelids, about 20 s";
+    t.hintFit = "Gaze and eyelids, about 25 s";
     t.fitStart = "Fit my eyes";
     t.fitAgain = "Fit again";
     t.fitCenterOnly = "Re-center only";
     t.fitCenterTilt = "Re-center + tilt";
     t.fitStop = "Stop";
     t.fitIntro = "It starts when you close the dashboard. Keep your head still and follow the dot with your eyes. "
-                 "At the end, after 3, 2, 1, close your eyes for 3 seconds and open them at the chime.";
+                 "At the end, after 3, 2, 1, close your eyes for 3 seconds and open them at the chime, then after "
+                 "another 3, 2, 1 open them wide.";
     t.fitNeedsRunning = "Works while frameeyeosc is running";
     t.fitLocked = "Not available: gaze or eyelid values are locked by the command line";
     t.fitWaiting = "Close the dashboard to start";
     t.fitHowTo = "Keep your head still and follow the dot with your eyes. At the end, after 3, 2, 1, close your eyes "
-                 "for 3 seconds and open them at the chime. Opening the dashboard stops it.";
+                 "for 3 seconds and open them at the chime, then after 3, 2, 1 open them wide. Opening the dashboard "
+                 "stops it.";
     t.fitWaitingCenter = "A dot appears straight ahead. Keep your head still and look at it. Opening the dashboard "
                          "stops it.";
     t.fitWaitingTilt = "A dot appears straight ahead, then up and down. Keep your head still and follow it with "
@@ -548,6 +557,13 @@ UiText makeEnglish() {
     t.pointClosed = "eyes closed";
     t.targetClose = "Close your eyes\nfor 3 s";
     t.targetKeepClosed = "Keep them closed";
+    t.targetWide = "Open your eyes\nwide";
+    t.targetKeepWide = "Keep them wide";
+    t.pointWide = "eyes wide";
+    t.fitWideFormat = "Wide: L %s · R %s";
+    t.fitWideFollowsFormat = "couldn't measure (follows %s)";
+    t.fitWideNone = "Wide: not measured (marks 3 and 4 are used)";
+    t.lidMarksFitted = "The eye fit sets closing, opening and widening for each eye";
     t.targetOpen = "Open them";
     t.fitReset = "Reset";
     t.fitDetails = "Fine-tune";

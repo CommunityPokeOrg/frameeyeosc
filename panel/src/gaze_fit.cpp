@@ -15,8 +15,9 @@ constexpr Target kTargets[kPointCount] = {
     {Point::Down, "down", 0.0, -kUpDownDeg},
     {Point::Left, "left", -kSideDeg, 0.0},
     {Point::Right, "right", kSideDeg, 0.0},
-    // The eyes-shut step shows its words straight ahead
+    // The eyes-shut and eyes-wide steps show their words straight ahead
     {Point::Closed, "closed", 0.0, 0.0},
+    {Point::Wide, "wide", 0.0, 0.0},
 };
 
 /**
@@ -168,6 +169,7 @@ const Target& target(Point point) {
 }
 
 int pointCount(Mode mode) {
+    // The full fit has every step, the eyes-wide one last
     switch (mode) {
         case Mode::Center: return 1;
         case Mode::Tilt: return 3;
@@ -206,6 +208,10 @@ std::string tryText(Point point, int attempt, const Measured& measured, const Me
         const auto limit = [&](int eye) { return kClosedShare * center.openness[eye]; };
         std::snprintf(text + n, sizeof(text) - n, "openness L %.3f R %.3f (below %.3f / %.3f) -> %s",
                       measured.openness[0], measured.openness[1], limit(0), limit(1), outcome);
+    } else if (point == Point::Wide) {
+        std::snprintf(text + n, sizeof(text) - n, "openness L %.3f R %.3f (ahead %.3f / %.3f, room from +%.2f) -> %s",
+                      measured.openness[0], measured.openness[1], center.openness[0], center.openness[1],
+                      kMinWideRange, outcome);
     } else if (std::isfinite(measured.spread) && measured.samples > 0) {
         std::snprintf(text + n, sizeof(text) - n, "spread %.1f° (max %.1f°) -> %s", measured.spread * kFullScaleDeg,
                       kMaxSpread * kFullScaleDeg, outcome);
@@ -218,6 +224,21 @@ std::string tryText(Point point, int attempt, const Measured& measured, const Me
 bool usable(const Measured& measured) {
     return measured.samples >= samplesNeeded(measured) && std::isfinite(measured.x) && std::isfinite(measured.y) &&
            std::isfinite(measured.spread) && measured.spread <= kMaxSpread;
+}
+
+bool usableWide(const Measured& wide) {
+    return wide.samples >= samplesNeeded(wide) && wide.hasOpenness;
+}
+
+void fitWide(const Measured points[kPointCount], Values& out) {
+    const Measured& center = at(points, Point::Center);
+    const Measured& wide = at(points, Point::Wide);
+    for (int eye = 0; eye < 2; ++eye) {
+        const bool room = wide.hasOpenness && center.hasOpenness &&
+                          wide.openness[eye] >= center.openness[eye] + kMinWideRange - 1e-9;
+        out.lidWide[eye] = room ? roundTo(wide.openness[eye], 3) : NAN;
+    }
+    out.hasWide = true;
 }
 
 bool usableClosed(const Measured& closed, const Measured& center) {
@@ -371,6 +392,13 @@ void Session::cancel() {
     if (active()) fail(Failure::Cancelled);
 }
 
+void Session::finishWithoutWide(Actions& actions) {
+    measured_[static_cast<int>(Point::Wide)] = Measured();
+    actions.log += actions.log.empty() ? "" : "\n";
+    actions.log += "wide: not measured; the rest of the fit is kept";
+    finish(actions);
+}
+
 bool Session::active() const {
     return phase_ == Phase::Waiting || phase_ == Phase::Settling || phase_ == Phase::Capturing ||
            phase_ == Phase::Reopen;
@@ -403,9 +431,13 @@ void Session::captureSent(long long id, double now) {
 
 void Session::next(double now, Actions& actions) {
     if (point() == Point::Closed) {
-        // Nothing more to measure; "open your eyes" first, then the result
+        // "Open your eyes" first, then the eyes-wide step
         phase_ = Phase::Reopen;
         phaseAt_ = now;
+        return;
+    }
+    if (point() == Point::Wide) {
+        finish(actions);
         return;
     }
     previousPoint_ = point();
@@ -471,6 +503,17 @@ void Session::finish(Actions& actions) {
             fail(Failure::NoLidRange);
             return;
         }
+        fitWide(measured_, result_);
+        char wide[2][48];
+        for (int eye = 0; eye < 2; ++eye) {
+            if (std::isfinite(result_.lidWide[eye])) {
+                std::snprintf(wide[eye], sizeof(wide[eye]), "%.3f", result_.lidWide[eye]);
+            } else {
+                std::snprintf(wide[eye], sizeof(wide[eye]), "none (widens with the other eye)");
+            }
+        }
+        std::snprintf(text, sizeof(text), "wide: L %s, R %s", wide[0], wide[1]);
+        note(text);
     }
     phase_ = Phase::Done;
     actions.writeValues = true;
@@ -496,8 +539,13 @@ Actions Session::tick(double now, bool dashboardOpen, const EyeStatus& status) {
         case Phase::Settling:
         case Phase::Capturing:
         case Phase::Reopen:
-            // Targets are only shown with the dashboard closed; opening it stops the run
+            // Targets are only shown with the dashboard closed; opening it stops the run (on the eyes-wide step,
+            // the rest of the fit is kept)
             if (dashboardOpen) {
+                if (wideStep()) {
+                    finishWithoutWide(actions);
+                    return actions;
+                }
                 fail(Failure::Cancelled);
             } else if (!status.running) {
                 fail(Failure::NotRunning);
@@ -512,7 +560,7 @@ Actions Session::tick(double now, bool dashboardOpen, const EyeStatus& status) {
         actions.writeCapture = true;
         actions.target = target(point()).name;
         actions.captureSec = captureSec();
-        actions.skipSec = point() == Point::Closed ? kClosedSkipSec : kCaptureSkipSec;
+        actions.skipSec = skipSec();
     } else if (phase_ == Phase::Capturing && !requested_) {
         const GazeCaptureStatus& capture = status.capture;
         const bool ours = captureId_ != 0 && capture.present && capture.id == captureId_;
@@ -533,15 +581,20 @@ Actions Session::tick(double now, bool dashboardOpen, const EyeStatus& status) {
             measured.openness[0] = capture.openness[0];
             measured.openness[1] = capture.openness[1];
             const bool closedStep = point() == Point::Closed;
+            const bool isWide = point() == Point::Wide;
             // The full fit needs each gaze point's openness too, for the lid fit
             const Measured& center = measured_[static_cast<int>(Point::Center)];
             const bool ok = closedStep ? usableClosed(measured, center)
+                            : isWide   ? usableWide(measured)
                                        : usable(measured) && (mode_ != Mode::Full || measured.hasOpenness);
             const bool last = attempt_ >= kMaxAttempts;
             actions.log = tryText(point(), attempt_, measured, center, ok ? "ok" : (last ? "failed" : "again"));
             if (ok) {
                 measured_[static_cast<int>(point())] = measured;
                 next(now, actions);
+            } else if (isWide && attempt_ >= kMaxAttempts) {
+                // Widening is a bonus: without it the rest of the fit still counts
+                finishWithoutWide(actions);
             } else if (++attempt_ > kMaxAttempts) {
                 attempt_ = kMaxAttempts;
                 detail_.tries = kMaxAttempts;
@@ -556,14 +609,34 @@ Actions Session::tick(double now, bool dashboardOpen, const EyeStatus& status) {
                 phaseAt_ = now;
             }
         } else if (now - phaseAt_ >= kResultTimeoutSec) {
-            fail(Failure::NoResult);
+            if (point() == Point::Wide) {
+                finishWithoutWide(actions);
+            } else {
+                fail(Failure::NoResult);
+            }
         }
     } else if (phase_ == Phase::Reopen && now - phaseAt_ >= kReopenSec) {
-        finish(actions);
+        if (index_ + 1 < pointCount(mode_)) {
+            // The eyes-wide step next, once the eyelids are known to fit (no point asking for more otherwise)
+            Values lids = current_;
+            if (!fitLids(measured_, lids, &detail_)) {
+                fail(Failure::NoLidRange);
+            } else {
+                // Straight ahead like the eyes-shut words: no glide, the countdown starts right away
+                ++index_;
+                previousPoint_ = point();
+                attempt_ = 1;
+                phase_ = Phase::Settling;
+                phaseAt_ = now;
+            }
+        } else {
+            finish(actions);
+        }
     }
 
     if (phase_ == Phase::Settling || phase_ == Phase::Capturing || phase_ == Phase::Reopen) {
         const bool closedStep = point() == Point::Closed;
+        const bool isWide = point() == Point::Wide;
         const double settle = settleSec();
         const double capture = captureSec();
         // Seconds left in the step, the capture counted from when it was asked for (frameeyeosc starts it within a
@@ -580,11 +653,15 @@ Actions Session::tick(double now, bool dashboardOpen, const EyeStatus& status) {
         actions.progress = std::clamp(left / (settle + capture), 0.0, 1.0);
         // Under the dot, the seconds being measured (2, 1); nothing while it glides over and the eyes find it
         actions.seconds = phase_ == Phase::Capturing ? std::max(1, static_cast<int>(std::ceil(left - 1e-9))) : 0;
-        if (closedStep) {
-            actions.style = phase_ == Phase::Settling    ? TargetStyle::CloseEyes
-                            : phase_ == Phase::Capturing ? TargetStyle::KeepClosed
-                                                         : TargetStyle::OpenEyes;
-            // Counting down to closing the eyes; nothing to count while they are shut
+        if (closedStep || isWide) {
+            if (closedStep) {
+                actions.style = phase_ == Phase::Settling    ? TargetStyle::CloseEyes
+                                : phase_ == Phase::Capturing ? TargetStyle::KeepClosed
+                                                             : TargetStyle::OpenEyes;
+            } else {
+                actions.style = phase_ == Phase::Settling ? TargetStyle::WideEyes : TargetStyle::KeepWide;
+            }
+            // Counting down to closing (or widening) the eyes; nothing to count while they are shut (or wide)
             actions.seconds = phase_ == Phase::Settling
                                   ? std::max(1, static_cast<int>(std::ceil(settle - (now - phaseAt_) - 1e-9)))
                                   : 0;

@@ -78,9 +78,9 @@ void drawTarget(cairo_surface_t* surface, const FontSet& fonts, gaze_fit::Target
         // The seconds left, small and muted under the dot so they don't pull the eyes away
         if (seconds > 0) centeredText(pen, c, c + size * 0.22, std::to_string(seconds), size * 0.12, size, kTextMuted);
     } else {
-        // The eyes-shut step: its words (one line, or two a little smaller), and while counting down to closing, a
-        // large number
-        const bool counting = style == TargetStyle::CloseEyes && seconds > 0;
+        // The eyes-shut and eyes-wide steps: their words (one line, or two a little smaller), and while counting down
+        // to closing or widening, a large number
+        const bool counting = (style == TargetStyle::CloseEyes || style == TargetStyle::WideEyes) && seconds > 0;
         const size_t newline = label.find('\n');
         const bool twoLines = newline != std::string::npos;
         double textSize = size * (twoLines ? 0.1 : 0.12);

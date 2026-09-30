@@ -101,6 +101,9 @@ struct FitInConfig {
 /** The lid fit keys, [eye][closed, up, open, down]. */
 extern const char* const kLidFitKeys[2][4];
 
+/** The wide readings' keys, [eye]. */
+extern const char* const kLidFitWideKeys[2];
+
 /**
  * The eye fit in the settings.
  * @param view the settings
@@ -138,8 +141,8 @@ gaze_fit::Mode rewearMode(AutoRecenter kind);
 /**
  * Write an eye fit's result into config.json: the gaze zero point; with the side dots (the whole fit, and the
  * re-wear fit with the tilt) also the tilt; each eye's sideways values when measured; for the whole fit also the
- * gains, each eye's lid readings, and lid_scale_left/right back to null when it measured the eyelids (an old
- * tweak must not sit on a new fit).
+ * gains, each eye's lid readings with its wide reading (null when that eye has none), and lid_scale_left/right
+ * back to null when it measured the eyelids (an old tweak must not sit on a new fit).
  * @param root the config's root object
  * @param values the result
  * @param mode the mode

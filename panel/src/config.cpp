@@ -189,6 +189,8 @@ const std::vector<SettingSpec>& settingSpecs() {
         {key::kLidFitOpenRight, SettingType::NullableNumber, 0, "", 0.0, 1.5, 0.01, 2},
         {key::kLidFitDownLeft, SettingType::NullableNumber, 0, "", 0.0, 1.5, 0.01, 2},
         {key::kLidFitDownRight, SettingType::NullableNumber, 0, "", 0.0, 1.5, 0.01, 2},
+        {key::kLidFitWideLeft, SettingType::NullableNumber, 0, "", 0.0, 1.5, 0.01, 2},
+        {key::kLidFitWideRight, SettingType::NullableNumber, 0, "", 0.0, 1.5, 0.01, 2},
         {key::kCalibrationReset, SettingType::Integer, 0, "", 0, 1e9, 1, 0},
         {key::kLanguage, SettingType::String, 0, "ja", 0, 0, 0, 0},
         {key::kUpdateCheck, SettingType::Bool, 1, "", 0, 1, 1, 0},

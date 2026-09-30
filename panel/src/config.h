@@ -93,6 +93,9 @@ constexpr const char* kLidFitOpenLeft = "lid_fit_open_left";
 constexpr const char* kLidFitOpenRight = "lid_fit_open_right";
 constexpr const char* kLidFitDownLeft = "lid_fit_down_left";
 constexpr const char* kLidFitDownRight = "lid_fit_down_right";
+/** Each eye opened wide (the eye fit's last step); null when not measured or saturated (widens with the other eye). */
+constexpr const char* kLidFitWideLeft = "lid_fit_wide_left";
+constexpr const char* kLidFitWideRight = "lid_fit_wide_right";
 /** A request, not a setting: {"id": N, "target": "center"} asks frameeyeosc to average the gaze (eye fit). */
 constexpr const char* kGazeCapture = "gaze_capture";
 constexpr const char* kCalibrationReset = "calibration_reset";

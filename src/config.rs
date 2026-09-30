@@ -133,6 +133,10 @@ pub struct Settings {
     pub lid_fit_open_right: Option<f32>,
     pub lid_fit_down_left: Option<f32>,
     pub lid_fit_down_right: Option<f32>,
+    /// Each eye's Frame openness with the eyes opened wide (the eye fit's last step). None when not measured, or when
+    /// that eye had no room above its open reading; see `LidFit::wide`.
+    pub lid_fit_wide_left: Option<f32>,
+    pub lid_fit_wide_right: Option<f32>,
 }
 
 /// One eye's fitted openness readings (Frame openness, before any scale).
@@ -142,6 +146,8 @@ pub struct LidFit {
     pub up: f32,
     pub open: f32,
     pub down: f32,
+    /// Opened wide, if measured.
+    pub wide: Option<f32>,
 }
 
 impl Default for Settings {
@@ -194,6 +200,8 @@ impl Default for Settings {
             lid_fit_open_right: None,
             lid_fit_down_left: None,
             lid_fit_down_right: None,
+            lid_fit_wide_left: None,
+            lid_fit_wide_right: None,
         }
     }
 }
@@ -203,14 +211,15 @@ impl Settings {
         self.port.unwrap_or(self.output.default_port())
     }
 
-    /// Each eye's fit, if all four of its readings are set.
+    /// Each eye's fit, if all four of its readings are set (with the wide reading when there is one).
     pub fn lid_fit(&self) -> [Option<LidFit>; 2] {
-        let fit = |closed: Option<f32>, up: Option<f32>, open: Option<f32>, down: Option<f32>| {
+        let fit = |closed: Option<f32>, up: Option<f32>, open: Option<f32>, down: Option<f32>, wide: Option<f32>| {
             Some(LidFit {
                 closed: closed?,
                 up: up?,
                 open: open?,
                 down: down?,
+                wide,
             })
         };
         [
@@ -219,12 +228,14 @@ impl Settings {
                 self.lid_fit_up_left,
                 self.lid_fit_open_left,
                 self.lid_fit_down_left,
+                self.lid_fit_wide_left,
             ),
             fit(
                 self.lid_fit_closed_right,
                 self.lid_fit_up_right,
                 self.lid_fit_open_right,
                 self.lid_fit_down_right,
+                self.lid_fit_wide_right,
             ),
         ]
     }
@@ -271,7 +282,8 @@ impl Settings {
         let eye_offsets = [self.gaze_offset_x_left, self.gaze_offset_x_right];
         let eye_gains = [self.gaze_gain_x_left, self.gaze_gain_x_right];
         let lid_fit = self.lid_fit_readings();
-        let fitted = lid_fit.iter().flatten().flatten();
+        let wide = [self.lid_fit_wide_left, self.lid_fit_wide_right];
+        let fitted = lid_fit.iter().flatten().flatten().chain(wide.iter().flatten());
         if !numbers
             .iter()
             .chain(scales.iter().flatten())

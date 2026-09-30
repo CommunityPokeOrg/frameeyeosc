@@ -488,6 +488,7 @@ fn estimate_lid_fit(samples: &[EyeData]) -> Option<[LidFit; 2]> {
         up: up[eye],
         open: ahead[eye],
         down: down[eye],
+        wide: None,
     }))
 }
 

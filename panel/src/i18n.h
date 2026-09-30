@@ -204,6 +204,13 @@ struct UiText {
     const char* pointClosed;
     const char* targetClose;         ///< on the target: "Close your eyes\nfor 3 s" (two lines)
     const char* targetKeepClosed;
+    const char* targetWide;          ///< "open your eyes wide" on the target, with the 3, 2, 1
+    const char* targetKeepWide;
+    const char* pointWide;           ///< the eyes-wide step in "Measuring: %s"
+    const char* fitWideFormat;       ///< the result's widening line: "Wide: L %s · R %s"
+    const char* fitWideFollowsFormat;  ///< an eye without a wide reading: "couldn't measure (follows %s)"
+    const char* fitWideNone;         ///< neither eye has one
+    const char* lidMarksFitted;      ///< Eyelids tab, both eyes fitted: the fit sets closing, opening and widening
     const char* targetOpen;
     const char* fitReset;
     const char* fitDetails;          ///< the fold with the values by hand
