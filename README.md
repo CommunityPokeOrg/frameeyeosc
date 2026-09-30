@@ -23,7 +23,7 @@ This is a fork of [konsti219/frameeyeosc](https://github.com/konsti219/frameeyeo
 
 - A Steam Frame with Developer Mode on and SSH access (Settings > System > Developer Mode, then set a password under Developer). Choose a strong password: with SSH on, anyone on your network who knows it can log in to the headset.
 - PC VRChat streamed with Steam Link, OSC enabled in VRChat (Action Menu > Options > OSC > Enabled).
-- An avatar with VRCFaceTracking eye parameters (`FT/v2/EyeLeftX`, `EyeLidLeft`, ...) as floats. Avatars that pack parameters into binary bits are not supported when sending to VRChat directly. frameeyeosc also sends `EyeTrackingActive` as a bool; some avatars declare it as a float and stop tracking on a bool. For those, choose "Float" under "EyeTrackingActive type" on the Basic tab (`eye_tracking_active`), or "Off" to not send it at all.
+- An avatar with VRCFaceTracking eye parameters (`FT/v2/EyeLeftX`, `EyeLidLeft`, ...) as floats. Avatars that pack parameters into binary bits are not supported when sending to VRChat directly. frameeyeosc also sends `EyeTrackingActive` as a bool; some avatars declare it as a float and stop tracking on a bool. For those, choose "Float" under "EyeTrackingActive type" on the Output tab (`eye_tracking_active`), or "Off" to not send it at all.
 - For the VRCFaceTracking (ETVR) mode: VRCFaceTracking on the PC with the ETVR Tracking Module. For the LiveLink mode: VRCFaceTracking with the LiveLink module.
 
 ## Install
@@ -74,17 +74,18 @@ From 0.4.0 on, the panel's "Update" button does the update. The panel's Advanced
 | ![The Advanced tab](docs/images/panel-advanced-en_2026-09-28_06-07-01.png) | |
 
 - The left column always shows what frameeyeosc is doing: sending or paused, where it sends to, messages per second, how many samples a second the eye tracker delivers (marked "low" below 60), both eyelids and the gaze (raw and sent), and a config error if there is one.
-- Basic: pause sending, VRChat or VRCFaceTracking (ETVR), target PC (automatic, fixed to the PC it sends to now, or typed: see below), port, language (Japanese / English), start with SteamVR, reset all, quit.
+- Basic: pause sending, where to send (three cards: VRChat directly, VRCFT (LiveLink), marked recommended, and VRCFT (ETVR), each saying whether wide eyes come through, how others see your eyes, and whether VRCFaceTracking is needed), language (Japanese / English), start with SteamVR, reset all, quit.
+- Output: target PC (automatic, fixed to the PC it sends to now, or typed: see below) and port. For VRChat directly also the parameter prefix and the EyeTrackingActive type; for LiveLink and ETVR what to set up in VRCFaceTracking on the PC instead.
 - Gaze: smoothing on or off, light / medium / strong presets and the three filter values, deadzone, holding the gaze while blinking, per-eye gaze, skipping unreliable gaze, removing one-sample glitches.
 - Eye fit: one button that fits your gaze and eyelids in about 20 seconds (see [Eye fit](#eye-fit)), fitting straight ahead and the tilt again (also by itself when you put the headset on), the result with "Reset", and the values by hand under "Fine-tune".
 - Eyelids: auto calibration and its learned values, per-eye scales, the four openness marks drawn over each eye's live openness (blink and open wide to set them), left/right sync, keeping blinks visible (hold time and closing both eyes), eyelid smoothing.
-- Advanced: parameter prefix, the version with checking for and installing updates, showing gaze dots (debug) and their distance, recording the eye log (see below), file locations, options locked by the command line.
+- Advanced: the version with checking for and installing updates (and the automatic check on or off), diagnostics (showing gaze dots and their distance, recording the eye log: see below), and files and process (file locations, frameeyeosc's PID, options locked by the command line).
 
 The panel writes `config.json` and reads the status file. To pick its default language, it also reads the `language` line of Steam's `~/.steam/registry.vdf` once at startup (read only). For updates it runs `~/.local/share/frameeyeosc/frame-update.sh` (see above). Closing it, quitting it, or not installing it doesn't stop frameeyeosc. While it isn't open on the dashboard it draws nothing. Besides running the update check, the only thing it reads then is the update state file (`~/.cache/frameeyeosc/update-state.json`), about twice a second. The exceptions are an eye fit (it then also reads the status file and shows the dot with the dashboard closed, until the fit is over) and the debug gaze dots while they're switched on (it then listens on their socket and moves the dots about 90 times a second while samples arrive, and reads the status file and checks `config.json` for changes 10 times a second). Its "Start with SteamVR" switch enables or disables its systemd user unit (`frameeyeosc-panel.service`). Build notes and debugging options are in [panel/README.md](panel/README.md) (Japanese).
 
 ### Setting the target PC by hand
 
-"Auto" sends to the PC Steam Link is streaming from. If that is the wrong PC, press "Enter IP" in the Target PC row on the Basic tab. A keypad opens: type the PC's IPv4 address (for example `192.168.1.20`) and press "OK". Leave the port out; it goes in the Port row. The panel writes it to `host` in `config.json`, and the row shows "Manual 192.168.1.20". "Auto" switches back. To use a host name instead of an address, set `host` in `config.json` by hand; the row then shows "Manual" and the name, and "Auto" still switches back.
+"Auto" sends to the PC Steam Link is streaming from. If that is the wrong PC, press "Enter IP" in the Target PC row on the Output tab. A keypad opens: type the PC's IPv4 address (for example `192.168.1.20`) and press "OK". Leave the port out; it goes in the Port row. The panel writes it to `host` in `config.json`, and the row shows "Manual 192.168.1.20". "Auto" switches back. To use a host name instead of an address, set `host` in `config.json` by hand; the row then shows "Manual" and the name, and "Auto" still switches back.
 
 ## Settings
 
@@ -97,7 +98,7 @@ Settings are in `~/.config/frameeyeosc/config.json`. The panel writes it, and yo
 | Key | Option | Default | What it does |
 |---|---|---|---|
 | `sending` | | `true` | `false` pauses sending (in VRChat mode `EyeTrackingActive=false` is sent once, as `eye_tracking_active` says; in LiveLink mode relaxed open eyes looking ahead) |
-| `output` | `--output` | `"vrchat"` | `"vrchat"` sends avatar parameters to VRChat, `"etvr"` sends to VRCFaceTracking's ETVR Tracking Module, `"livelink"` sends Live Link Face packets to VRCFaceTracking's LiveLink module (not in the panel's "Send to" yet) |
+| `output` | `--output` | `"vrchat"` | `"vrchat"` sends avatar parameters to VRChat, `"etvr"` sends to VRCFaceTracking's ETVR Tracking Module, `"livelink"` sends Live Link Face packets to VRCFaceTracking's LiveLink module |
 | `host` | `--target` | `"auto"` | `"auto"` = the PC Steam Link is streaming from, else an IP address or host name without a port |
 | `port` | `--port`, `--target` | `null` | `null` = 9000 for `vrchat`, 8889 for `etvr`, 11111 for `livelink` |
 | `prefix` | `--prefix` | `"/FT"` | Parameter name prefix; `""` for none. Not used in LiveLink mode |
@@ -149,7 +150,7 @@ frameeyeosc writes what it is doing to `$XDG_RUNTIME_DIR/frameeyeosc/status.json
 frameeyeosc can send in the format that the ETVR Tracking Module for VRCFaceTracking reads. VRCFaceTracking then drives the avatar, so the Frame's eyes can be combined with other trackers such as a mouth tracker. The ETVR Tracking Module is a third-party module ([EyeTrackVR/ETVRTrackingModule](https://github.com/EyeTrackVR/ETVRTrackingModule)); frameeyeosc is not part of it.
 
 1. On the PC, install VRCFaceTracking and add the ETVR Tracking Module from its module registry. By default it listens on UDP 8889.
-2. Switch the output to "VRCFaceTracking (ETVR)" in the panel, or set `"output": "etvr"` (or `--output etvr`). The destination works as usual (the Steam Link PC or a fixed host) on port 8889.
+2. Choose "VRCFT (ETVR)" under "Send to" on the panel's Basic tab, or set `"output": "etvr"` (or `--output etvr`). The destination works as usual (the Steam Link PC or a fixed host) on port 8889.
 
 Notes:
 
@@ -164,7 +165,7 @@ Notes:
 frameeyeosc can also send Live Link Face packets (the format of Epic's Live Link Face iPhone app) to VRCFaceTracking's LiveLink module. Unlike the ETVR mode, widened eyes come through, so avatars that take their eyelids from VRCFaceTracking, including avatars with binary (bit-packed) parameters, show them too. The LiveLink module comes from the VRCFaceTracking project ([VRCFaceTracking/LiveLinkTrackingModule](https://github.com/VRCFaceTracking/LiveLinkTrackingModule)); frameeyeosc is not part of it.
 
 1. On the PC, install VRCFaceTracking and add the "LiveLink" module from its module registry. Turn off or remove other eye tracking modules (such as the ETVR Tracking Module), so the eyes come from the LiveLink module. It listens on UDP 11111.
-2. Set `"output": "livelink"` in `config.json` (or `--output livelink`). The panel's "Send to" row doesn't offer it yet; the left column shows "VRCFT (LiveLink) → …" while it is on. The destination works as usual (the Steam Link PC or a fixed host) on port 11111.
+2. Choose "VRCFT (LiveLink)" under "Send to" on the panel's Basic tab, or set `"output": "livelink"` (or `--output livelink`). The left column then shows "VRCFT (LiveLink) → …", and the Output tab lists these steps. The destination works as usual (the Steam Link PC or a fixed host) on port 11111.
 3. Let UDP 11111 in to VRCFaceTracking in Windows Defender Firewall (allow VRCFaceTracking when Windows asks, or add an inbound rule for UDP port 11111). Without it nothing arrives.
 
 Notes:

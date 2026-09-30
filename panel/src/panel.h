@@ -22,7 +22,8 @@ enum class PanelAction {
     HostAuto,          ///< host = "auto"
     FixHost,           ///< host = the IP frameeyeosc sends to now
     PortDefault,       ///< port = null
-    SetOutput,         ///< output = arg (0 vrchat, 1 etvr), port = null, then ask about the recommendation
+    SetOutput,         ///< output = outputOfArg(arg) (0 vrchat, 1 etvr, 2 livelink), port = null, then ask about
+                       ///< the recommendation
     SetActiveType,     ///< eye_tracking_active = kActiveTypes[arg] (bool, float, off)
     Preset,            ///< gaze smoothing preset arg (0 light, 1 medium, 2 strong)
     NumberOn,          ///< key = its default, or its onNumber if that is off (for numbers where 0 means off)
@@ -71,7 +72,7 @@ struct PanelHit {
 };
 
 /** The tabs, in the order they are shown. */
-enum class PanelTab { Basic, Gaze, EyeFit, Lids, Advanced };
+enum class PanelTab { Basic, Output, Gaze, EyeFit, Lids, Advanced };
 
 /**
  * Draws the panel image and finds the button under the laser pointer.
@@ -134,7 +135,7 @@ public:
 
     /**
      * Ask once whether to apply the recommended settings of an output type.
-     * @param output kOutputVrchat or kOutputEtvr
+     * @param output kOutputVrchat, kOutputEtvr or kOutputLivelink
      */
     void showPrompt(const std::string& output);
 
@@ -299,6 +300,27 @@ private:
     void drawBasic(const Pen& pen, const UiText& t, const PanelModel& model, const SettingsView& view);
 
     /**
+     * The Basic tab's destination: three cards (VRChat directly, VRCFT LiveLink, VRCFT ETVR), each with what it
+     * carries in three short lines.
+     * @param pen drawing tools
+     * @param t texts
+     * @param view the settings shown
+     * @param y top
+     * @return the height used
+     */
+    double drawOutputCards(const Pen& pen, const UiText& t, const SettingsView& view, double y);
+
+    /**
+     * The Output tab: the target PC and port, then the VRChat-only rows (parameter prefix, EyeTrackingActive type),
+     * or what to set up in VRCFT for LiveLink and ETVR.
+     * @param pen drawing tools
+     * @param t texts
+     * @param model the model
+     * @param view the settings shown
+     */
+    void drawOutput(const Pen& pen, const UiText& t, const PanelModel& model, const SettingsView& view);
+
+    /**
      * The Gaze tab.
      * @param pen drawing tools
      * @param t texts
@@ -389,13 +411,15 @@ private:
     void drawHostEntry(const Pen& pen, const UiText& t);
 
     /**
-     * The version row and its button (Advanced tab): the running version, the check result, install progress.
+     * The version row and its button (Advanced tab): the running version, the check result, install progress, and
+     * the switch for the automatic check as a chip under the texts.
      * @param pen drawing tools
      * @param t texts
      * @param u the update status
+     * @param checkOn whether the automatic check (update_check) is on
      * @param y row top
      */
-    void drawUpdateRow(const Pen& pen, const UiText& t, const frame_updater::UpdateStatus& u, double y);
+    void drawUpdateRow(const Pen& pen, const UiText& t, const frame_updater::UpdateStatus& u, bool checkOn, double y);
 
     /**
      * A notice at the bottom of the status column while a new release is available, installing or installed.
@@ -407,6 +431,15 @@ private:
      * @param x1 right
      */
     void drawUpdateNotice(const Pen& pen, const UiText& t, const frame_updater::UpdateStatus& u, double x0, double x1);
+
+    /**
+     * A section title across the content (muted, with a line under it).
+     * @param pen drawing tools
+     * @param y top
+     * @param title the title
+     * @return the height used
+     */
+    double drawSectionTitle(const Pen& pen, double y, const std::string& title);
 
     /**
      * A row's title on the left, with a hint or the "locked" note under it.

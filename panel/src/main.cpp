@@ -97,7 +97,7 @@ struct Options {
     bool fakeWriteError = false;
     bool fakeCustom = false;
     bool fakeIndependent = false; ///< --fake-independent: independent_eyes on, the gaze pad per eye
-    std::string fakePrompt;       ///< vrchat / etvr
+    std::string fakePrompt;       ///< vrchat / etvr / livelink
     std::string fakeUpdate;       ///< a made-up update state (see printUsage)
     std::string fakeFit;          ///< a made-up eye fit state (see printUsage)
     std::string fakeRecord;       ///< a made-up eye log state: "recording" or "failed"
@@ -188,7 +188,7 @@ void printUsage() {
         "      --target-bench N  Also draw it N times and print how long one takes, then one gaze point\n"
         "                        paced at 90 frames/s\n"
         "      --language ja|en  Draw in this language instead of the config's\n"
-        "      --tab basic|gaze|eyefit|lids|advanced  Draw this tab\n"
+        "      --tab basic|output|gaze|eyefit|lids|advanced  Draw this tab\n"
         "      --fit-details [gaze|lids]  Open \"Fine-tune\" on the Eye fit tab (default: its gaze page)\n"
         "      --preview-quit    Show \"press again to quit\"\n"
         "      --preview-reset   Show \"press again to reset\"\n"
@@ -204,7 +204,7 @@ void printUsage() {
         "      --fake-write-error  The panel failed to write config.json\n"
         "      --fake-custom     Gaze smoothing values that match no preset\n"
         "      --fake-independent  Move eyes separately (the left column shows each eye's gaze)\n"
-        "      --fake-prompt vrchat|etvr  The recommended-settings question\n"
+        "      --fake-prompt vrchat|etvr|livelink  The recommended-settings question\n"
         "      --fake-autostart on|off|missing|unknown\n"
         "      --fake-update checking|uptodate|available|manual|installing|installed|checkfailed|installfailed\n"
         "                        A made-up update state (the version row on the Advanced tab)\n"
@@ -294,6 +294,8 @@ bool parseOptions(int argc, char** argv, Options& options) {
             const std::string tab = argv[++i];
             if (tab == "basic") {
                 options.tab = PanelTab::Basic;
+            } else if (tab == "output") {
+                options.tab = PanelTab::Output;
             } else if (tab == "gaze") {
                 options.tab = PanelTab::Gaze;
             } else if (tab == "eyefit") {
@@ -303,7 +305,7 @@ bool parseOptions(int argc, char** argv, Options& options) {
             } else if (tab == "advanced") {
                 options.tab = PanelTab::Advanced;
             } else {
-                std::fprintf(stderr, "--tab must be basic, gaze, eyefit, lids or advanced: %s\n", tab.c_str());
+                std::fprintf(stderr, "--tab must be basic, output, gaze, eyefit, lids or advanced: %s\n", tab.c_str());
                 return false;
             }
         } else if (arg == "--preview-quit") {
@@ -344,8 +346,9 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.fake = options.fakeIndependent = true;
         } else if (arg == "--fake-prompt" && hasNext) {
             options.fakePrompt = argv[++i];
-            if (options.fakePrompt != kOutputVrchat && options.fakePrompt != kOutputEtvr) {
-                std::fprintf(stderr, "--fake-prompt must be vrchat or etvr: %s\n", options.fakePrompt.c_str());
+            if (options.fakePrompt != kOutputVrchat && options.fakePrompt != kOutputEtvr &&
+                options.fakePrompt != kOutputLivelink) {
+                std::fprintf(stderr, "--fake-prompt must be vrchat, etvr or livelink: %s\n", options.fakePrompt.c_str());
                 return false;
             }
         } else if (arg == "--fake-autostart" && hasNext) {
@@ -668,7 +671,8 @@ PanelModel fakeModel(const Options& options) {
         if (options.fakeConfigError) s.configError = "lid_closed must be below lid_open";
         s.effective = root;
         if (options.fakeLocked) {
-            s.locked = {key::kPort, key::kRaw, key::kLidOpen, key::kIndependentEyes, key::kGazeOffsetY};
+            s.locked = {key::kOutput, key::kPort, key::kRaw, key::kLidOpen, key::kIndependentEyes, key::kGazeOffsetY};
+            s.effective.set(key::kOutput, JsonValue::makeString(kOutputVrchat));
             s.effective.set(key::kPort, JsonValue::makeNumber(9123, true));
             s.effective.set(key::kRaw, JsonValue::makeBool(true));
             s.effective.set(key::kLidOpen, JsonValue::makeNumber(0.78));
@@ -1148,7 +1152,7 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
             change = [](JsonValue& root) { root.set(key::kPort, JsonValue::makeNull()); };
             break;
         case PanelAction::SetOutput: {
-            const std::string output = hit.arg == 1 ? kOutputEtvr : kOutputVrchat;
+            const std::string output = outputOfArg(hit.arg);
             if (view.text(key::kOutput) == output) return;
             // A new output type starts from its own default port
             change = [output](JsonValue& root) {
@@ -1247,7 +1251,7 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
         }
         case PanelAction::PromptYes: {
             const std::vector<SettingChange> changes =
-                recommendedSettings(hit.arg == 1 ? kOutputEtvr : kOutputVrchat, view);
+                recommendedSettings(outputOfArg(hit.arg), view);
             change = [changes](JsonValue& root) {
                 for (const SettingChange& item : changes) root.set(item.key, item.value);
             };

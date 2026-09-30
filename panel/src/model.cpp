@@ -86,6 +86,19 @@ int matchingGazePreset(const SettingsView& view) {
     return -1;
 }
 
+const char* outputOfArg(int arg) {
+    if (arg == 1) return kOutputEtvr;
+    if (arg == 2) return kOutputLivelink;
+    return kOutputVrchat;
+}
+
+int argOfOutput(const std::string& output) {
+    if (output == kOutputVrchat) return 0;
+    if (output == kOutputEtvr) return 1;
+    if (output == kOutputLivelink) return 2;
+    return -1;
+}
+
 std::vector<SettingChange> recommendedSettings(const std::string& output, const SettingsView& view) {
     const bool etvr = output == kOutputEtvr;
     const GazePreset& medium = kGazePresets[1];

@@ -153,10 +153,24 @@ struct SettingChange {
 };
 
 /**
+ * The output type a SetOutput / PromptYes button stands for.
+ * @param arg 0 VRChat, 1 ETVR, 2 LiveLink (anything else is VRChat)
+ * @return kOutputVrchat, kOutputEtvr or kOutputLivelink
+ */
+const char* outputOfArg(int arg);
+
+/**
+ * The button argument of an output type (the other way round from outputOfArg).
+ * @param output the "output" value
+ * @return 0 VRChat, 1 ETVR, 2 LiveLink; -1 for anything else
+ */
+int argOfOutput(const std::string& output);
+
+/**
  * The recommended settings of an output type (asked once after switching). Locked keys are left out.
- * VRChat: the default gaze and eyelid smoothing. ETVR: default gaze smoothing and lighter eyelid smoothing,
- * because the ETVR module already smooths the eyelids.
- * @param output kOutputVrchat or kOutputEtvr
+ * VRChat and LiveLink: the default gaze and eyelid smoothing (the LiveLink module smooths nothing). ETVR: default
+ * gaze smoothing and lighter eyelid smoothing, because the ETVR module already smooths the eyelids.
+ * @param output kOutputVrchat, kOutputEtvr or kOutputLivelink
  * @param view the settings (to skip locked keys)
  * @return the changes
  */

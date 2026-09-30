@@ -55,6 +55,7 @@ struct UiText {
 
     // Tabs
     const char* tabBasic;
+    const char* tabOutput;
     const char* tabGaze;
     const char* tabGazeFit;
     const char* tabLids;
@@ -75,9 +76,13 @@ struct UiText {
     const char* send;
     const char* stop;
     const char* rowOutput;
-    const char* hintOutput;
-    const char* outputVrchat;
+    const char* hintOutput;         ///< what "sync" means on the cards
+    const char* outputVrchat;       ///< the destination cards' titles
+    const char* outputLivelink;
     const char* outputEtvr;
+    const char* outputRecommended;  ///< the tag on the LiveLink card
+    /** Each card's three lines (VRChat, LiveLink, ETVR): wide eyes, sync, VRCFT. A leading "✓ " or "✗ " is drawn. */
+    const char* outputMarks[3][3];
     const char* rowActiveType;      ///< how EyeTrackingActive is sent
     const char* hintActiveType;
     const char* activeOff;
@@ -94,8 +99,16 @@ struct UiText {
     const char* hostErrEmpty;
     const char* hostErrIpv4;
     const char* rowPort;
-    const char* portDefaultHint;    ///< port follows the output type
+    const char* portDefaultVrchat;  ///< the port row's hint: the default port of the output type
+    const char* portDefaultLivelink;
+    const char* portDefaultEtvr;
     const char* portReset;          ///< back to default port
+    // Output tab, for LiveLink and ETVR: what to set up in VRCFT on the PC
+    const char* vrcftSetupTitle;
+    const char* vrcftStepsLivelink[3];
+    const char* vrcftStepsEtvr[3];
+    const char* vrcftSetupNote;     ///< the parameter names and syncing are up to VRCFT
+    const char* vrcftNoWide;        ///< ETVR: widened eyes don't come through
     const char* rowLanguage;
     const char* rowAutostart;
     const char* hintAutostart;
@@ -254,6 +267,9 @@ struct UiText {
     const char* rowLidSmooth;
 
     // Advanced tab
+    const char* sectionTools;       ///< section titles: the gaze dots and the eye log...
+    const char* sectionFiles;       ///< ...and the file locations and the process
+    const char* updateCheckChip;    ///< the automatic update check, as a chip in the version row ("... On")
     const char* rowPrefix;
     const char* prefixNone;
     const char* prefixExample;      ///< "e.g." before an OSC address
@@ -278,6 +294,9 @@ struct UiText {
     const char* promptVrchatDetail2;
     const char* promptEtvrDetail1;
     const char* promptEtvrDetail2;
+    const char* promptLivelink;
+    const char* promptLivelinkDetail1;
+    const char* promptLivelinkDetail2;
     const char* promptYes;
     const char* promptNo;
 

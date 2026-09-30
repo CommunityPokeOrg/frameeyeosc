@@ -23,7 +23,7 @@ https://github.com/user-attachments/assets/f8969485-161b-40d4-b9e4-689dee6d1955
 
 - 開発者モードを有効にして SSH で入れる Steam Frame（設定 → システム → 開発者モードを有効化、開発者の項目でパスワードを設定）。SSH を有効にすると、同じネットワークにいてパスワードを知っている人は誰でもヘッドセットに入れるので、推測されにくいパスワードにしてください
 - Steam Link でストリーミングしている PC 版 VRChat（Action Menu → Options → OSC → Enabled）
-- VRCFaceTracking の目のパラメータ（`FT/v2/EyeLeftX`、`EyeLidLeft` など）を float で持つアバター。VRChat に直接送るときは、パラメータをビットに詰める「バイナリパラメータ」のアバターには対応していません。`EyeTrackingActive` は bool で送ります。これを float で持つアバターは bool が届くと止まるので、基本タブの「EyeTrackingActive の型」で［Float］を選んでください（`eye_tracking_active`）。［送らない］にすると送りません
+- VRCFaceTracking の目のパラメータ（`FT/v2/EyeLeftX`、`EyeLidLeft` など）を float で持つアバター。VRChat に直接送るときは、パラメータをビットに詰める「バイナリパラメータ」のアバターには対応していません。`EyeTrackingActive` は bool で送ります。これを float で持つアバターは bool が届くと止まるので、送り方タブの「EyeTrackingActive の型」で［Float］を選んでください（`eye_tracking_active`）。［送らない］にすると送りません
 - VRCFaceTracking（ETVR）モードで使うときは、PC に VRCFaceTracking と ETVR Tracking Module。LiveLink モードなら VRCFaceTracking と LiveLink モジュール
 
 ## インストール
@@ -74,17 +74,18 @@ sudo は要りません。全部ホームフォルダ（`~/.local/bin`、`~/.con
 | ![詳細のタブ](docs/images/panel-advanced-ja_2026-09-28_06-07-01.png) | |
 
 - 左の列には、いつでも今の状態が出ます: 送信中か止めているか、送り先、毎秒の送信回数、目のデータが毎秒何回来ているか（60 未満は赤で「少なめ」）、左右のまぶたと視線（生の値と送った値）、設定のエラー
-- 基本: 送信の一時停止、VRChat か VRCFaceTracking（ETVR）か、送り先の PC（自動、今送っている PC で固定、または入力。下を参照）、ポート、言語（日本語 / English）、SteamVR と一緒に起動、すべて既定に戻す、アプリを終了
+- 基本: 送信の一時停止、送り先（3 枚のカード: VRChat に直接・VRCFT（LiveLink、おすすめ）・VRCFT（ETVR）。それぞれ見開きが届くか、ほかの人からの見え方、VRCFaceTracking が要るかを表示）、言語（日本語 / English）、SteamVR と一緒に起動、すべて既定に戻す、アプリを終了
+- 送り方: 送り先の PC（自動、今送っている PC で固定、または入力。下を参照）とポート。VRChat に直接のときはパラメーター名の頭と EyeTrackingActive の型、LiveLink と ETVR のときは PC の VRCFaceTracking で準備すること
 - 視線: スムージングのオン / オフ、なめらかさの弱 / 中 / 強と 3 つの値、見つめている時の遊び、まばたき中は視線を止める、左右の目を別々に動かす、不確かな視線を使わない、一瞬の途切れを消す
 - 目を合わせる: ボタン 1 つで視線とまぶたを約 20 秒で合わせる（[目を合わせる](#目を合わせる) を参照）、正面と傾きの合わせ直し（被ったときは自動でも）、結果と［元に戻す］、「細かく直す」の中で値を手で直す
 - まぶた: 自動キャリブレーションと覚えた値、左右の倍率、左右の今の開き具合の上に重ねた 4 つの目盛り（目を閉じたり見開いたりしながら合わせる）、左右をそろえる強さ、まばたきを届ける（閉じたまま保つ時間・両目で閉じる）、まぶたのなめらかさ
-- 詳細: パラメーター名の頭、版の表示と更新の確認・更新、視線の点を表示（デバッグ用）と点の距離、目のログの記録（下を参照）、ファイルの場所、コマンドで固定中の項目
+- 詳細: 版の表示と更新の確認・更新（自動の確認のオン / オフも）、調べる道具（視線の点を表示と点の距離、目のログの記録。下を参照）、ファイルと本体（ファイルの場所、本体の PID、コマンドで固定中の項目）
 
 パネルは `config.json` を書き、状態ファイルを読みます。既定の言語を決めるために、起動時に 1 回だけ Steam の `~/.steam/registry.vdf` の `language` の行も読みます（読むだけ）。更新には `~/.local/share/frameeyeosc/frame-update.sh` を使います（上を参照）。閉じても、終了しても、入れていなくても frameeyeosc は送り続けます。ダッシュボードで開いていない間は何も描きません。そのとき読むのは、更新の確認を動かすほかは、更新の状態ファイル（`~/.cache/frameeyeosc/update-state.json`）を 1 秒に 2 回ほどだけです。ただし目を合わせている間は、終わるまで状態ファイルも読み、ダッシュボードを閉じた状態で点を出します。デバッグ用の視線の点をオンにしている間も、そのソケットで受け取り、サンプルが届いている間は 1 秒に約 90 回点を動かします。このときは状態ファイルも読み、`config.json` が変わったかを 1 秒に 10 回確かめます。「SteamVR と一緒に起動」は、パネルの systemd ユーザーサービス（`frameeyeosc-panel.service`）を有効 / 無効にします。ビルド方法や確認用のオプションは [panel/README.md](panel/README.md) にあります。
 
 ### 送り先の PC を手で決める
 
-「自動」は Steam Link の接続先の PC に送ります。違う PC に送っているときは、基本タブの「送り先の PC」で［IP を入力］を押してください。テンキーが開くので、PC の IPv4 アドレス（例: `192.168.1.20`）を打って［決定］を押します。ポートは付けず、「ポート」の行で設定します。パネルが `config.json` の `host` に書き、行には「手動 192.168.1.20」と出ます。［自動］で元に戻ります。アドレスではなくホスト名にしたいときは、`config.json` の `host` を手で書いてください。行には「手動」と名前が出て、［自動］で戻せるのは同じです。
+「自動」は Steam Link の接続先の PC に送ります。違う PC に送っているときは、送り方タブの「送り先の PC」で［IP を入力］を押してください。テンキーが開くので、PC の IPv4 アドレス（例: `192.168.1.20`）を打って［決定］を押します。ポートは付けず、「ポート」の行で設定します。パネルが `config.json` の `host` に書き、行には「手動 192.168.1.20」と出ます。［自動］で元に戻ります。アドレスではなくホスト名にしたいときは、`config.json` の `host` を手で書いてください。行には「手動」と名前が出て、［自動］で戻せるのは同じです。
 
 ## 設定
 
@@ -97,7 +98,7 @@ sudo は要りません。全部ホームフォルダ（`~/.local/bin`、`~/.con
 | キー | オプション | 既定値 | 内容 |
 |---|---|---|---|
 | `sending` | | `true` | `false` で送信を一時停止（VRChat モードでは `EyeTrackingActive` の「無効」を `eye_tracking_active` の型で 1 回送る。LiveLink モードでは普通に開いて正面を見た目を 1 回送る） |
-| `output` | `--output` | `"vrchat"` | `"vrchat"` は VRChat にアバターパラメータを送る、`"etvr"` は VRCFaceTracking の ETVR Tracking Module に送る、`"livelink"` は VRCFaceTracking の LiveLink モジュールに Live Link Face の形式で送る（パネルの「送り先」にはまだない） |
+| `output` | `--output` | `"vrchat"` | `"vrchat"` は VRChat にアバターパラメータを送る、`"etvr"` は VRCFaceTracking の ETVR Tracking Module に送る、`"livelink"` は VRCFaceTracking の LiveLink モジュールに Live Link Face の形式で送る |
 | `host` | `--target` | `"auto"` | `"auto"` は Steam Link の接続先 PC。それ以外は IP アドレスかホスト名（ポートは付けない） |
 | `port` | `--port`、`--target` | `null` | `null` は `vrchat` なら 9000、`etvr` なら 8889、`livelink` なら 11111 |
 | `prefix` | `--prefix` | `"/FT"` | パラメータ名の頭。`""` で頭なし |
@@ -149,7 +150,7 @@ frameeyeosc は 1 秒に 10 回、今の様子を `$XDG_RUNTIME_DIR/frameeyeosc/
 frameeyeosc は、VRCFaceTracking 用の ETVR Tracking Module が読む形式で送れます。アバターを動かすのは VRCFaceTracking になるので、口のトラッカーなど、ほかのトラッカーと 1 つにまとめられます。ETVR Tracking Module は別のプロジェクトのモジュール（[EyeTrackVR/ETVRTrackingModule](https://github.com/EyeTrackVR/ETVRTrackingModule)）で、frameeyeosc はその一部ではありません。
 
 1. PC に VRCFaceTracking を入れ、モジュールの一覧から ETVR Tracking Module を追加します。既定では UDP 8889 番で受けます
-2. パネルで送り先を「VRCFaceTracking（ETVR）」にするか、`"output": "etvr"`（または `--output etvr`）にします。送り先の PC はいつもどおり（Steam Link の相手か固定）、ポートは 8889 です
+2. パネルの基本タブの「送り先」で「VRCFT（ETVR）」を選ぶか、`"output": "etvr"`（または `--output etvr`）にします。送り先の PC はいつもどおり（Steam Link の相手か固定）、ポートは 8889 です
 
 注意:
 
@@ -164,7 +165,7 @@ frameeyeosc は、VRCFaceTracking 用の ETVR Tracking Module が読む形式で
 frameeyeosc は、VRCFaceTracking の LiveLink モジュールに Live Link Face の形式（Epic の iPhone アプリ Live Link Face と同じ形式）でも送れます。ETVR モードと違って見開きも伝わるので、まぶたを VRCFaceTracking からもらうアバター（バイナリパラメータのアバターも）で見開きが出ます。LiveLink モジュールは VRCFaceTracking のプロジェクトのモジュール（[VRCFaceTracking/LiveLinkTrackingModule](https://github.com/VRCFaceTracking/LiveLinkTrackingModule)）で、frameeyeosc はその一部ではありません。
 
 1. PC に VRCFaceTracking を入れ、モジュールの一覧から「LiveLink」を追加します。目がこのモジュールから来るように、ほかの目のモジュール（ETVR Tracking Module など）は止めるか外してください。UDP 11111 番で受けます
-2. `config.json` に `"output": "livelink"` と書きます（または `--output livelink`）。パネルの「送り先」にはまだこの選択肢がありません。使っている間は、左の列に「VRCFT（LiveLink）→ …」と出ます。送り先の PC はいつもどおり（Steam Link の相手か固定）、ポートは 11111 です
+2. パネルの基本タブの「送り先」で「VRCFT（LiveLink）」を選ぶか、`"output": "livelink"`（または `--output livelink`）にします。左の列に「VRCFT（LiveLink）→ …」と出て、送り方タブにこの手順が出ます。送り先の PC はいつもどおり（Steam Link の相手か固定）、ポートは 11111 です
 3. Windows Defender ファイアウォールで、VRCFaceTracking が UDP 11111 番を受けられるようにします（Windows に聞かれたら VRCFaceTracking を許可するか、UDP 11111 番の受信の規則を足す）。許可がないと何も届きません
 
 注意:

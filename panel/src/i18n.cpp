@@ -22,7 +22,7 @@ UiText makeJapanese() {
     t.notRunningHint2 = "本体が起動すると反映されます";
     t.destination = "送り先";
     t.outputVrchatShort = "VRChat";
-    t.outputEtvrShort = "VRCFaceTracking";
+    t.outputEtvrShort = "VRCFT（ETVR）";
     t.outputLivelinkShort = "VRCFT（LiveLink）";
     t.searchingPc = "PC を探しています…";
     t.modeAuto = "自動（Steam Link の相手）";
@@ -46,6 +46,7 @@ UiText makeJapanese() {
     t.errAutostart = "自動起動の切り替えに失敗（systemctl）";
 
     t.tabBasic = "基本";
+    t.tabOutput = "送り方";
     t.tabGaze = "視線";
     t.tabGazeFit = "目を合わせる";
     t.tabLids = "まぶた";
@@ -64,9 +65,20 @@ UiText makeJapanese() {
     t.send = "送る";
     t.stop = "止める";
     t.rowOutput = "送り先";
-    t.hintOutput = "VRCFT へは ETVR 形式";
+    t.hintOutput = "同期＝ほかの人からの見え方（△はアバターによる）";
     t.outputVrchat = "VRChat に直接";
-    t.outputEtvr = "VRCFaceTracking（ETVR）";
+    t.outputLivelink = "VRCFT（LiveLink）";
+    t.outputEtvr = "VRCFT（ETVR）";
+    t.outputRecommended = "おすすめ";
+    t.outputMarks[0][0] = "見開き ◯";
+    t.outputMarks[0][1] = "同期 △";
+    t.outputMarks[0][2] = "VRCFT 不要";
+    t.outputMarks[1][0] = "見開き ◯";
+    t.outputMarks[1][1] = "同期 ◯";
+    t.outputMarks[1][2] = "VRCFT 必要";
+    t.outputMarks[2][0] = "見開き ×";
+    t.outputMarks[2][1] = "同期 ◯";
+    t.outputMarks[2][2] = "VRCFT 必要";
     t.rowActiveType = "EyeTrackingActive の型";
     t.hintActiveType = "アバターによっては Float が必要";
     t.activeOff = "送らない";
@@ -83,7 +95,18 @@ UiText makeJapanese() {
     t.hostErrEmpty = "何も入っていません";
     t.hostErrIpv4 = "IP アドレスの形ではありません（0〜255 の数 4 つを . で区切る）";
     t.rowPort = "ポート";
-    t.portDefaultHint = "送り先の種類の既定";
+    t.portDefaultVrchat = "VRChat の既定は 9000";
+    t.portDefaultLivelink = "LiveLink の既定は 11111";
+    t.portDefaultEtvr = "ETVR の既定は 8889";
+    t.vrcftSetupTitle = "PC の VRCFT で準備すること";
+    t.vrcftStepsLivelink[0] = "VRCFT の「Module Registry」から LiveLink を入れる";
+    t.vrcftStepsLivelink[1] = "ほかの目のモジュール（ETVR など）はオフにする";
+    t.vrcftStepsLivelink[2] = "Windows のファイアウォールで UDP 11111 を通す";
+    t.vrcftStepsEtvr[0] = "VRCFT の「Module Registry」から ETVR Eye Tracking を入れる";
+    t.vrcftStepsEtvr[1] = "ほかの目のモジュール（LiveLink など）はオフにする";
+    t.vrcftStepsEtvr[2] = "Windows のファイアウォールで UDP 8889 を通す";
+    t.vrcftSetupNote = "パラメーター名や同期のしかたは VRCFT がアバターに合わせて決めるので、ここでは設定しません。";
+    t.vrcftNoWide = "この形式では見開きは届きません。";
     t.portReset = "既定に戻す";
     t.rowLanguage = "言語";
     t.rowAutostart = "SteamVR と一緒に起動";
@@ -240,6 +263,9 @@ UiText makeJapanese() {
     t.blinkSync = "両目";
     t.rowLidSmooth = "まぶたのなめらかさ";
 
+    t.sectionTools = "調べる道具";
+    t.sectionFiles = "ファイルと本体";
+    t.updateCheckChip = "起動時と 1 日 1 回確認";
     t.rowPrefix = "パラメーター名の頭";
     t.prefixNone = "なし";
     t.prefixExample = "例: ";
@@ -263,6 +289,9 @@ UiText makeJapanese() {
     t.promptVrchatDetail2 = "";
     t.promptEtvrDetail1 = "視線のなめらかさは標準、まぶたのなめらかさは弱めにします";
     t.promptEtvrDetail2 = "（ETVR 側でもまぶたをなめらかにしているため）";
+    t.promptLivelink = "VRCFT（LiveLink）向けのおすすめ設定にする？";
+    t.promptLivelinkDetail1 = "視線とまぶたのなめらかさを標準に戻します";
+    t.promptLivelinkDetail2 = "（LiveLink 側ではなめらかにしないため）";
     t.promptYes = "する";
     t.promptNo = "しない";
 
@@ -334,7 +363,7 @@ UiText makeEnglish() {
     t.notRunningHint2 = "when frameeyeosc starts";
     t.destination = "Destination";
     t.outputVrchatShort = "VRChat";
-    t.outputEtvrShort = "VRCFaceTracking";
+    t.outputEtvrShort = "VRCFT (ETVR)";
     t.outputLivelinkShort = "VRCFT (LiveLink)";
     t.searchingPc = "Looking for the PC…";
     t.modeAuto = "Auto (Steam Link PC)";
@@ -358,6 +387,7 @@ UiText makeEnglish() {
     t.errAutostart = "Autostart change failed (systemctl)";
 
     t.tabBasic = "Basic";
+    t.tabOutput = "Output";
     t.tabGaze = "Gaze";
     t.tabGazeFit = "Eye fit";
     t.tabLids = "Eyelids";
@@ -376,9 +406,20 @@ UiText makeEnglish() {
     t.send = "Send";
     t.stop = "Pause";
     t.rowOutput = "Send to";
-    t.hintOutput = "VRCFT gets the ETVR format";
-    t.outputVrchat = "VRChat directly";
-    t.outputEtvr = "VRCFaceTracking (ETVR)";
+    t.hintOutput = "Sync = how other players see your eyes";
+    t.outputVrchat = "VRChat direct";
+    t.outputLivelink = "VRCFT (LiveLink)";
+    t.outputEtvr = "VRCFT (ETVR)";
+    t.outputRecommended = "Recommended";
+    t.outputMarks[0][0] = "✓ Wide eyes";
+    t.outputMarks[0][1] = "Sync: depends on avatar";
+    t.outputMarks[0][2] = "No VRCFT needed";
+    t.outputMarks[1][0] = "✓ Wide eyes";
+    t.outputMarks[1][1] = "✓ Synced to others";
+    t.outputMarks[1][2] = "Needs VRCFT";
+    t.outputMarks[2][0] = "✗ No wide eyes";
+    t.outputMarks[2][1] = "✓ Synced to others";
+    t.outputMarks[2][2] = "Needs VRCFT";
     t.rowActiveType = "EyeTrackingActive type";
     t.hintActiveType = "Some avatars need Float";
     t.activeOff = "Off";
@@ -395,7 +436,18 @@ UiText makeEnglish() {
     t.hostErrEmpty = "Nothing entered";
     t.hostErrIpv4 = "Not an IP address (four numbers 0-255 separated by dots)";
     t.rowPort = "Port";
-    t.portDefaultHint = "Default for the output";
+    t.portDefaultVrchat = "VRChat default: 9000";
+    t.portDefaultLivelink = "LiveLink default: 11111";
+    t.portDefaultEtvr = "ETVR default: 8889";
+    t.vrcftSetupTitle = "Set up in VRCFT on the PC";
+    t.vrcftStepsLivelink[0] = "Install LiveLink from VRCFT's Module Registry";
+    t.vrcftStepsLivelink[1] = "Turn off other eye modules (such as ETVR)";
+    t.vrcftStepsLivelink[2] = "Allow UDP 11111 in the Windows firewall";
+    t.vrcftStepsEtvr[0] = "Install ETVR Eye Tracking from VRCFT's Module Registry";
+    t.vrcftStepsEtvr[1] = "Turn off other eye modules (such as LiveLink)";
+    t.vrcftStepsEtvr[2] = "Allow UDP 8889 in the Windows firewall";
+    t.vrcftSetupNote = "VRCFT picks the parameter names and how they sync for your avatar, so there is nothing to set here.";
+    t.vrcftNoWide = "Wide eyes don't come through in this format.";
     t.portReset = "Default";
     t.rowLanguage = "Language";
     t.rowAutostart = "Start with SteamVR";
@@ -554,6 +606,9 @@ UiText makeEnglish() {
     t.blinkSync = "Both";
     t.rowLidSmooth = "Eyelid smoothing";
 
+    t.sectionTools = "Diagnostics";
+    t.sectionFiles = "Files and process";
+    t.updateCheckChip = "Check at start and daily";
     t.rowPrefix = "Parameter prefix";
     t.prefixNone = "None";
     t.prefixExample = "e.g. ";
@@ -577,6 +632,9 @@ UiText makeEnglish() {
     t.promptVrchatDetail2 = "";
     t.promptEtvrDetail1 = "Gaze smoothing goes to default, eyelid smoothing gets lighter";
     t.promptEtvrDetail2 = "(ETVR already smooths the eyelids)";
+    t.promptLivelink = "Use the recommended settings for VRCFT (LiveLink)?";
+    t.promptLivelinkDetail1 = "Gaze and eyelid smoothing go back to default";
+    t.promptLivelinkDetail2 = "(the LiveLink module doesn't smooth anything)";
     t.promptYes = "Yes";
     t.promptNo = "No";
 
