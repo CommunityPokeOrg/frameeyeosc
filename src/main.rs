@@ -37,6 +37,12 @@ const ETVR_LID_SCALE: f32 = 1.0 / 0.75;
 // While sending to VRCFT's LiveLink module without eye data, a neutral packet this often: the module logs "connection
 // lost" after a second without packets, and only starts if one arrives within 180 s of VRCFT loading it.
 const LIVELINK_IDLE_INTERVAL: Duration = Duration::from_millis(500);
+// At most this many Live Link packets a second. VRCFT's LiveLink module (LiveLinkExtTrackingInterface.cs, Update)
+// does `Thread.Sleep(10)` and then reads a single datagram per loop, and a 10 ms sleep takes 10-15.6 ms on Windows,
+// so it takes in only about 64-100 packets a second. Sending every eye sample (90 Hz, up to ~136 Hz while streaming)
+// filled its socket queue until the eyes lagged by seconds. Samples in between are dropped, never queued: each packet
+// is the newest sample.
+const LIVELINK_MAX_HZ: u32 = 50;
 // The eye server produces samples at ~90 Hz.
 const NOMINAL_DT: f32 = 1.0 / 90.0;
 // Gaps longer than this restart the filters instead of smearing across them.
@@ -1404,6 +1410,27 @@ fn vrchat_stream(settings: &Settings) -> Option<(&str, u16, &str, ActiveType)> {
     })
 }
 
+/// Lets a packet through at most once per interval, on a steady beat that neither bursts nor drifts: the next one is
+/// due an interval after the last one was due, or after now if the samples paused for longer than that.
+#[derive(Default)]
+struct Throttle {
+    next: Option<Instant>,
+}
+
+impl Throttle {
+    /// Whether a packet may go out at `now` (it is then counted as sent).
+    fn ready(&mut self, now: Instant, interval: Duration) -> bool {
+        if self.next.is_some_and(|next| now < next) {
+            return false;
+        }
+        self.next = Some(match self.next {
+            Some(next) if now.duration_since(next) < interval => next + interval,
+            _ => now + interval,
+        });
+        true
+    }
+}
+
 /// Where VRCFT's LiveLink module is being sent to, if anywhere. When this changes while eye tracking runs, the old
 /// destination gets a neutral packet (relaxed open eyes, straight ahead), since the module keeps the last values.
 fn livelink_stream(settings: &Settings) -> Option<(&str, u16)> {
@@ -1440,6 +1467,8 @@ struct Bridge {
     dots: dots::DotStream,
     // When the last neutral Live Link packet went out.
     livelink_neutral: Option<Instant>,
+    // Keeps the Live Link samples at or below LIVELINK_MAX_HZ.
+    livelink_throttle: Throttle,
 }
 
 impl Bridge {
@@ -1493,14 +1522,21 @@ impl Bridge {
             self.calibration.save_if_due();
         }
         if self.settings.sending {
-            if self.settings.output == OutputKind::LiveLink {
-                self.output.send_datagram(&livelink_packet(&sample, livelink::time_of_day(SystemTime::now())));
+            let sent = if self.settings.output == OutputKind::LiveLink {
+                // The newest sample, at most LIVELINK_MAX_HZ times a second; the ones in between are dropped
+                let interval = Duration::from_secs(1) / LIVELINK_MAX_HZ;
+                let ready = self.livelink_throttle.ready(now, interval);
+                if ready {
+                    self.output.send_datagram(&livelink_packet(&sample, livelink::time_of_day(SystemTime::now())));
+                }
+                ready
             } else {
                 for (addr, arg) in osc_messages(&self.settings, &sample) {
                     self.output.send(addr, vec![arg])?;
                 }
-            }
-            if self.output.addr().is_some() {
+                true
+            };
+            if sent && self.output.addr().is_some() {
                 self.sent.push_back(now);
             }
         }
@@ -1714,6 +1750,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         capture_result: None,
         dots: dots::DotStream::new(status::status_path().parent().unwrap_or(Path::new("/tmp"))),
         livelink_neutral: None,
+        livelink_throttle: Throttle::default(),
     };
     let mut status_file = StatusFile::new(status::status_path());
     let mut source = EyeSource::open()?;
@@ -2678,6 +2715,7 @@ mod tests {
             capture_result: None,
             dots: dots::DotStream::new(Path::new("/nonexistent")),
             livelink_neutral: None,
+            livelink_throttle: Throttle::default(),
         };
         bridge.output.refresh();
         bridge
@@ -2718,6 +2756,8 @@ mod tests {
         // Looking right and down (22.5°) with the left eye wide open: one packet per sample, as processed
         let look = [(std::f32::consts::PI / 8.0).tan(), -(std::f32::consts::PI / 8.0).tan()];
         for index in 0..3 {
+            // (the rate limit is tested on its own below)
+            bridge.livelink_throttle = Throttle::default();
             bridge.on_sample(reading(index, look, [1.0, 0.55])).unwrap();
             let packet = receive(&listener).unwrap();
             let [left, right] = livelink::tests::module_eyes(&packet).unwrap();
@@ -2749,6 +2789,7 @@ mod tests {
         assert!(receive(&listener).is_none());
         // Losing the eye data sends one, then again only after LIVELINK_IDLE_INTERVAL
         bridge.apply(reload(&live)).unwrap();
+        bridge.livelink_throttle = Throttle::default();
         bridge.on_sample(reading(4, look, [1.0, 0.55])).unwrap();
         assert!(!neutral(receive(&listener).unwrap()));
         bridge.on_lost("test").unwrap();
@@ -2759,6 +2800,7 @@ mod tests {
         bridge.keep_livelink_alive();
         assert!(neutral(receive(&listener).unwrap()));
         // Switching to VRChat while tracking: a last neutral packet, then OSC
+        bridge.livelink_throttle = Throttle::default();
         bridge.on_sample(reading(5, look, [1.0, 0.55])).unwrap();
         receive(&listener).unwrap();
         let vrchat = Settings {
@@ -2780,6 +2822,72 @@ mod tests {
         bridge.livelink_neutral = None;
         bridge.keep_livelink_alive();
         assert!(receive(&listener).is_none());
+    }
+
+    #[test]
+    fn the_livelink_rate_stays_at_or_below_the_limit() {
+        let interval = Duration::from_secs(1) / LIVELINK_MAX_HZ;
+        let start = Instant::now();
+        // 90 Hz and 136 Hz for ten seconds: never more than 50 in any second, and no bursts (a late packet may be
+        // followed by one a sample later, but any 200 ms hold at most one more than 200 ms / interval)
+        for hz in [90u32, 136] {
+            let mut throttle = Throttle::default();
+            let times: Vec<Instant> = (0..hz * 10)
+                .map(|i| start + Duration::from_secs(1) * i / hz)
+                .filter(|&time| throttle.ready(time, interval))
+                .collect();
+            assert!(times.len() as u32 <= LIVELINK_MAX_HZ * 10, "{hz} Hz: {}", times.len());
+            assert!(times.len() as u32 >= LIVELINK_MAX_HZ * 10 * 8 / 10, "{hz} Hz: {}", times.len());
+            for (i, &from) in times.iter().enumerate() {
+                let window = Duration::from_millis(200);
+                let count = times[i..].iter().take_while(|&&time| time < from + window).count();
+                assert!(count as u32 <= window.as_millis() as u32 / interval.as_millis() as u32 + 1, "{hz} Hz: {count}");
+            }
+            for second in 0..10 {
+                let from = start + Duration::from_secs(second);
+                let count = times.iter().filter(|&&time| time >= from && time < from + Duration::from_secs(1)).count();
+                assert!(count as u32 <= LIVELINK_MAX_HZ, "{hz} Hz, second {second}: {count}");
+            }
+        }
+        // Slower samples all go out, and a pause does not let a burst through afterwards
+        let mut throttle = Throttle::default();
+        let slow: Vec<bool> = (0..10u32).map(|i| throttle.ready(start + Duration::from_millis(30) * i, interval)).collect();
+        assert!(slow.iter().all(|&ready| ready));
+        let later = start + Duration::from_secs(5);
+        assert!(throttle.ready(later, interval));
+        assert!(!throttle.ready(later + Duration::from_millis(5), interval));
+    }
+
+    #[test]
+    fn livelink_sends_the_newest_sample_and_the_rate_counts_only_what_went_out() {
+        let listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let live = Settings {
+            output: OutputKind::LiveLink,
+            host: "127.0.0.1".into(),
+            port: Some(listener.local_addr().unwrap().port()),
+            raw: true,
+            lid_calibration: false,
+            ..settings()
+        };
+        let mut bridge = test_bridge(live);
+        let gaze_of = |packet: Vec<u8>| livelink::tests::module_eyes(&packet).unwrap()[0].2;
+        // Looking left, then (right away) ahead, then after the interval right
+        let x = |deg: f32| deg.to_radians().tan();
+        bridge.on_sample(reading(0, [x(-20.0), 0.0], [0.8; 2])).unwrap();
+        bridge.on_sample(reading(1, [0.0, 0.0], [0.8; 2])).unwrap();
+        assert!(gaze_of(receive(&listener).unwrap()) < 0.0);
+        assert!(receive(&listener).is_none(), "the sample in between is dropped, not queued");
+        std::thread::sleep(Duration::from_secs(1) / LIVELINK_MAX_HZ + Duration::from_millis(5));
+        bridge.on_sample(reading(2, [x(20.0), 0.0], [0.8; 2])).unwrap();
+        assert!(gaze_of(receive(&listener).unwrap()) > 0.0, "the newest sample goes out");
+        // Three samples in, two packets out
+        assert_eq!((bridge.received.len(), bridge.sent.len()), (3, 2));
+        // The keepalive still goes out once the eye data stops
+        bridge.on_lost("test").unwrap();
+        assert!(livelink::tests::module_eyes(&receive(&listener).unwrap()) == Some([(1.0, 0.0, 0.0, 0.0); 2]));
+        bridge.livelink_neutral = Some(Instant::now() - LIVELINK_IDLE_INTERVAL);
+        bridge.keep_livelink_alive();
+        assert!(receive(&listener).is_some());
     }
 
     #[test]
