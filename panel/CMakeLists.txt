@@ -100,6 +100,14 @@ target_include_directories(recorder-test PRIVATE src)
 target_compile_options(recorder-test PRIVATE -Wall -Wextra)
 add_test(NAME recorder COMMAND recorder-test)
 
+# The shared rules: what an eye fit writes and "Reset" clears, the re-wear fit auto_recenter asks for, the output
+# cards' arguments: panel/build/model-test
+add_executable(model-test tests/model_test.cpp src/model.cpp src/config.cpp src/json.cpp src/gaze_fit.cpp
+  src/status.cpp)
+target_include_directories(model-test PRIVATE src ${FRAME_UPDATER_DIR}/cpp)
+target_compile_options(model-test PRIVATE -Wall -Wextra)
+add_test(NAME model COMMAND model-test)
+
 # Checking a typed target PC and the eye fit's failure texts (both languages): panel/build/text-test
 add_executable(text-test tests/text_test.cpp src/host_entry.cpp src/fit_text.cpp src/i18n.cpp src/gaze_fit.cpp
   src/status.cpp src/json.cpp)

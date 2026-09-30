@@ -177,10 +177,12 @@ struct Args {
     /// Frame openness of a fully widened eye (VRCFT 1.0)
     #[arg(long, default_value_t = 1.00)]
     lid_wide: f32,
-    /// Fixed multiplier on the left eye's Frame openness; overrides auto calibration for that eye
+    /// Fixed multiplier on the left eye's Frame openness; overrides auto calibration for that eye. With an eye
+    /// fit, a fine-tune on the fitted openness instead (0.9 = 10% less open)
     #[arg(long)]
     lid_scale_left: Option<f32>,
-    /// Fixed multiplier on the right eye's Frame openness; overrides auto calibration for that eye
+    /// Fixed multiplier on the right eye's Frame openness; overrides auto calibration for that eye. With an eye
+    /// fit, a fine-tune on the fitted openness instead (0.9 = 10% less open)
     #[arg(long)]
     lid_scale_right: Option<f32>,
     /// Turn off learning each eye's relaxed openness (eyes without a fixed scale use 1.0)
@@ -637,11 +639,15 @@ fn fitted_openness(openness: f32, vertical: f32, fit: &LidFit, settings: &Settin
     settings.lid_closed + fraction * (settings.lid_open - settings.lid_closed)
 }
 
-/// Each eye's openness on the --lid-* scale: the eye fit when there is one, else the per-eye scale.
+/// Each eye's openness on the --lid-* scale, times the eye's scale (see lid_scales). A fitted eye is scaled after
+/// the fit: the fitted openness is on the same scale that --lid-closed / --lid-open / --lid-widen-start /
+/// --lid-wide compare against (the fit maps its closed reading to --lid-closed and its expected open reading to
+/// --lid-open), so a scale of 0.9 makes that eye read 10% less open there. It then closes sooner and widens less,
+/// just like the scale on an unfitted eye's raw openness.
 fn lid_inputs(openness: [f32; 2], vertical: f32, scales: [f32; 2], settings: &Settings) -> [f32; 2] {
     let fits = settings.lid_fit();
     [0, 1].map(|eye| match &fits[eye] {
-        Some(fit) => fitted_openness(openness[eye], vertical, fit, settings),
+        Some(fit) => fitted_openness(openness[eye], vertical, fit, settings) * scales[eye],
         None => openness[eye] * scales[eye],
     })
 }
@@ -1217,17 +1223,18 @@ struct Sample {
     gaze_held: bool,
 }
 
-/// Per-eye multipliers on Frame openness: the fixed ones, else the learned ones, else 1.
+/// Per-eye multipliers as lid_inputs applies them. An unfitted eye: the fixed one, else the learned one, else 1.
+/// A fitted eye: the fixed one as a fine-tune after the fit, else 1 (never the learned one, which fitted eyes
+/// do not use).
 fn lid_scales(settings: &Settings, calibration: &LidCalibration) -> [f32; 2] {
     let learned = if settings.lid_calibration {
         calibration.scales(settings.lid_open)
     } else {
         [1.0; 2]
     };
-    [
-        settings.lid_scale_left.unwrap_or(learned[0]),
-        settings.lid_scale_right.unwrap_or(learned[1]),
-    ]
+    let fits = settings.lid_fit();
+    let fixed = [settings.lid_scale_left, settings.lid_scale_right];
+    [0, 1].map(|eye| fixed[eye].unwrap_or(if fits[eye].is_some() { 1.0 } else { learned[eye] }))
 }
 
 /// Let the eyelid calibration learn from a sample once `settled`, then work the sample through.
@@ -2077,6 +2084,60 @@ mod tests {
         assert!(lid_to_vrcft(fitted_openness(1.2, 0.0, &fit, &settings), &settings) > 0.9);
         // Without a fit, the scale applies as before.
         assert_eq!(lid_inputs([0.7, 0.7], -0.3, [1.0, 1.1], &Settings::default()), [0.7, 0.7 * 1.1]);
+    }
+
+    #[test]
+    fn a_scale_fine_tunes_a_fitted_eye() {
+        let settings = fitted();
+        let fits = settings.lid_fit();
+        let (left, right) = (fits[0].unwrap(), fits[1].unwrap());
+        let reading = [0.9, 0.8];
+        let plain = [
+            fitted_openness(reading[0], 0.0, &left, &settings),
+            fitted_openness(reading[1], 0.0, &right, &settings),
+        ];
+        // Scale 1: the fit alone. 0.69 on the right: that eye reads 31% less open after the fit
+        let tuned = lid_inputs(reading, 0.0, [1.0, 0.69], &settings);
+        assert_eq!(tuned[0], plain[0]);
+        assert!((tuned[1] - plain[1] * 0.69).abs() < 1e-6);
+        // So a relaxed right eye is sent less open, and a wide one widens less
+        let vrcft = |value: f32| lid_to_vrcft(value, &settings);
+        assert!((vrcft(plain[1]) - 0.75).abs() < 1e-5);
+        assert!(vrcft(tuned[1]) < 0.5, "{}", vrcft(tuned[1]));
+        let wide = lid_inputs([0.9, 0.9], 0.0, [1.0, 1.0], &settings);
+        let less_wide = lid_inputs([0.9, 0.9], 0.0, [1.0, 0.95], &settings);
+        assert!(vrcft(wide[1]) > 0.75 && vrcft(less_wide[1]) < vrcft(wide[1]), "{:?} {:?}", wide, less_wide);
+    }
+
+    #[test]
+    fn fitted_eyes_take_only_their_fixed_scale() {
+        // Learned scales that are not 1 (relaxed 0.7 against lid_open 0.8)
+        let calibration = LidCalibration::load(None, 0.7);
+        let learned = calibration.scales(0.8);
+        assert!(learned[0] > 1.0);
+        // Unfitted: fixed, else learned (unchanged)
+        let unfitted = Settings {
+            lid_scale_left: Some(0.9),
+            ..settings()
+        };
+        assert_eq!(lid_scales(&unfitted, &calibration), [0.9, learned[1]]);
+        // Fitted: fixed as the fine-tune, else 1, never the learned one
+        let fitted_unset = fitted();
+        assert_eq!(lid_scales(&fitted_unset, &calibration), [1.0, 1.0]);
+        let fitted_tuned = Settings {
+            lid_scale_right: Some(0.69),
+            ..fitted()
+        };
+        assert_eq!(lid_scales(&fitted_tuned, &calibration), [1.0, 0.69]);
+        // One eye fitted: the other still learns its scale
+        let half = Settings {
+            lid_fit_closed_right: None,
+            lid_fit_up_right: None,
+            lid_fit_open_right: None,
+            lid_fit_down_right: None,
+            ..fitted()
+        };
+        assert_eq!(lid_scales(&half, &calibration), [1.0, learned[1]]);
     }
 
     #[test]

@@ -120,11 +120,38 @@ enum class AutoRecenter { Off, Center, Tilt };
 
 /**
  * auto_recenter as written: "off", "center" or "tilt". A true / false from before it had three values reads as
- * "tilt" / "off", and anything else as the default, "tilt".
+ * the default / "off", and anything else as the default, "center" (the tilt from one wearing's re-wear fits
+ * scattered by about ±5°, as much as it corrects).
  * @param config the config
  * @return the kind
  */
 AutoRecenter autoRecenter(const ConfigFile& config);
+
+/**
+ * The re-wear fit for an auto_recenter kind: the one it runs by itself, and the one the button next to "Fit again"
+ * runs (re-centering only when auto_recenter is off).
+ * @param kind the kind
+ * @return gaze_fit::Mode::Center or gaze_fit::Mode::Tilt
+ */
+gaze_fit::Mode rewearMode(AutoRecenter kind);
+
+/**
+ * Write an eye fit's result into config.json: the gaze zero point; with the side dots (the whole fit, and the
+ * re-wear fit with the tilt) also the tilt; each eye's sideways values when measured; for the whole fit also the
+ * gains, each eye's lid readings, and lid_scale_left/right back to null when it measured the eyelids (an old
+ * tweak must not sit on a new fit).
+ * @param root the config's root object
+ * @param values the result
+ * @param mode the mode
+ */
+void applyFitValues(JsonValue& root, const gaze_fit::Values& values, gaze_fit::Mode mode);
+
+/**
+ * What "Reset" on the Eye fit tab puts back to the defaults: the gaze fit, each eye's sideways values, the lid
+ * readings and the per-eye lid scales (fine-tunes of the lid fit).
+ * @return the keys
+ */
+std::vector<std::string> fitResetKeys();
 
 /** A gaze smoothing preset (the three One Euro values). */
 struct GazePreset {

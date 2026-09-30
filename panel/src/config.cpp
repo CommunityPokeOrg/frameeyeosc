@@ -176,7 +176,7 @@ const std::vector<SettingSpec>& settingSpecs() {
         {key::kGazeDebugDots, SettingType::Bool, 0, "", 0, 1, 1, 0},
         {key::kGazeDebugDotsDistanceM, SettingType::Number, 1.0, "", 0.3, 2.0, 0.1, 1},
         {key::kFitSounds, SettingType::Bool, 1, "", 0, 1, 1, 0},
-        {key::kAutoRecenter, SettingType::String, 0, "tilt", 0, 0, 0, 0},
+        {key::kAutoRecenter, SettingType::String, 0, "center", 0, 0, 0, 0},
         {key::kGazeOffsetXLeft, SettingType::NullableNumber, 0, "", -0.5, 0.5, 0.005, 3},
         {key::kGazeOffsetXRight, SettingType::NullableNumber, 0, "", -0.5, 0.5, 0.005, 3},
         {key::kGazeGainXLeft, SettingType::NullableNumber, 0, "", 0.5, 2.0, 0.05, 2},

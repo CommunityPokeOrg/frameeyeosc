@@ -664,7 +664,16 @@ PanelModel fakeModel(const Options& options) {
         }
         s.calibrationEnabled = true;
         s.relaxed = {{0.78, 0.82}};
-        s.scales = {{1.026, 0.976}};
+        // What frameeyeosc applies: a fixed scale, else 1 for a fitted eye, else the learned one
+        {
+            const double learned[2] = {1.026, 0.976};
+            const FitInConfig fitted = fitInConfig(SettingsView(m));
+            const char* fixedKeys[2] = {key::kLidScaleLeft, key::kLidScaleRight};
+            for (int eye = 0; eye < 2; ++eye) {
+                const double fixed = m.config.number(fixedKeys[eye]);
+                s.scales.v[eye] = std::isfinite(fixed) ? fixed : (fitted.lidsFitted[eye] ? 1.0 : learned[eye]);
+            }
+        }
         s.learning = true;
         s.configPath = options.configPath;
         s.calibrationPath = "/home/steamos/.config/frameeyeosc/calibration";
@@ -975,8 +984,7 @@ long long writeCaptureRequest(PanelModel& model, const char* target, double seco
 }
 
 /**
- * Write an eye fit's result: the gaze zero point; with the side dots (the whole fit, and the re-wear fit with the
- * tilt) also the tilt; for the whole fit also the gains and each eye's lid readings.
+ * Write an eye fit's result (see applyFitValues) and log it.
  * @param model the model
  * @param values the result
  * @param mode the mode
@@ -984,7 +992,6 @@ long long writeCaptureRequest(PanelModel& model, const char* target, double seco
  */
 bool writeFitValues(PanelModel& model, const gaze_fit::Values& values, gaze_fit::Mode mode) {
     const bool full = mode == gaze_fit::Mode::Full;
-    const bool roll = mode != gaze_fit::Mode::Center;
     std::fprintf(stderr, "[fit] done: offset %+.3f %+.3f, tilt %+.1f deg, gains %.2f %.2f %.2f%s\n", values.offsetX,
                  values.offsetY, values.rollDeg, values.gainX, values.gainUp, values.gainDown,
                  full ? "" : " (the rest unchanged)");
@@ -999,34 +1006,7 @@ bool writeFitValues(PanelModel& model, const gaze_fit::Values& values, gaze_fit:
         std::fprintf(stderr, "[fit] each eye sideways: left %+.3f x%.2f, right %+.3f x%.2f\n", values.eyeOffsetX[0],
                      values.eyeGainX[0], values.eyeOffsetX[1], values.eyeGainX[1]);
     }
-    return writeConfig(model, [values, full, roll](JsonValue& root) {
-        root.set(key::kGazeOffsetX, JsonValue::makeNumber(values.offsetX));
-        root.set(key::kGazeOffsetY, JsonValue::makeNumber(values.offsetY));
-        if (roll) root.set(key::kGazeRollDeg, JsonValue::makeNumber(values.rollDeg));
-        // Each eye's own sideways values: re-centering moves their zero points; a full fit sets them, or clears
-        // them when this frameeyeosc could not measure each eye
-        const char* eyeOffsets[2] = {key::kGazeOffsetXLeft, key::kGazeOffsetXRight};
-        const char* eyeGains[2] = {key::kGazeGainXLeft, key::kGazeGainXRight};
-        for (int eye = 0; eye < 2; ++eye) {
-            if (values.hasEyeX) {
-                root.set(eyeOffsets[eye], JsonValue::makeNumber(values.eyeOffsetX[eye]));
-                root.set(eyeGains[eye], JsonValue::makeNumber(values.eyeGainX[eye]));
-            } else if (full) {
-                root.set(eyeOffsets[eye], JsonValue::makeNull());
-                root.set(eyeGains[eye], JsonValue::makeNull());
-            }
-        }
-        if (!full) return;
-        root.set(key::kGazeGainX, JsonValue::makeNumber(values.gainX));
-        root.set(key::kGazeGainUp, JsonValue::makeNumber(values.gainUp));
-        root.set(key::kGazeGainDown, JsonValue::makeNumber(values.gainDown));
-        if (!values.hasLids) return;
-        for (int eye = 0; eye < 2; ++eye) {
-            const double readings[4] = {values.lidClosed[eye], values.lidUp[eye], values.lidOpen[eye],
-                                        values.lidDown[eye]};
-            for (int i = 0; i < 4; ++i) root.set(kLidFitKeys[eye][i], JsonValue::makeNumber(readings[i]));
-        }
-    });
+    return writeConfig(model, [values, mode](JsonValue& root) { applyFitValues(root, values, mode); });
 }
 
 /**
@@ -1059,15 +1039,6 @@ std::string hostErrorText(const UiText& t, host_entry::HostError problem) {
         case HostError::Ipv4: return t.hostErrIpv4;
     }
     return "";
-}
-
-/**
- * The re-wear fit auto_recenter asks for, and the one the button next to "Fit again" runs.
- * @param config the config
- * @return one dot, or the dot and the side dots (also when auto_recenter is off)
- */
-gaze_fit::Mode rewearMode(const ConfigFile& config) {
-    return autoRecenter(config) == AutoRecenter::Center ? gaze_fit::Mode::Center : gaze_fit::Mode::Tilt;
 }
 
 /**
@@ -1285,7 +1256,8 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
         case PanelAction::FitCenter: {
             const bool full = hit.action == PanelAction::FitStart;
             std::fprintf(stderr, "[fit] %s: waiting for the dashboard to close\n", full ? "eye fit" : "re-wear fit");
-            if (fit != nullptr) startFit(*fit, full ? gaze_fit::Mode::Full : rewearMode(model.config), view, vr);
+            const gaze_fit::Mode mode = full ? gaze_fit::Mode::Full : rewearMode(autoRecenter(model.config));
+            if (fit != nullptr) startFit(*fit, mode, view, vr);
             return;
         }
         case PanelAction::FitDetails:
@@ -1318,13 +1290,8 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
             if (fit != nullptr) fit->cancel();
             return;
         case PanelAction::FitReset: {
-            std::vector<std::string> names = {key::kGazeOffsetX,     key::kGazeOffsetY,      key::kGazeGainX,
-                                              key::kGazeGainUp,      key::kGazeGainDown,     key::kGazeRollDeg,
-                                              key::kGazeOffsetXLeft, key::kGazeOffsetXRight, key::kGazeGainXLeft,
-                                              key::kGazeGainXRight};
-            for (const auto& eye : kLidFitKeys) names.insert(names.end(), std::begin(eye), std::end(eye));
             std::vector<std::string> unlocked;
-            for (const std::string& name : names) {
+            for (const std::string& name : fitResetKeys()) {
                 if (!view.locked(name)) unlocked.push_back(name);
             }
             change = [unlocked](JsonValue& root) {
@@ -1712,7 +1679,7 @@ int runOverlay(const Options& options) {
             // On a clock that runs through suspend: taking the headset off usually lets the Frame sleep
             const auto_recenter::Step step = recenter.update(bootSeconds(), in);
             if (!step.log.empty()) std::fprintf(stderr, "[fit] %s\n", step.log.c_str());
-            if (step.start) startFit(fit, rewearMode(model.config), view, &vr);
+            if (step.start) startFit(fit, rewearMode(autoRecenter(model.config)), view, &vr);
         }
 
         // The eye fit: requests and results go through config.json and status.json; the target is only shown

@@ -24,6 +24,7 @@ panel/build/sounds-test
 panel/build/text-test
 panel/build/auto-recenter-test
 panel/build/recorder-test
+panel/build/model-test
 
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT

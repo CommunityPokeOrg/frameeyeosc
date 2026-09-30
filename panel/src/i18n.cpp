@@ -207,9 +207,11 @@ UiText makeJapanese() {
     t.fitDetails = "細かく直す";
     t.fitSoundsOn = "♪ 音を鳴らす: オン";
     t.fitSoundsOff = "♪ 音を鳴らす: オフ";
-    t.autoRecenterOff = "被ったら: 何もしない";
-    t.autoRecenterCenter = "被ったら: 正面だけ";
-    t.autoRecenterTilt = "被ったら: 正面と傾き";
+    t.rowAutoRecenter = "被ったとき";
+    t.hintAutoRecenter = "被り直したら自動で合わせ直す";
+    t.autoRecenterOff = "何もしない";
+    t.autoRecenterCenter = "正面だけ";
+    t.autoRecenterTilt = "正面と傾き";
     t.rowOffset = "正面の位置";
     t.hintOffset = "＋ は右・上";
     t.rowGain = "動く幅";
@@ -248,6 +250,7 @@ UiText makeJapanese() {
     t.rowScale = "左右の倍率";
     t.hintScaleAuto = "自動 = キャリブレーションの値";
     t.hintScaleFixed = "固定の倍率を使います";
+    t.hintScaleFitted = "目を合わせたあとの微調整";
     t.scaleAuto = "自動";
     t.scaleFixed = "固定";
     t.marksTitle = "目を開け閉めしながら、線を今の値に合わせます（倍率を掛けた後の生の値）";
@@ -550,9 +553,11 @@ UiText makeEnglish() {
     t.fitDetails = "Fine-tune";
     t.fitSoundsOn = "♪ Sounds: on";
     t.fitSoundsOff = "♪ Sounds: off";
-    t.autoRecenterOff = "When put on: nothing";
-    t.autoRecenterCenter = "When put on: re-center";
-    t.autoRecenterTilt = "When put on: re-center + tilt";
+    t.rowAutoRecenter = "When put on";
+    t.hintAutoRecenter = "Fits again when put back on";
+    t.autoRecenterOff = "Nothing";
+    t.autoRecenterCenter = "Re-center";
+    t.autoRecenterTilt = "Re-center + tilt";
     t.rowOffset = "Straight ahead";
     t.hintOffset = "+ is right / up";
     t.rowGain = "Range";
@@ -591,6 +596,7 @@ UiText makeEnglish() {
     t.rowScale = "Eye scales";
     t.hintScaleAuto = "Auto = from calibration";
     t.hintScaleFixed = "Uses fixed scales";
+    t.hintScaleFitted = "Fine-tune after the eye fit";
     t.scaleAuto = "Auto";
     t.scaleFixed = "Fixed";
     t.marksTitle = "Blink and open wide, then move the lines to match (raw value after scaling)";

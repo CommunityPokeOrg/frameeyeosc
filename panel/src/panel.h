@@ -50,7 +50,7 @@ enum class PanelAction {
     FitStop,           ///< eye fit: stop waiting for the dashboard to close
     SetAutoRecenter,   ///< auto_recenter = kAutoRecenterModes[arg]
     RecordToggle,      ///< start the eye log, or stop it (the caller runs the recorder)
-    FitReset,          ///< gaze_offset_x/y = 0, gaze_gain_x/up/down = 1, lid_fit_* = null
+    FitReset,          ///< the fit back to the defaults (fitResetKeys: the gaze fit, lid_fit_*, lid_scale_*)
     FitDetails,        ///< open / close "Fine-tune" (handled inside the panel)
     FitDetailsPage,    ///< show arg (0 gaze, 1 eyelids) under "Fine-tune" (handled inside the panel)
     HostEnter,         ///< open the keypad for the target PC (the caller fills in the host now)

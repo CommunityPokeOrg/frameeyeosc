@@ -209,7 +209,9 @@ struct UiText {
     const char* fitDetails;          ///< the fold with the values by hand
     const char* fitSoundsOn;         ///< the sound switch, on ("Sounds: on")
     const char* fitSoundsOff;
-    const char* autoRecenterOff;     ///< the button for what runs when the headset is put on: nothing...
+    const char* rowAutoRecenter;     ///< the row for what runs when the headset is put on...
+    const char* hintAutoRecenter;
+    const char* autoRecenterOff;     ///< ...and its choices: nothing...
     const char* autoRecenterCenter;  ///< ...re-centering...
     const char* autoRecenterTilt;    ///< ...or re-centering and the tilt
     const char* rowOffset;
@@ -251,6 +253,7 @@ struct UiText {
     const char* rowScale;
     const char* hintScaleAuto;
     const char* hintScaleFixed;
+    const char* hintScaleFitted;    ///< the scales of fitted eyes fine-tune the fit
     const char* scaleAuto;
     const char* scaleFixed;
     const char* marksTitle;         ///< "Open and close your eyes and match the lines"
