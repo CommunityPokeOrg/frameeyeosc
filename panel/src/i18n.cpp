@@ -105,7 +105,7 @@ UiText makeJapanese() {
     t.vrcftStepsEtvr[0] = "VRCFT の「Module Registry」から ETVR Eye Tracking を入れる";
     t.vrcftStepsEtvr[1] = "ほかの目のモジュール（LiveLink など）はオフにする";
     t.vrcftStepsEtvr[2] = "Windows のファイアウォールで UDP 8889 を通す";
-    t.vrcftSetupNote = "パラメーター名や同期のしかたは VRCFT がアバターに合わせて決めるので、ここでは設定しません。";
+    t.vrcftSetupNote = "パラメーター名や同期のしかたは、VRCFT がアバターに合わせて決めます。";
     t.vrcftNoWide = "この形式では見開きは届きません。";
     t.portReset = "既定に戻す";
     t.rowLanguage = "言語";
