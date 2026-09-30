@@ -3,6 +3,7 @@
 mod capture;
 mod config;
 mod dots;
+mod livelink;
 mod replay;
 mod status;
 
@@ -33,6 +34,9 @@ const POLL: Duration = Duration::from_millis(100);
 const RATE_WINDOW: Duration = Duration::from_secs(1);
 // Relaxed open is 0.75 in VRCFT units but 1.0 for the ETVR Tracking Module, which does not widen by default.
 const ETVR_LID_SCALE: f32 = 1.0 / 0.75;
+// While sending to VRCFT's LiveLink module without eye data, a neutral packet this often: the module logs "connection
+// lost" after a second without packets, and only starts if one arrives within 180 s of VRCFT loading it.
+const LIVELINK_IDLE_INTERVAL: Duration = Duration::from_millis(500);
 // The eye server produces samples at ~90 Hz.
 const NOMINAL_DT: f32 = 1.0 / 90.0;
 // Gaps longer than this restart the filters instead of smearing across them.
@@ -117,7 +121,8 @@ const _: () = {
 #[derive(Parser)]
 #[command(about = "Send Steam Frame eye tracking from shared memory over OSC")]
 struct Args {
-    /// What to send: VRChat avatar parameters, or VRCFaceTracking's ETVR Tracking Module format
+    /// What to send: VRChat avatar parameters, VRCFaceTracking's ETVR Tracking Module format, or Live Link Face
+    /// packets for VRCFaceTracking's LiveLink module
     #[arg(long, value_enum, default_value_t = OutputKind::Vrchat)]
     output: OutputKind,
     /// How EyeTrackingActive is sent in VRChat mode: a bool, a float (1.0 / 0.0; some avatars
@@ -127,7 +132,7 @@ struct Args {
     /// OSC destination as HOST:PORT, or "auto" for the PC that Steam Link is streaming from
     #[arg(long, default_value = "auto")]
     target: String,
-    /// OSC port used with --target auto [default: 9000 for vrchat, 8889 for etvr]
+    /// OSC port used with --target auto [default: 9000 for vrchat, 8889 for etvr, 11111 for livelink]
     #[arg(long)]
     port: Option<u16>,
     /// Parameter name prefix; "" or "/" for none
@@ -1046,15 +1051,23 @@ impl Output {
     /// Send one message. A network error (unreachable, refused, no address yet...) is logged when it
     /// starts and ends, and never returned: the next sample simply tries again.
     fn send(&mut self, addr: String, args: Vec<OscType>) -> Result<(), Box<dyn Error>> {
-        let Some((socket, target)) = &self.socket else {
+        if self.socket.is_none() {
             return Ok(());
-        };
+        }
         let packet = OscPacket::Message(OscMessage { addr, args });
-        let result = socket.send(&encoder::encode(&packet)?);
+        self.send_datagram(&encoder::encode(&packet)?);
+        Ok(())
+    }
+
+    /// Send one datagram as it is (an encoded OSC message or a Live Link packet); errors as in `send`.
+    fn send_datagram(&mut self, datagram: &[u8]) {
+        let Some((socket, target)) = &self.socket else {
+            return;
+        };
+        let result = socket.send(datagram);
         if let Some(line) = self.health.record(Instant::now(), *target, &result) {
             eprintln!("{line}");
         }
-        Ok(())
     }
 }
 
@@ -1313,12 +1326,22 @@ fn shut_lids(lids: &mut [f32; 2], shut: [bool; 2]) {
     }
 }
 
-/// Eyelids on the scale of the given output.
+/// Eyelids on the scale of the given output. LiveLink gets the VRCFT eyelids, split into blink and widening in the
+/// packet (VRCFT puts the same eyelid back together).
 fn output_lids(output: OutputKind, lids: [f32; 2]) -> [f32; 2] {
     match output {
-        OutputKind::Vrchat => lids,
+        OutputKind::Vrchat | OutputKind::LiveLink => lids,
         OutputKind::Etvr => lids.map(lid_to_etvr),
     }
+}
+
+/// The Live Link packet for one sample, stamped `time` seconds into the day. Each eye's gaze is its own with
+/// "move eyes separately", else the combined one (as for the other outputs). Nothing else goes to LiveLink: no
+/// EyeTrackingActive and no parameter prefix, which only VRChat reads.
+fn livelink_packet(sample: &Sample, time: f64) -> Vec<u8> {
+    let [left_x, left_y, right_x, right_y, _, _] = sample.gaze;
+    let lids = output_lids(OutputKind::LiveLink, sample.lids);
+    livelink::packet(time, &livelink::shapes(lids, [left_x, left_y, right_x, right_y]))
 }
 
 /// The OSC messages for one sample. VRChat gets the full VRCFT v2 eye set. The ETVR Tracking Module
@@ -1374,6 +1397,12 @@ fn vrchat_stream(settings: &Settings) -> Option<(&str, u16, &str, ActiveType)> {
     })
 }
 
+/// Where VRCFT's LiveLink module is being sent to, if anywhere. When this changes while eye tracking runs, the old
+/// destination gets a neutral packet (relaxed open eyes, straight ahead), since the module keeps the last values.
+fn livelink_stream(settings: &Settings) -> Option<(&str, u16)> {
+    (settings.sending && settings.output == OutputKind::LiveLink).then(|| (settings.host.as_str(), settings.port()))
+}
+
 /// Why the samples stopped, for the log line when tracking is lost.
 fn lost_reason(next: &Next) -> String {
     match next {
@@ -1402,6 +1431,8 @@ struct Bridge {
     capture_result: Option<CaptureResult>,
     // The panel's debug gaze dots (only while gaze_debug_dots is on).
     dots: dots::DotStream,
+    // When the last neutral Live Link packet went out.
+    livelink_neutral: Option<Instant>,
 }
 
 impl Bridge {
@@ -1421,6 +1452,10 @@ impl Bridge {
         let stream = vrchat_stream(&self.settings);
         if self.active_since.is_some() && stream.is_some() && stream != vrchat_stream(&settings) {
             send_inactive(&mut self.output, &self.settings)?;
+        }
+        let stream = livelink_stream(&self.settings);
+        if self.active_since.is_some() && stream.is_some() && stream != livelink_stream(&settings) {
+            self.send_livelink_neutral();
         }
         self.output.set_target(Target::of(&settings));
         self.smoother.configure(&settings);
@@ -1451,8 +1486,12 @@ impl Bridge {
             self.calibration.save_if_due();
         }
         if self.settings.sending {
-            for (addr, arg) in osc_messages(&self.settings, &sample) {
-                self.output.send(addr, vec![arg])?;
+            if self.settings.output == OutputKind::LiveLink {
+                self.output.send_datagram(&livelink_packet(&sample, livelink::time_of_day(SystemTime::now())));
+            } else {
+                for (addr, arg) in osc_messages(&self.settings, &sample) {
+                    self.output.send(addr, vec![arg])?;
+                }
             }
             if self.output.addr().is_some() {
                 self.sent.push_back(now);
@@ -1502,10 +1541,29 @@ impl Bridge {
         if vrchat_stream(&self.settings).is_some() {
             send_inactive(&mut self.output, &self.settings)?;
         }
+        if livelink_stream(&self.settings).is_some() {
+            self.send_livelink_neutral();
+        }
         self.smoother.reset();
         self.active_since = None;
         self.latest = None;
         Ok(())
+    }
+
+    /// Relaxed open eyes looking straight ahead, to VRCFT's LiveLink module.
+    fn send_livelink_neutral(&mut self) {
+        self.output.send_datagram(&livelink::packet(livelink::time_of_day(SystemTime::now()), &livelink::neutral()));
+        self.livelink_neutral = Some(Instant::now());
+    }
+
+    /// While sending to VRCFT's LiveLink module without eye data (the headset off, the eye server stopped), keep
+    /// sending it the neutral packet, so the module can start and does not log "connection lost" over and over.
+    /// Paused, nothing goes out.
+    fn keep_livelink_alive(&mut self) {
+        let due = self.livelink_neutral.is_none_or(|sent| sent.elapsed() >= LIVELINK_IDLE_INTERVAL);
+        if self.active_since.is_none() && livelink_stream(&self.settings).is_some() && due {
+            self.send_livelink_neutral();
+        }
     }
 
     fn status(&self) -> Status<'_> {
@@ -1648,6 +1706,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         capture: None,
         capture_result: None,
         dots: dots::DotStream::new(status::status_path().parent().unwrap_or(Path::new("/tmp"))),
+        livelink_neutral: None,
     };
     let mut status_file = StatusFile::new(status::status_path());
     let mut source = EyeSource::open()?;
@@ -1681,6 +1740,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             _ => {}
         }
         bridge.check_capture();
+        bridge.keep_livelink_alive();
         if status_file.due() {
             status_file.write(&bridge.status());
         }
@@ -2392,6 +2452,8 @@ mod tests {
         assert_eq!(lid_to_etvr(1.0), 1.0);
         assert_eq!(output_lids(OutputKind::Vrchat, [0.375, 1.0]), [0.375, 1.0]);
         assert_eq!(output_lids(OutputKind::Etvr, [0.375, 1.0]), [0.5, 1.0]);
+        // LiveLink keeps the VRCFT eyelids (the packet splits them into blink and widening)
+        assert_eq!(output_lids(OutputKind::LiveLink, [0.375, 1.0]), [0.375, 1.0]);
     }
 
     fn sample() -> Sample {
@@ -2517,6 +2579,149 @@ mod tests {
     }
 
     #[test]
+    fn livelink_gets_each_eyes_gaze_and_eyelid_in_one_packet() {
+        let packet = livelink_packet(&sample(), 12.0);
+        let [left, right] = livelink::tests::module_eyes(&packet).unwrap();
+        // Eyelid 0.375: half closed; 0.75: relaxed open, not widened
+        assert_eq!((left.0, left.1), (0.5, 0.0));
+        assert_eq!((right.0, right.1), (1.0, 0.0));
+        // The per-eye gaze, not the combined one (sample() has different values in each; choose_gaze puts the
+        // combined gaze in both eyes unless "move eyes separately" is on)
+        assert_eq!((left.2, left.3), (0.1, 0.2));
+        assert_eq!((right.2, right.3), (0.3, 0.4));
+        // Widened
+        let wide = Sample {
+            lids: [1.0, 0.875],
+            ..sample()
+        };
+        let [left, right] = livelink::tests::module_eyes(&livelink_packet(&wide, 12.0)).unwrap();
+        assert_eq!((left.0, left.1), (1.0, 1.0));
+        assert_eq!((right.0, right.1), (1.0, 0.5));
+    }
+
+    /// A bridge sending to a local UDP listener, with no config file, calibration file or status folder.
+    fn test_bridge(settings: Settings) -> Bridge {
+        let mut bridge = Bridge {
+            config: Config::new(None, Args::parse_from(["frameeyeosc"]), HashSet::new()),
+            output: Output::new(Target::of(&settings)),
+            smoother: Smoother::new(&settings),
+            calibration: LidCalibration::load(None, settings.lid_open),
+            settings,
+            started: SystemTime::now(),
+            active_since: None,
+            last_data: None,
+            latest: None,
+            sent: VecDeque::new(),
+            received: VecDeque::new(),
+            capture: None,
+            capture_result: None,
+            dots: dots::DotStream::new(Path::new("/nonexistent")),
+            livelink_neutral: None,
+        };
+        bridge.output.refresh();
+        bridge
+    }
+
+    fn reload(settings: &Settings) -> Reload {
+        Reload {
+            settings: settings.clone(),
+            reset_calibration: false,
+            gaze_capture: None,
+        }
+    }
+
+    /// The next datagram within 300 ms.
+    fn receive(listener: &UdpSocket) -> Option<Vec<u8>> {
+        let mut buffer = [0u8; 1024];
+        listener.set_read_timeout(Some(Duration::from_millis(300))).unwrap();
+        listener.recv(&mut buffer).ok().map(|size| buffer[..size].to_vec())
+    }
+
+    #[test]
+    fn livelink_sends_a_packet_per_sample_and_neutral_when_the_eyes_stop() {
+        let listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let live = Settings {
+            output: OutputKind::LiveLink,
+            host: "127.0.0.1".into(),
+            port: Some(listener.local_addr().unwrap().port()),
+            lid_calibration: false,
+            ..settings()
+        };
+        let mut bridge = test_bridge(live.clone());
+        let neutral = |packet: Vec<u8>| livelink::tests::module_eyes(&packet) == Some([(1.0, 0.0, 0.0, 0.0); 2]);
+        // Before any eye data: the neutral packet, twice a second
+        bridge.keep_livelink_alive();
+        assert!(neutral(receive(&listener).unwrap()));
+        bridge.keep_livelink_alive();
+        assert!(receive(&listener).is_none());
+        // Looking right and down (22.5°) with the left eye wide open: one packet per sample, as processed
+        let look = [(std::f32::consts::PI / 8.0).tan(), -(std::f32::consts::PI / 8.0).tan()];
+        for index in 0..3 {
+            bridge.on_sample(reading(index, look, [1.0, 0.55])).unwrap();
+            let packet = receive(&listener).unwrap();
+            let [left, right] = livelink::tests::module_eyes(&packet).unwrap();
+            let sample = bridge.latest.as_ref().unwrap();
+            for ((openness, wide, x, y), (lid, gaze)) in [left, right].into_iter().zip([
+                (sample.lids[0], [sample.gaze[0], sample.gaze[1]]),
+                (sample.lids[1], [sample.gaze[2], sample.gaze[3]]),
+            ]) {
+                assert!((openness * 0.75 + wide * 0.25 - lid).abs() < 1e-6);
+                assert_eq!([x, y], gaze);
+            }
+            assert!(left.1 > 0.0 && right.0 < 1.0);
+            assert!(left.2 > 0.0 && left.3 < 0.0);
+        }
+        // Tracking runs, so no neutral packets in between
+        bridge.keep_livelink_alive();
+        assert!(receive(&listener).is_none());
+        // Pausing sends one neutral packet, and nothing after it
+        let paused = Settings {
+            sending: false,
+            ..live.clone()
+        };
+        bridge.apply(reload(&paused)).unwrap();
+        assert!(neutral(receive(&listener).unwrap()));
+        bridge.on_sample(reading(3, look, [1.0, 0.55])).unwrap();
+        bridge.on_lost("test").unwrap();
+        bridge.livelink_neutral = None;
+        bridge.keep_livelink_alive();
+        assert!(receive(&listener).is_none());
+        // Losing the eye data sends one, then again only after LIVELINK_IDLE_INTERVAL
+        bridge.apply(reload(&live)).unwrap();
+        bridge.on_sample(reading(4, look, [1.0, 0.55])).unwrap();
+        assert!(!neutral(receive(&listener).unwrap()));
+        bridge.on_lost("test").unwrap();
+        assert!(neutral(receive(&listener).unwrap()));
+        bridge.keep_livelink_alive();
+        assert!(receive(&listener).is_none());
+        bridge.livelink_neutral = Some(Instant::now() - LIVELINK_IDLE_INTERVAL);
+        bridge.keep_livelink_alive();
+        assert!(neutral(receive(&listener).unwrap()));
+        // Switching to VRChat while tracking: a last neutral packet, then OSC
+        bridge.on_sample(reading(5, look, [1.0, 0.55])).unwrap();
+        receive(&listener).unwrap();
+        let vrchat = Settings {
+            output: OutputKind::Vrchat,
+            ..live.clone()
+        };
+        bridge.apply(reload(&vrchat)).unwrap();
+        assert!(neutral(receive(&listener).unwrap()));
+        bridge.on_sample(reading(6, look, [1.0, 0.55])).unwrap();
+        let (_, packet) = rosc::decoder::decode_udp(&receive(&listener).unwrap()).unwrap();
+        let OscPacket::Message(message) = packet else { panic!("not a message") };
+        assert_eq!(message.addr, "/avatar/parameters/FT/EyeTrackingActive");
+        while receive(&listener).is_some() {}
+        // VRChat mode never gets the neutral packet while idle
+        bridge.on_lost("test").unwrap();
+        let (_, packet) = rosc::decoder::decode_udp(&receive(&listener).unwrap()).unwrap();
+        let OscPacket::Message(message) = packet else { panic!("not a message") };
+        assert_eq!(message.args, [OscType::Bool(false)]);
+        bridge.livelink_neutral = None;
+        bridge.keep_livelink_alive();
+        assert!(receive(&listener).is_none());
+    }
+
+    #[test]
     fn empty_prefix_sends_bare_names() {
         let messages = sent(&Settings {
             prefix: String::new(),
@@ -2536,6 +2741,13 @@ mod tests {
         assert_eq!(etvr.port(), 8889);
         assert_eq!(Settings { port: Some(9100), ..etvr }.port(), 9100);
         assert!(Target::of(&settings()) == Target::SteamLink { port: 9000 });
+        let livelink = Settings {
+            output: OutputKind::LiveLink,
+            ..settings()
+        };
+        assert_eq!(livelink.port(), 11111);
+        assert_eq!(Settings { port: Some(11112), ..livelink.clone() }.port(), 11112);
+        assert!(Target::of(&livelink) == Target::SteamLink { port: 11111 });
     }
 
     #[test]
@@ -2561,6 +2773,18 @@ mod tests {
             ..settings()
         };
         assert_eq!(vrchat_stream(&base), vrchat_stream(&tweaked));
+        // The same for LiveLink
+        let livelink = Settings {
+            output: OutputKind::LiveLink,
+            ..settings()
+        };
+        assert_eq!(livelink_stream(&livelink), Some(("auto", 11111)));
+        assert!(livelink_stream(&base).is_none() && livelink_stream(&etvr).is_none());
+        assert!(livelink_stream(&Settings { sending: false, ..livelink.clone() }).is_none());
+        assert_ne!(livelink_stream(&livelink), livelink_stream(&Settings { port: Some(11112), ..livelink.clone() }));
+        assert_eq!(livelink_stream(&livelink), livelink_stream(&Settings { lid_open: 0.85, ..livelink.clone() }));
+        // LiveLink is not VRChat: no EyeTrackingActive stream to end
+        assert!(vrchat_stream(&livelink).is_none());
     }
 
     #[test]

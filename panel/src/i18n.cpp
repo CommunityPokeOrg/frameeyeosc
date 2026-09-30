@@ -23,6 +23,7 @@ UiText makeJapanese() {
     t.destination = "送り先";
     t.outputVrchatShort = "VRChat";
     t.outputEtvrShort = "VRCFaceTracking";
+    t.outputLivelinkShort = "VRCFT（LiveLink）";
     t.searchingPc = "PC を探しています…";
     t.modeAuto = "自動（Steam Link の相手）";
     t.modeFixed = "固定";
@@ -334,6 +335,7 @@ UiText makeEnglish() {
     t.destination = "Destination";
     t.outputVrchatShort = "VRChat";
     t.outputEtvrShort = "VRCFaceTracking";
+    t.outputLivelinkShort = "VRCFT (LiveLink)";
     t.searchingPc = "Looking for the PC…";
     t.modeAuto = "Auto (Steam Link PC)";
     t.modeFixed = "Fixed";

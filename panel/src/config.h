@@ -103,6 +103,7 @@ constexpr const char* kUpdateCheck = "update_check";  ///< panel only: look for 
 /** Output types (the "output" key). */
 constexpr const char* kOutputVrchat = "vrchat";
 constexpr const char* kOutputEtvr = "etvr";
+constexpr const char* kOutputLivelink = "livelink";  ///< Live Link Face packets for VRCFaceTracking's LiveLink module
 /** eye_tracking_active values: how EyeTrackingActive is sent in VRChat mode */
 constexpr const char* kActiveTypes[3] = {"bool", "float", "off"};
 /** auto_recenter values, in the order its button steps through them: nothing, one dot, the dot and the side dots */
@@ -110,6 +111,7 @@ constexpr const char* kAutoRecenterModes[3] = {"off", "center", "tilt"};
 /** Default ports of the output types (used while "port" is null). */
 constexpr int kPortVrchat = 9000;
 constexpr int kPortEtvr = 8889;
+constexpr int kPortLivelink = 11111;
 
 /**
  * All keys in the order a new config.json is written.

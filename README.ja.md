@@ -17,14 +17,14 @@ https://github.com/user-attachments/assets/f8969485-161b-40d4-b9e4-689dee6d1955
 - まぶたは使っているうちに自動で調整されます。左右それぞれの普段の開き具合を覚えるので、顔や被り方のせいで片目だけ開いて見える人でも、アバターでは揃って見えます。ウインクはそのまま伝わります
 - サービスとして常駐し、SteamVR と一緒に起動します。止まっても自動で再起動します
 - 設定はファイルに置き、動いたまま反映します。SteamVR のダッシュボードに出すパネル（入れなくてもよい）で、被ったまま変えられます
-- VRCFaceTracking 用の ETVR Tracking Module が読む形式でも送れます（[VRCFaceTracking（ETVR）モード](#vrcfacetrackingetvrモード)）
+- VRCFaceTracking 用の ETVR Tracking Module が読む形式でも送れます（[VRCFaceTracking（ETVR）モード](#vrcfacetrackingetvrモード)）。VRCFaceTracking の LiveLink モジュール向けに Live Link Face の形式でも送れて、こちらは見開きも伝わります（[VRCFaceTracking（LiveLink）モード](#vrcfacetrackinglivelinkモード)）
 
 ## 必要なもの
 
 - 開発者モードを有効にして SSH で入れる Steam Frame（設定 → システム → 開発者モードを有効化、開発者の項目でパスワードを設定）。SSH を有効にすると、同じネットワークにいてパスワードを知っている人は誰でもヘッドセットに入れるので、推測されにくいパスワードにしてください
 - Steam Link でストリーミングしている PC 版 VRChat（Action Menu → Options → OSC → Enabled）
 - VRCFaceTracking の目のパラメータ（`FT/v2/EyeLeftX`、`EyeLidLeft` など）を float で持つアバター。VRChat に直接送るときは、パラメータをビットに詰める「バイナリパラメータ」のアバターには対応していません。`EyeTrackingActive` は bool で送ります。これを float で持つアバターは bool が届くと止まるので、基本タブの「EyeTrackingActive の型」で［Float］を選んでください（`eye_tracking_active`）。［送らない］にすると送りません
-- VRCFaceTracking（ETVR）モードで使うときは、PC に VRCFaceTracking と ETVR Tracking Module
+- VRCFaceTracking（ETVR）モードで使うときは、PC に VRCFaceTracking と ETVR Tracking Module。LiveLink モードなら VRCFaceTracking と LiveLink モジュール
 
 ## インストール
 
@@ -45,7 +45,7 @@ cd frameeyeosc
 
 sudo は要りません。全部ホームフォルダ（`~/.local/bin`、`~/.config`、`~/.local/share`）に入るので、SteamOS を更新しても消えません。更新するときも同じコマンドです。`--with-panel` を付けないときは、入っているパネルはそのまま残ります。
 
-インストールしたら、PC 側で Steam Link の OSC 送信を OFF にしてください（SteamVR の設定 → Steam Link → OSC）。Steam Link もスムージングなしの目のデータを VRChat に送っているので、両方が動いているとアバターの目を2つのデータが取り合ってしまいます。ETVR モードでも同じです（アバターの目を動かすのが VRCFaceTracking になるだけです）。
+インストールしたら、PC 側で Steam Link の OSC 送信を OFF にしてください（SteamVR の設定 → Steam Link → OSC）。Steam Link もスムージングなしの目のデータを VRChat に送っているので、両方が動いているとアバターの目を2つのデータが取り合ってしまいます。ETVR モードと LiveLink モードでも同じです（アバターの目を動かすのが VRCFaceTracking になるだけです）。
 
 ### 0.4.0 より前の版から更新するとき
 
@@ -96,12 +96,12 @@ sudo は要りません。全部ホームフォルダ（`~/.local/bin`、`~/.con
 
 | キー | オプション | 既定値 | 内容 |
 |---|---|---|---|
-| `sending` | | `true` | `false` で送信を一時停止（VRChat モードでは `EyeTrackingActive` の「無効」を `eye_tracking_active` の型で 1 回送る） |
-| `output` | `--output` | `"vrchat"` | `"vrchat"` は VRChat にアバターパラメータを送る、`"etvr"` は VRCFaceTracking の ETVR Tracking Module に送る |
+| `sending` | | `true` | `false` で送信を一時停止（VRChat モードでは `EyeTrackingActive` の「無効」を `eye_tracking_active` の型で 1 回送る。LiveLink モードでは普通に開いて正面を見た目を 1 回送る） |
+| `output` | `--output` | `"vrchat"` | `"vrchat"` は VRChat にアバターパラメータを送る、`"etvr"` は VRCFaceTracking の ETVR Tracking Module に送る、`"livelink"` は VRCFaceTracking の LiveLink モジュールに Live Link Face の形式で送る（パネルの「送り先」にはまだない） |
 | `host` | `--target` | `"auto"` | `"auto"` は Steam Link の接続先 PC。それ以外は IP アドレスかホスト名（ポートは付けない） |
-| `port` | `--port`、`--target` | `null` | `null` は `vrchat` なら 9000、`etvr` なら 8889 |
+| `port` | `--port`、`--target` | `null` | `null` は `vrchat` なら 9000、`etvr` なら 8889、`livelink` なら 11111 |
 | `prefix` | `--prefix` | `"/FT"` | パラメータ名の頭。`""` で頭なし |
-| `eye_tracking_active` | `--eye-tracking-active` | `"bool"` | VRChat モードで `EyeTrackingActive` をどう送るか: `"bool"`（true / false）、`"float"`（1.0 / 0.0。アバターによってはこちらが必要）、`"off"`（送らない。止めたときや目を見失ったときの 1 回の「無効」も送らない）。ETVR モードではもともと送らない |
+| `eye_tracking_active` | `--eye-tracking-active` | `"bool"` | VRChat モードで `EyeTrackingActive` をどう送るか: `"bool"`（true / false）、`"float"`（1.0 / 0.0。アバターによってはこちらが必要）、`"off"`（送らない。止めたときや目を見失ったときの 1 回の「無効」も送らない）。ETVR モードと LiveLink モードではもともと送らない |
 | `raw` | `--raw` | `false` | スムージングしない。時間を使う処理（途切れ消し、視線を止める、品質チェック、閉じたまま保つ、真下で左右を止める）もしない |
 | `gaze_min_cutoff` | `--gaze-min-cutoff` | `0.4` | 下げるほど止まっている時の視線が安定（その分遅れる） |
 | `gaze_beta` | `--gaze-beta` | `0.8` | 上げるほど素早い視線の動きに遅れず付いていく |
@@ -159,6 +159,21 @@ frameeyeosc は、VRCFaceTracking 用の ETVR Tracking Module が読む形式で
 - VRCFaceTracking を起動してからモジュールの準備ができるまで、2 分近くウィンドウが「応答なし」になることがあります。壊れてはいないので、そのまま待ってください
 - PC で UDP 8889 番の受信が許可されている必要があります。VRCFaceTracking の ModuleProcess には、たいてい最初から受信の許可が入っています
 
+## VRCFaceTracking（LiveLink）モード
+
+frameeyeosc は、VRCFaceTracking の LiveLink モジュールに Live Link Face の形式（Epic の iPhone アプリ Live Link Face と同じ形式）でも送れます。ETVR モードと違って見開きも伝わるので、まぶたを VRCFaceTracking からもらうアバター（バイナリパラメータのアバターも）で見開きが出ます。LiveLink モジュールは VRCFaceTracking のプロジェクトのモジュール（[VRCFaceTracking/LiveLinkTrackingModule](https://github.com/VRCFaceTracking/LiveLinkTrackingModule)）で、frameeyeosc はその一部ではありません。
+
+1. PC に VRCFaceTracking を入れ、モジュールの一覧から「LiveLink」を追加します。目がこのモジュールから来るように、ほかの目のモジュール（ETVR Tracking Module など）は止めるか外してください。UDP 11111 番で受けます
+2. `config.json` に `"output": "livelink"` と書きます（または `--output livelink`）。パネルの「送り先」にはまだこの選択肢がありません。使っている間は、左の列に「VRCFT（LiveLink）→ …」と出ます。送り先の PC はいつもどおり（Steam Link の相手か固定）、ポートは 11111 です
+3. Windows Defender ファイアウォールで、VRCFaceTracking が UDP 11111 番を受けられるようにします（Windows に聞かれたら VRCFaceTracking を許可するか、UDP 11111 番の受信の規則を足す）。許可がないと何も届きません
+
+注意:
+
+- 送るのは左右それぞれのまぶた・見開き・視線です（ARKit の EyeBlink と EyeWide、目の yaw と pitch）。VRCFaceTracking のまぶたは VRChat モードと同じ値（0 閉じ、0.75 普通に開いた目、1 見開き）になり、視線も同じです。目を細める・口・眉・頭は 0 で送ります
+- モジュールは何もなめらかにしないので、frameeyeosc のなめらかさの設定がそのまま効きます
+- VRCFaceTracking は最後に受け取った値を持ち続けます。なので目のデータが止まったとき（ヘッドセットを外したとき）や、送信を止めたとき・送り先の種類を変えたときは、普通に開いて正面を見た目を 1 回送ります。送信中で目のデータがない間は、それを 1 秒に 2 回送り続けます。モジュールは VRCFaceTracking が読み込んでから 180 秒以内に何か届かないと動き出さないためです（あきらめてしまったら VRCFaceTracking でモジュールを読み込み直してください）。一時停止中は何も送りません
+- `prefix` と `eye_tracking_active` は関係ありません。アバターのパラメータは VRCFaceTracking が送ります
+
 ## 目を合わせる
 
 アバターの目が少しずれる（下を向きすぎる、下を見るとまぶたが閉じる、など）ときは、パネルの「目を合わせる」タブで合わせられます。［目を合わせる］を押して、ダッシュボードを閉じてください:
@@ -198,7 +213,7 @@ frameeyeosc は、VRCFaceTracking 用の ETVR Tracking Module が読む形式で
 
 ## 既知の問題
 
-- VRChat に直接送るときは、パラメータをビットに詰める「バイナリパラメータ」の VRCFT アバターには対応していません。ETVR モードでは、アバター側は VRCFaceTracking しだいです
+- VRChat に直接送るときは、パラメータをビットに詰める「バイナリパラメータ」の VRCFT アバターには対応していません。ETVR モードと LiveLink モードでは、アバター側は VRCFaceTracking しだいです。見開きも伝えたいときは LiveLink モードを使ってください
 
 ## プライバシー
 

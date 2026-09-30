@@ -813,8 +813,11 @@ void EyePanel::drawStatus(const Pen& pen, const UiText& t, const PanelModel& m) 
         pen.text(x0, 180, t.notRunningHint1, fitSize(pen, t.notRunningHint1, 16, 12, x1 - x0, false), kText);
         pen.text(x0, 204, t.notRunningHint2, fitSize(pen, t.notRunningHint2, 16, 12, x1 - x0, false), kText);
     } else {
-        const std::string destination = std::string(s.output == kOutputEtvr ? t.outputEtvrShort : t.outputVrchatShort) +
-                                        " → " + (s.target.empty() ? std::string(t.searchingPc) : s.target);
+        const char* receiver = s.output == kOutputEtvr       ? t.outputEtvrShort
+                               : s.output == kOutputLivelink ? t.outputLivelinkShort
+                                                             : t.outputVrchatShort;
+        const std::string destination =
+            std::string(receiver) + " → " + (s.target.empty() ? std::string(t.searchingPc) : s.target);
         const double size = fitSize(pen, destination, 19, 13, x1 - x0, true);
         pen.text(x0, 180, destination, size, kText, true);
         pen.text(x0, 204, s.targetMode == "fixed" ? t.modeFixed : t.modeAuto, 15, kTextMuted);
@@ -1087,10 +1090,11 @@ void EyePanel::drawBasic(const Pen& pen, const UiText& t, const PanelModel& m, c
                       output == kOutputEtvr ? 1 : (output == kOutputVrchat ? 0 : -1), 19, locked);
     }
     y += kRowH + kRowGap;
-    // How EyeTrackingActive goes out (VRChat only: greyed out for ETVR, which never gets it)
+    // How EyeTrackingActive goes out (VRChat only: greyed out for ETVR and LiveLink, which never get it)
     {
         const bool locked = v.locked(key::kEyeTrackingActive);
-        const bool vrchat = v.text(key::kOutput) != kOutputEtvr;
+        const std::string output = v.text(key::kOutput);
+        const bool vrchat = output != kOutputEtvr && output != kOutputLivelink;
         const std::string type = v.text(key::kEyeTrackingActive);
         int selected = -1;
         for (int i = 0; i < 3; ++i) {

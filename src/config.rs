@@ -39,6 +39,9 @@ pub enum OutputKind {
     Vrchat,
     /// VRCFaceTracking's ETVR Tracking Module (six values, eyelid 1.0 = relaxed)
     Etvr,
+    /// VRCFaceTracking's LiveLink module (Live Link Face packets: eyelids, widening and gaze per eye)
+    #[value(name = "livelink")]
+    LiveLink,
 }
 
 impl OutputKind {
@@ -46,6 +49,7 @@ impl OutputKind {
         match self {
             Self::Vrchat => 9000,
             Self::Etvr => 8889,
+            Self::LiveLink => crate::livelink::DEFAULT_PORT,
         }
     }
 }
@@ -754,6 +758,19 @@ mod tests {
             "lid_fit_down_left": 0.55}"#, &[]).is_err());
         assert!(merged(r#"{"lid_fit_closed_left": -0.1, "lid_fit_up_left": 0.9, "lid_fit_open_left": 0.9,
             "lid_fit_down_left": 0.8}"#, &[]).is_err());
+    }
+
+    #[test]
+    fn livelink_is_an_output() {
+        let (settings, _) = merged(r#"{"output": "livelink"}"#, &[]).unwrap();
+        assert_eq!(settings.output, OutputKind::LiveLink);
+        assert_eq!(settings.port(), 11111);
+        let (settings, locked) = merged(r#"{"output": "etvr"}"#, &["--output", "livelink"]).unwrap();
+        assert_eq!(settings.output, OutputKind::LiveLink);
+        assert_eq!(locked, ["output"]);
+        // The status file and the panel spell it the same way
+        assert_eq!(serde_json::to_string(&OutputKind::LiveLink).unwrap(), r#""livelink""#);
+        assert!(merged(r#"{"output": "live-link"}"#, &[]).is_err());
     }
 
     #[test]

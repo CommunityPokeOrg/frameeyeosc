@@ -31,6 +31,7 @@ struct UiText {
     const char* destination;        ///< "Destination" label
     const char* outputVrchatShort;  ///< "VRChat" in the destination line
     const char* outputEtvrShort;    ///< "VRCFaceTracking" in the destination line
+    const char* outputLivelinkShort;  ///< "VRCFT (LiveLink)" in the destination line
     const char* searchingPc;        ///< auto target not found yet
     const char* modeAuto;           ///< target chosen automatically
     const char* modeFixed;          ///< target fixed

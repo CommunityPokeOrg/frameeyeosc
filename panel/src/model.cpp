@@ -58,7 +58,10 @@ std::string SettingsView::text(const std::string& name) const {
 int SettingsView::port() const {
     const double value = number(key::kPort);
     if (std::isfinite(value)) return static_cast<int>(std::lround(value));
-    return text(key::kOutput) == kOutputEtvr ? kPortEtvr : kPortVrchat;
+    const std::string output = text(key::kOutput);
+    if (output == kOutputEtvr) return kPortEtvr;
+    if (output == kOutputLivelink) return kPortLivelink;
+    return kPortVrchat;
 }
 
 bool SettingsView::portIsDefault() const {

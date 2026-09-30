@@ -88,6 +88,7 @@ struct Options {
     bool fakeNoTracking = false;
     bool fakeSlowTracker = false; ///< --fake-slow-tracker: the eye tracker delivers 15 samples a second
     bool fakeEtvr = false;
+    bool fakeLivelink = false;
     bool fakeFixed = false;
     bool fakeTargetNull = false;
     bool fakeLocked = false;
@@ -194,7 +195,7 @@ void printUsage() {
         "      --preview-update-prompt  Show the \"update to ...?\" question (with --fake-update available)\n"
         "      --fake            Draw a made-up state (running, sending to VRChat) instead of the files.\n"
         "                        Each --fake-* below implies --fake\n"
-        "      --fake-not-running / --fake-paused / --fake-no-tracking / --fake-etvr / --fake-fixed\n"
+        "      --fake-not-running / --fake-paused / --fake-no-tracking / --fake-etvr / --fake-livelink / --fake-fixed\n"
         "      --fake-target-null  Auto target not found yet\n"
         "      --fake-slow-tracker  The eye tracker delivers only 15 samples a second\n"
         "      --fake-locked     Some keys locked by the command line\n"
@@ -323,6 +324,8 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.fake = options.fakeNoTracking = true;
         } else if (arg == "--fake-etvr") {
             options.fake = options.fakeEtvr = true;
+        } else if (arg == "--fake-livelink") {
+            options.fake = options.fakeLivelink = true;
         } else if (arg == "--fake-fixed") {
             options.fake = options.fakeFixed = true;
         } else if (arg == "--fake-target-null") {
@@ -517,6 +520,7 @@ PanelModel fakeModel(const Options& options) {
     m.config.root.type = JsonValue::Type::Object;
     JsonValue& root = m.config.root;
     if (options.fakeEtvr) root.set(key::kOutput, JsonValue::makeString(kOutputEtvr));
+    if (options.fakeLivelink) root.set(key::kOutput, JsonValue::makeString(kOutputLivelink));
     if (options.fakeFixed) root.set(key::kHost, JsonValue::makeString("192.168.0.60"));
     if (options.fakePaused) root.set(key::kSending, JsonValue::makeBool(false));
     if (options.fakeCustom) {
@@ -631,10 +635,11 @@ PanelModel fakeModel(const Options& options) {
         s.time = now;
         s.started = now - 4980;
         s.sending = !options.fakePaused;
-        s.output = etvr ? kOutputEtvr : kOutputVrchat;
+        s.output = etvr ? kOutputEtvr : (options.fakeLivelink ? kOutputLivelink : kOutputVrchat);
         s.targetMode = options.fakeFixed ? "fixed" : "auto";
         if (!options.fakeTargetNull) {
-            s.target = std::string("192.168.0.60:") + (etvr ? "8889" : (options.fakeCustom ? "9001" : "9000"));
+            s.target = std::string("192.168.0.60:") +
+                       (etvr ? "8889" : options.fakeLivelink ? "11111" : (options.fakeCustom ? "9001" : "9000"));
         }
         s.trackerRate = options.fakeSlowTracker ? 15.0 : 89.6;
         s.rate = options.fakePaused ? 0.0 : s.trackerRate;
