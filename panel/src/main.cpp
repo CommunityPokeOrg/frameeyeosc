@@ -1,5 +1,6 @@
 // frameeyeosc-panel: a SteamVR dashboard panel for frameeyeosc's settings. It only writes config.json and reads
 // status.json; frameeyeosc keeps sending when the panel is closed, crashes or is not installed.
+#include "auto_recenter.h"
 #include "autostart.h"
 #include "config.h"
 #include "draw.h"
@@ -9,6 +10,7 @@
 #include "i18n.h"
 #include "model.h"
 #include "panel.h"
+#include "recorder.h"
 #include "sounds.h"
 #include "status.h"
 #include "target.h"
@@ -49,7 +51,9 @@ constexpr double kPanelPollSec = 0.033;   ///< event polling while the panel is 
 constexpr double kClosedPollSec = 0.25;   ///< event polling while it is not
 constexpr double kFitPollSec = 1.0 / 90;  ///< every display frame while the eye fit's target is up (without frame sync)
 constexpr uint32_t kFrameSyncTimeoutMs = 50;  ///< the longest wait for the compositor's next frame
-constexpr double kStatusReadSec = 0.1;    ///< status.json is read this often while the panel is visible
+constexpr double kStatusReadSec = 0.1;    ///< status.json is read this often while the panel is visible...
+/** ...and this often while it is closed and only watching for the headset being put on (auto_recenter) */
+constexpr double kWatchStatusReadSec = 0.5;
 constexpr double kUpdateSettleSec = 60.0; ///< --update-live: longest wait for a check or an install to finish
 
 /** The command line. */
@@ -71,6 +75,7 @@ struct Options {
     int targetBench = 0;          ///< --target-bench N: time drawing the target N times
     bool fitDetails = false;      ///< --fit-details: "Fine-tune" open on the Eye fit tab
     int fitDetailsPage = 0;       ///< --fit-details lids: its eyelid page
+    bool lidMarks = false;        ///< --lid-marks: the lid marks open on the Eyelids tab
     std::string language;         ///< for --dump-png: overrides the config language (ja / en)
     PanelTab tab = PanelTab::Basic;
     bool previewQuit = false;
@@ -84,6 +89,7 @@ struct Options {
     bool fakeNoTracking = false;
     bool fakeSlowTracker = false; ///< --fake-slow-tracker: the eye tracker delivers 15 samples a second
     bool fakeEtvr = false;
+    bool fakeLivelink = false;
     bool fakeFixed = false;
     bool fakeTargetNull = false;
     bool fakeLocked = false;
@@ -92,9 +98,11 @@ struct Options {
     bool fakeWriteError = false;
     bool fakeCustom = false;
     bool fakeIndependent = false; ///< --fake-independent: independent_eyes on, the gaze pad per eye
-    std::string fakePrompt;       ///< vrchat / etvr
+    std::string fakePrompt;       ///< vrchat / etvr / livelink
     std::string fakeUpdate;       ///< a made-up update state (see printUsage)
     std::string fakeFit;          ///< a made-up eye fit state (see printUsage)
+    std::string fakeRecord;       ///< a made-up eye log state: "recording", "failed" or "autostopped"
+    std::string fakeWiden;        ///< lid_widen in the made-up config ("" = the default)
     bool updateLive = false;      ///< --dump-png: run the real update checker (and wait for it after clicks)
     std::vector<std::pair<double, double>> clicks;  ///< --click X,Y: presses carried out before the PNG is drawn
     Autostart fakeAutostart = Autostart::Disabled;
@@ -140,6 +148,16 @@ double nowSeconds() {
 }
 
 /**
+ * Seconds since boot, counting the time the Frame was suspended (CLOCK_BOOTTIME; the monotonic clock stops then).
+ * @return seconds
+ */
+double bootSeconds() {
+    timespec now {};
+    ::clock_gettime(CLOCK_BOOTTIME, &now);
+    return static_cast<double>(now.tv_sec) + now.tv_nsec / 1e9;
+}
+
+/**
  * Sleep until a stop or show request, or until the time is up.
  * @param seconds how long to wait
  */
@@ -172,14 +190,15 @@ void printUsage() {
         "      --target-bench N  Also draw it N times and print how long one takes, then one gaze point\n"
         "                        paced at 90 frames/s\n"
         "      --language ja|en  Draw in this language instead of the config's\n"
-        "      --tab basic|gaze|eyefit|lids|advanced  Draw this tab\n"
+        "      --tab basic|output|gaze|eyefit|lids|advanced  Draw this tab\n"
         "      --fit-details [gaze|lids]  Open \"Fine-tune\" on the Eye fit tab (default: its gaze page)\n"
+        "      --lid-marks       Show the lid marks on the Eyelids tab although the eyes are fitted\n"
         "      --preview-quit    Show \"press again to quit\"\n"
         "      --preview-reset   Show \"press again to reset\"\n"
         "      --preview-update-prompt  Show the \"update to ...?\" question (with --fake-update available)\n"
         "      --fake            Draw a made-up state (running, sending to VRChat) instead of the files.\n"
         "                        Each --fake-* below implies --fake\n"
-        "      --fake-not-running / --fake-paused / --fake-no-tracking / --fake-etvr / --fake-fixed\n"
+        "      --fake-not-running / --fake-paused / --fake-no-tracking / --fake-etvr / --fake-livelink / --fake-fixed\n"
         "      --fake-target-null  Auto target not found yet\n"
         "      --fake-slow-tracker  The eye tracker delivers only 15 samples a second\n"
         "      --fake-locked     Some keys locked by the command line\n"
@@ -188,13 +207,16 @@ void printUsage() {
         "      --fake-write-error  The panel failed to write config.json\n"
         "      --fake-custom     Gaze smoothing values that match no preset\n"
         "      --fake-independent  Move eyes separately (the left column shows each eye's gaze)\n"
-        "      --fake-prompt vrchat|etvr  The recommended-settings question\n"
+        "      --fake-prompt vrchat|etvr|livelink  The recommended-settings question\n"
         "      --fake-autostart on|off|missing|unknown\n"
         "      --fake-update checking|uptodate|available|manual|installing|installed|checkfailed|installfailed\n"
         "                        A made-up update state (the version row on the Advanced tab)\n"
-        "      --fake-fit waiting|waiting-center|running|running-closed|done|done-center|fitted|fitted-gaze|\n"
+        "      --fake-fit waiting|waiting-center|waiting-tilt|running|running-closed|done|done-center|done-tilt|\n"
+        "                 fitted|fitted-gaze|\n"
         "                 failed-unsteady|failed-notclosed|failed-movement|failed-lidrange|failed-cancelled|\n"
         "                 failed-noresult  A made-up eye fit (Eye fit tab)\n"
+        "      --fake-record recording|failed|autostopped  A made-up eye log (Advanced tab, and the left column)\n"
+        "      --fake-widen off|low|normal|high  lid_widen in the made-up settings\n"
         "      --update-live     Run the real update checker: check first, and after each --click wait for the\n"
         "                        check or install it started (installs really happen; for testing with a fake GitHub)\n"
         "      --click X,Y       Press the panel at X,Y first (repeatable; writes --config; not with --fake)\n"
@@ -254,6 +276,8 @@ bool parseOptions(int argc, char** argv, Options& options) {
             }
         } else if (arg == "--target-bench" && hasNext) {
             options.targetBench = std::max(0, std::min(100000, std::atoi(argv[++i])));
+        } else if (arg == "--lid-marks") {
+            options.lidMarks = true;
         } else if (arg == "--fit-details") {
             options.fitDetails = true;
             if (hasNext && (std::string(argv[i + 1]) == "gaze" || std::string(argv[i + 1]) == "lids")) {
@@ -276,6 +300,8 @@ bool parseOptions(int argc, char** argv, Options& options) {
             const std::string tab = argv[++i];
             if (tab == "basic") {
                 options.tab = PanelTab::Basic;
+            } else if (tab == "output") {
+                options.tab = PanelTab::Output;
             } else if (tab == "gaze") {
                 options.tab = PanelTab::Gaze;
             } else if (tab == "eyefit") {
@@ -285,7 +311,7 @@ bool parseOptions(int argc, char** argv, Options& options) {
             } else if (tab == "advanced") {
                 options.tab = PanelTab::Advanced;
             } else {
-                std::fprintf(stderr, "--tab must be basic, gaze, eyefit, lids or advanced: %s\n", tab.c_str());
+                std::fprintf(stderr, "--tab must be basic, output, gaze, eyefit, lids or advanced: %s\n", tab.c_str());
                 return false;
             }
         } else if (arg == "--preview-quit") {
@@ -306,6 +332,8 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.fake = options.fakeNoTracking = true;
         } else if (arg == "--fake-etvr") {
             options.fake = options.fakeEtvr = true;
+        } else if (arg == "--fake-livelink") {
+            options.fake = options.fakeLivelink = true;
         } else if (arg == "--fake-fixed") {
             options.fake = options.fakeFixed = true;
         } else if (arg == "--fake-target-null") {
@@ -324,8 +352,9 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.fake = options.fakeIndependent = true;
         } else if (arg == "--fake-prompt" && hasNext) {
             options.fakePrompt = argv[++i];
-            if (options.fakePrompt != kOutputVrchat && options.fakePrompt != kOutputEtvr) {
-                std::fprintf(stderr, "--fake-prompt must be vrchat or etvr: %s\n", options.fakePrompt.c_str());
+            if (options.fakePrompt != kOutputVrchat && options.fakePrompt != kOutputEtvr &&
+                options.fakePrompt != kOutputLivelink) {
+                std::fprintf(stderr, "--fake-prompt must be vrchat, etvr or livelink: %s\n", options.fakePrompt.c_str());
                 return false;
             }
         } else if (arg == "--fake-autostart" && hasNext) {
@@ -352,12 +381,30 @@ bool parseOptions(int argc, char** argv, Options& options) {
                 return false;
             }
             options.fake = true;
+        } else if (arg == "--fake-widen" && hasNext) {
+            options.fakeWiden = argv[++i];
+            if (std::find(std::begin(kLidWidenModes), std::end(kLidWidenModes), options.fakeWiden) ==
+                std::end(kLidWidenModes)) {
+                std::fprintf(stderr, "--fake-widen must be off, low, normal or high: %s\n", options.fakeWiden.c_str());
+                return false;
+            }
+            options.fake = true;
+        } else if (arg == "--fake-record" && hasNext) {
+            options.fakeRecord = argv[++i];
+            if (options.fakeRecord != "recording" && options.fakeRecord != "failed" &&
+                options.fakeRecord != "autostopped") {
+                std::fprintf(stderr, "--fake-record must be recording, failed or autostopped: %s\n",
+                             options.fakeRecord.c_str());
+                return false;
+            }
+            options.fake = true;
         } else if (arg == "--fake-fit" && hasNext) {
             options.fakeFit = argv[++i];
             static const char* const kFitStates[] = {
-                "waiting",         "waiting-center",  "running",         "running-closed",   "done",
-                "done-center",     "fitted",          "fitted-gaze",     "failed-unsteady",  "failed-notclosed",
-                "failed-movement", "failed-lidrange", "failed-cancelled", "failed-noresult"};
+                "waiting",         "waiting-center",   "waiting-tilt",    "running",         "running-closed",
+                "done",            "done-center",      "done-tilt",       "fitted",          "fitted-gaze",
+                "failed-unsteady", "failed-notclosed", "failed-movement", "failed-lidrange", "failed-cancelled",
+                "failed-noresult"};
             if (std::find(std::begin(kFitStates), std::end(kFitStates), options.fakeFit) == std::end(kFitStates)) {
                 std::fprintf(stderr, "--fake-fit: unknown state %s\n", options.fakeFit.c_str());
                 return false;
@@ -492,7 +539,9 @@ PanelModel fakeModel(const Options& options) {
     m.config.root.type = JsonValue::Type::Object;
     JsonValue& root = m.config.root;
     if (options.fakeEtvr) root.set(key::kOutput, JsonValue::makeString(kOutputEtvr));
+    if (options.fakeLivelink) root.set(key::kOutput, JsonValue::makeString(kOutputLivelink));
     if (options.fakeFixed) root.set(key::kHost, JsonValue::makeString("192.168.0.60"));
+    if (!options.fakeWiden.empty()) root.set(key::kLidWiden, JsonValue::makeString(options.fakeWiden));
     if (options.fakePaused) root.set(key::kSending, JsonValue::makeBool(false));
     if (options.fakeCustom) {
         root.set(key::kGazeMinCutoff, JsonValue::makeNumber(0.3));
@@ -506,13 +555,23 @@ PanelModel fakeModel(const Options& options) {
     }
     if (options.fakeBroken) m.config.error = "expected , or } between members (near character 212)";
     if (options.fakeIndependent) root.set(key::kIndependentEyes, JsonValue::makeBool(true));
+    if (options.fakeRecord == "recording") {
+        m.recording.recording = true;
+        m.recording.elapsedSec = 83.4;
+    } else if (options.fakeRecord == "failed") {
+        m.recording.error = "can't open /dev/shm/eye-server.mmap: No such file or directory (os error 2)";
+    } else if (options.fakeRecord == "autostopped") {
+        m.recording.autoStopped = true;
+    }
     if (!options.fakeFit.empty()) {
         using gaze_fit::Failure;
         using gaze_fit::Phase;
         using gaze_fit::Point;
         gaze_fit::View& fit = m.fit;
         const std::string& state = options.fakeFit;
-        fit.mode = state.find("center") != std::string::npos ? gaze_fit::Mode::Center : gaze_fit::Mode::Full;
+        fit.mode = state.find("center") != std::string::npos ? gaze_fit::Mode::Center
+                   : state.find("tilt") != std::string::npos ? gaze_fit::Mode::Tilt
+                                                              : gaze_fit::Mode::Full;
         fit.count = gaze_fit::pointCount(fit.mode);
         // The fit in config.json: the gaze of the live run on 2026-09-28, and eyelids like the worn recording
         const bool saved = state.rfind("done", 0) == 0 || state.rfind("fitted", 0) == 0;
@@ -522,6 +581,7 @@ PanelModel fakeModel(const Options& options) {
             root.set(key::kGazeGainX, JsonValue::makeNumber(0.93));
             root.set(key::kGazeGainUp, JsonValue::makeNumber(0.9));
             root.set(key::kGazeGainDown, JsonValue::makeNumber(0.88));
+            root.set(key::kGazeRollDeg, JsonValue::makeNumber(6.7));
             // Each eye's own sideways fit (made-up numbers)
             root.set(key::kGazeOffsetXLeft, JsonValue::makeNumber(0.031));
             root.set(key::kGazeOffsetXRight, JsonValue::makeNumber(-0.006));
@@ -597,10 +657,11 @@ PanelModel fakeModel(const Options& options) {
         s.time = now;
         s.started = now - 4980;
         s.sending = !options.fakePaused;
-        s.output = etvr ? kOutputEtvr : kOutputVrchat;
+        s.output = etvr ? kOutputEtvr : (options.fakeLivelink ? kOutputLivelink : kOutputVrchat);
         s.targetMode = options.fakeFixed ? "fixed" : "auto";
         if (!options.fakeTargetNull) {
-            s.target = std::string("192.168.0.60:") + (etvr ? "8889" : (options.fakeCustom ? "9001" : "9000"));
+            s.target = std::string("192.168.0.60:") +
+                       (etvr ? "8889" : options.fakeLivelink ? "11111" : (options.fakeCustom ? "9001" : "9000"));
         }
         s.trackerRate = options.fakeSlowTracker ? 15.0 : 89.6;
         s.rate = options.fakePaused ? 0.0 : s.trackerRate;
@@ -622,14 +683,24 @@ PanelModel fakeModel(const Options& options) {
         }
         s.calibrationEnabled = true;
         s.relaxed = {{0.78, 0.82}};
-        s.scales = {{1.026, 0.976}};
+        // What frameeyeosc applies: a fixed scale, else 1 for a fitted eye, else the learned one
+        {
+            const double learned[2] = {1.026, 0.976};
+            const FitInConfig fitted = fitInConfig(SettingsView(m));
+            const char* fixedKeys[2] = {key::kLidScaleLeft, key::kLidScaleRight};
+            for (int eye = 0; eye < 2; ++eye) {
+                const double fixed = m.config.number(fixedKeys[eye]);
+                s.scales.v[eye] = std::isfinite(fixed) ? fixed : (fitted.lidsFitted[eye] ? 1.0 : learned[eye]);
+            }
+        }
         s.learning = true;
         s.configPath = options.configPath;
         s.calibrationPath = "/home/steamos/.config/frameeyeosc/calibration";
         if (options.fakeConfigError) s.configError = "lid_closed must be below lid_open";
         s.effective = root;
         if (options.fakeLocked) {
-            s.locked = {key::kPort, key::kRaw, key::kLidOpen, key::kIndependentEyes, key::kGazeOffsetY};
+            s.locked = {key::kOutput, key::kPort, key::kRaw, key::kLidOpen, key::kIndependentEyes, key::kGazeOffsetY};
+            s.effective.set(key::kOutput, JsonValue::makeString(kOutputVrchat));
             s.effective.set(key::kPort, JsonValue::makeNumber(9123, true));
             s.effective.set(key::kRaw, JsonValue::makeBool(true));
             s.effective.set(key::kLidOpen, JsonValue::makeNumber(0.78));
@@ -648,7 +719,8 @@ PanelModel fakeModel(const Options& options) {
 }
 
 void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, AutostartWorker& autostart,
-              frame_updater::UpdateChecker* updater, gaze_fit::Session* fit, const VrOverlay* vr);
+              frame_updater::UpdateChecker* updater, gaze_fit::Session* fit, const VrOverlay* vr,
+              recorder::Recorder* eyeLog);
 std::string targetLabel(const UiText& t, gaze_fit::TargetStyle style);
 
 /**
@@ -693,6 +765,7 @@ int runDumpPng(const Options& options) {
         panel.setTab(options.tab);
         panel.setFitDetails(options.fitDetails);
         panel.setFitDetailsPage(options.fitDetailsPage);
+        panel.setLidMarks(options.lidMarks);
         if (options.previewQuit) panel.armQuitForPreview();
         if (options.previewReset) panel.armResetForPreview();
         if (!options.fakePrompt.empty()) panel.showPrompt(options.fakePrompt);
@@ -713,7 +786,7 @@ int runDumpPng(const Options& options) {
             std::printf("click %.0f,%.0f -> action %d key %s arg %d\n", click.first, click.second,
                         static_cast<int>(hit.action), hit.key != nullptr ? hit.key : "-", hit.arg);
             if (hit.action != PanelAction::Quit) {
-                applyHit(hit, model, panel, idleAutostart, updater.get(), nullptr, nullptr);
+                applyHit(hit, model, panel, idleAutostart, updater.get(), nullptr, nullptr, nullptr);
             }
             panel.pointerUp();
             if (updater) {
@@ -931,7 +1004,25 @@ long long writeCaptureRequest(PanelModel& model, const char* target, double seco
 }
 
 /**
- * Write an eye fit's result: the gaze zero point; for the whole fit also the gains and each eye's lid readings.
+ * Bring a config.json from 0.5.x or earlier up to date, once (see migrateLidScales), and read it again.
+ * @param model the model (its config is re-read after a write)
+ */
+void migrateConfig(PanelModel& model) {
+    if (!model.config.exists || !model.config.error.empty() || model.config.root.get(key::kLidWiden) != nullptr) return;
+    std::string log;
+    std::string error;
+    const bool ok = updateConfigFile(model.configPath, [&log](JsonValue& root) { migrateLidScales(root, log); }, error);
+    if (!ok) {
+        std::fprintf(stderr, "[config] could not add lid_widen: %s\n", error.c_str());
+        return;
+    }
+    std::fprintf(stderr, "[config] from before 0.6.0: lid_widen = \"normal\"%s%s\n", log.empty() ? "" : "; ",
+                 log.c_str());
+    model.config = readConfigFile(model.configPath);
+}
+
+/**
+ * Write an eye fit's result (see applyFitValues) and log it.
  * @param model the model
  * @param values the result
  * @param mode the mode
@@ -939,8 +1030,9 @@ long long writeCaptureRequest(PanelModel& model, const char* target, double seco
  */
 bool writeFitValues(PanelModel& model, const gaze_fit::Values& values, gaze_fit::Mode mode) {
     const bool full = mode == gaze_fit::Mode::Full;
-    std::fprintf(stderr, "[fit] done: offset %+.3f %+.3f, gains %.2f %.2f %.2f%s\n", values.offsetX, values.offsetY,
-                 values.gainX, values.gainUp, values.gainDown, full ? "" : " (the rest unchanged)");
+    std::fprintf(stderr, "[fit] done: offset %+.3f %+.3f, tilt %+.1f deg, gains %.2f %.2f %.2f%s\n", values.offsetX,
+                 values.offsetY, values.rollDeg, values.gainX, values.gainUp, values.gainDown,
+                 full ? "" : " (the rest unchanged)");
     if (full && values.hasLids) {
         for (int eye = 0; eye < 2; ++eye) {
             std::fprintf(stderr, "[fit] %s eyelid: closed %.3f, up %.3f, ahead %.3f, down %.3f\n",
@@ -952,33 +1044,7 @@ bool writeFitValues(PanelModel& model, const gaze_fit::Values& values, gaze_fit:
         std::fprintf(stderr, "[fit] each eye sideways: left %+.3f x%.2f, right %+.3f x%.2f\n", values.eyeOffsetX[0],
                      values.eyeGainX[0], values.eyeOffsetX[1], values.eyeGainX[1]);
     }
-    return writeConfig(model, [values, full](JsonValue& root) {
-        root.set(key::kGazeOffsetX, JsonValue::makeNumber(values.offsetX));
-        root.set(key::kGazeOffsetY, JsonValue::makeNumber(values.offsetY));
-        // Each eye's own sideways values: re-centering moves their zero points; a full fit sets them, or clears
-        // them when this frameeyeosc could not measure each eye
-        const char* eyeOffsets[2] = {key::kGazeOffsetXLeft, key::kGazeOffsetXRight};
-        const char* eyeGains[2] = {key::kGazeGainXLeft, key::kGazeGainXRight};
-        for (int eye = 0; eye < 2; ++eye) {
-            if (values.hasEyeX) {
-                root.set(eyeOffsets[eye], JsonValue::makeNumber(values.eyeOffsetX[eye]));
-                root.set(eyeGains[eye], JsonValue::makeNumber(values.eyeGainX[eye]));
-            } else if (full) {
-                root.set(eyeOffsets[eye], JsonValue::makeNull());
-                root.set(eyeGains[eye], JsonValue::makeNull());
-            }
-        }
-        if (!full) return;
-        root.set(key::kGazeGainX, JsonValue::makeNumber(values.gainX));
-        root.set(key::kGazeGainUp, JsonValue::makeNumber(values.gainUp));
-        root.set(key::kGazeGainDown, JsonValue::makeNumber(values.gainDown));
-        if (!values.hasLids) return;
-        for (int eye = 0; eye < 2; ++eye) {
-            const double readings[4] = {values.lidClosed[eye], values.lidUp[eye], values.lidOpen[eye],
-                                        values.lidDown[eye]};
-            for (int i = 0; i < 4; ++i) root.set(kLidFitKeys[eye][i], JsonValue::makeNumber(readings[i]));
-        }
-    });
+    return writeConfig(model, [values, mode](JsonValue& root) { applyFitValues(root, values, mode); });
 }
 
 /**
@@ -1014,6 +1080,22 @@ std::string hostErrorText(const UiText& t, host_entry::HostError problem) {
 }
 
 /**
+ * Start an eye fit session (it waits for the dashboard to close, or goes straight to the first target if it is).
+ * @param fit the session
+ * @param mode the whole fit, re-centering only, or re-centering and the tilt
+ * @param view the settings (the fit now)
+ * @param vr the connection to SteamVR, for the IPD (null: the default)
+ */
+void startFit(gaze_fit::Session& fit, gaze_fit::Mode mode, const SettingsView& view, const VrOverlay* vr) {
+    const double ipd = vr != nullptr ? vr->userIpdMeters() : gaze_fit::kDefaultIpdM;
+    const char* name = mode == gaze_fit::Mode::Full     ? "eye fit"
+                       : mode == gaze_fit::Mode::Center ? "re-center"
+                                                        : "re-center and tilt";
+    std::fprintf(stderr, "[fit] %s, IPD %.1f mm\n", name, ipd * 1000);
+    fit.start(mode, fitInConfig(view).values, nowSeconds(), ipd);
+}
+
+/**
  * Carry out a button press: re-read config.json, change keys, write it back; or ask the autostart worker.
  * @param hit the button
  * @param model the model (config and error are updated)
@@ -1022,9 +1104,11 @@ std::string hostErrorText(const UiText& t, host_entry::HostError problem) {
  * @param updater the update checker (null in --dump-png without --update-live)
  * @param fit the eye fit session (null in --dump-png)
  * @param vr the connection to SteamVR, for the IPD (null in --dump-png)
+ * @param eyeLog the eye log (null in --dump-png)
  */
 void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, AutostartWorker& autostart,
-              frame_updater::UpdateChecker* updater, gaze_fit::Session* fit, const VrOverlay* vr) {
+              frame_updater::UpdateChecker* updater, gaze_fit::Session* fit, const VrOverlay* vr,
+              recorder::Recorder* eyeLog) {
     const SettingsView view(model);
     std::function<void(JsonValue&)> change;
     std::string openPrompt;
@@ -1077,7 +1161,7 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
             change = [](JsonValue& root) { root.set(key::kPort, JsonValue::makeNull()); };
             break;
         case PanelAction::SetOutput: {
-            const std::string output = hit.arg == 1 ? kOutputEtvr : kOutputVrchat;
+            const std::string output = outputOfArg(hit.arg);
             if (view.text(key::kOutput) == output) return;
             // A new output type starts from its own default port
             change = [output](JsonValue& root) {
@@ -1091,6 +1175,27 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
             if (hit.arg < 0 || hit.arg > 2) return;
             const std::string type = kActiveTypes[hit.arg];
             change = [type](JsonValue& root) { root.set(key::kEyeTrackingActive, JsonValue::makeString(type)); };
+            break;
+        }
+        case PanelAction::RecordToggle:
+            if (eyeLog == nullptr) return;
+            if (eyeLog->recording()) {
+                eyeLog->stop(nowSeconds());
+            } else if (!eyeLog->busy()) {
+                eyeLog->start(recorder::findFrameeyeosc(), recorder::defaultDir(), model.configPath, nowSeconds());
+            }
+            model.recording = eyeLog->view(nowSeconds());
+            return;
+        case PanelAction::SetLidWiden: {
+            if (hit.arg < 0 || hit.arg > 3) return;
+            const std::string mode = kLidWidenModes[hit.arg];
+            change = [mode](JsonValue& root) { root.set(key::kLidWiden, JsonValue::makeString(mode)); };
+            break;
+        }
+        case PanelAction::SetAutoRecenter: {
+            if (hit.arg < 0 || hit.arg > 2) return;
+            const std::string mode = kAutoRecenterModes[hit.arg];
+            change = [mode](JsonValue& root) { root.set(key::kAutoRecenter, JsonValue::makeString(mode)); };
             break;
         }
         case PanelAction::Preset: {
@@ -1161,7 +1266,7 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
         }
         case PanelAction::PromptYes: {
             const std::vector<SettingChange> changes =
-                recommendedSettings(hit.arg == 1 ? kOutputEtvr : kOutputVrchat, view);
+                recommendedSettings(outputOfArg(hit.arg), view);
             change = [changes](JsonValue& root) {
                 for (const SettingChange& item : changes) root.set(item.key, item.value);
             };
@@ -1194,17 +1299,14 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
         case PanelAction::FitStart:
         case PanelAction::FitCenter: {
             const bool full = hit.action == PanelAction::FitStart;
-            std::fprintf(stderr, "[fit] %s: waiting for the dashboard to close\n", full ? "eye fit" : "re-center");
-            if (fit != nullptr) {
-                const double ipd = vr != nullptr ? vr->userIpdMeters() : gaze_fit::kDefaultIpdM;
-                std::fprintf(stderr, "[fit] IPD %.1f mm\n", ipd * 1000);
-                fit->start(full ? gaze_fit::Mode::Full : gaze_fit::Mode::Center, fitInConfig(view).values, nowSeconds(),
-                           ipd);
-            }
+            std::fprintf(stderr, "[fit] %s: waiting for the dashboard to close\n", full ? "eye fit" : "re-wear fit");
+            const gaze_fit::Mode mode = full ? gaze_fit::Mode::Full : rewearMode(autoRecenter(model.config));
+            if (fit != nullptr) startFit(*fit, mode, view, vr);
             return;
         }
         case PanelAction::FitDetails:
         case PanelAction::FitDetailsPage:
+        case PanelAction::LidMarks:
         case PanelAction::HostKey:
         case PanelAction::HostCancel: return;
         case PanelAction::HostEnter: {
@@ -1233,12 +1335,8 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
             if (fit != nullptr) fit->cancel();
             return;
         case PanelAction::FitReset: {
-            std::vector<std::string> names = {key::kGazeOffsetX,     key::kGazeOffsetY,      key::kGazeGainX,
-                                              key::kGazeGainUp,      key::kGazeGainDown,     key::kGazeOffsetXLeft,
-                                              key::kGazeOffsetXRight, key::kGazeGainXLeft,  key::kGazeGainXRight};
-            for (const auto& eye : kLidFitKeys) names.insert(names.end(), std::begin(eye), std::end(eye));
             std::vector<std::string> unlocked;
-            for (const std::string& name : names) {
+            for (const std::string& name : fitResetKeys()) {
                 if (!view.locked(name)) unlocked.push_back(name);
             }
             change = [unlocked](JsonValue& root) {
@@ -1422,6 +1520,7 @@ int runOverlay(const Options& options) {
     model.language = configLanguage(model.config);
     std::fprintf(stderr, "[start] config %s, status %s\n", model.configPath.c_str(), model.statusPath.c_str());
     if (!model.config.error.empty()) std::fprintf(stderr, "[config] broken: %s\n", model.config.error.c_str());
+    migrateConfig(model);
     FontSet fonts;
     fonts.load(kFontPath, kBoldFontPath);
     EyePanel panel(fonts);
@@ -1470,6 +1569,11 @@ int runOverlay(const Options& options) {
     }
 
     gaze_fit::Session fit;
+    // The eye log (frameeyeosc --record as a child), and what the panel last drew of it
+    recorder::Recorder eyeLog;
+    std::string drawnRecording;
+    // Re-centering by itself when the headset is put on (auto_recenter); armed now for the first wearing
+    auto_recenter::Watcher recenter;
     long long lastCaptureId = 0;
     // The eye fit's sound cues: files written once now, played while the fit runs (if fit_sounds is on)
     sounds::Player player;
@@ -1498,7 +1602,7 @@ int runOverlay(const Options& options) {
     std::string lastSignature;
     std::string lastStamp = configStamp(model.configPath);
     bool lastRunning = false;
-    double nextStatusRead = 0.0;
+    double lastStatusRead = -1e9;
     bool dirty = true;
     bool wasVisible = false;
     bool firstSubmit = true;
@@ -1526,9 +1630,14 @@ int runOverlay(const Options& options) {
         const bool visible = vr.panelVisible();
         autostart.setActive(visible);
         const bool fitting = fit.active();
-        // (also while the debug dots are on, so their switch and distance apply without opening the dashboard)
-        if ((visible || fitting || dots.isOpen()) && ((visible && !wasVisible) || nowSeconds() >= nextStatusRead)) {
-            nextStatusRead = nowSeconds() + kStatusReadSec;
+        // (also while the debug dots are on, so their switch and distance apply without opening the dashboard; and
+        // every kWatchStatusReadSec while there is a fit to re-center when the headset is put on)
+        const bool often = visible || fitting || dots.isOpen();
+        const bool watching =
+            autoRecenter(model.config) != AutoRecenter::Off && fitInConfig(SettingsView(model)).gazeFitted;
+        const double readEvery = often ? kStatusReadSec : kWatchStatusReadSec;
+        if ((often || watching) && ((visible && !wasVisible) || nowSeconds() >= lastStatusRead + readEvery)) {
+            lastStatusRead = nowSeconds();
             model.status = readStatus(model.statusPath, unixNow());
             if (model.status.running != lastRunning) {
                 if (model.status.running) {
@@ -1546,8 +1655,10 @@ int runOverlay(const Options& options) {
             }
             const std::string stamp = configStamp(model.configPath);
             if (stamp != lastStamp) {
-                lastStamp = stamp;
                 model.config = readConfigFile(model.configPath);
+                // An old file put back (a backup, say) is brought up to date the same way
+                migrateConfig(model);
+                lastStamp = configStamp(model.configPath);
                 model.language = configLanguage(model.config);
                 dirty = true;
             }
@@ -1562,7 +1673,7 @@ int runOverlay(const Options& options) {
                         std::fprintf(stderr, "[VR] quitting from the panel's \"Quit\"\n");
                         userQuit = true;
                     } else {
-                        applyHit(hit, model, panel, autostart, &updater, &fit, &vr);
+                        applyHit(hit, model, panel, autostart, &updater, &fit, &vr, &eyeLog);
                         lastStamp = configStamp(model.configPath);
                     }
                     dirty = true;
@@ -1588,11 +1699,47 @@ int runOverlay(const Options& options) {
             dirty = true;
         }
 
+        // The eye log: reaped when it ends, stopped at its limit; redrawn when its time or state changes
+        {
+            eyeLog.poll(nowSeconds());
+            model.recording = eyeLog.view(nowSeconds());
+            const recorder::View& r = model.recording;
+            const std::string shown = (r.recording ? recorder::elapsedText(r.elapsedSec) : std::string("-")) + r.error;
+            if (shown != drawnRecording) {
+                drawnRecording = shown;
+                dirty = true;
+            }
+        }
+
+        const bool dashboardOpen = vr.dashboardVisible();
+        // Re-centering by itself once the headset is put on and the eyes have settled: the same one-dot fit as
+        // "Re-center only", once per wearing (see auto_recenter.h)
+        {
+            const SettingsView view(model);
+            auto_recenter::Inputs in;
+            in.enabled = autoRecenter(model.config) != AutoRecenter::Off;
+            in.fitted = fitInConfig(view).gazeFitted;
+            in.locked = fitKeysLocked(view);
+            in.running = model.status.running;
+            in.tracking = model.status.tracking;
+            in.dashboardOpen = dashboardOpen;
+            in.fitActive = fit.active();
+            // On a clock that runs through suspend: taking the headset off usually lets the Frame sleep
+            const auto_recenter::Step step = recenter.update(bootSeconds(), in);
+            if (!step.log.empty()) std::fprintf(stderr, "[fit] %s\n", step.log.c_str());
+            if (step.start) startFit(fit, rewearMode(autoRecenter(model.config)), view, &vr);
+        }
+
         // The eye fit: requests and results go through config.json and status.json; the target is only shown
         // while the dashboard is closed
         {
-            const gaze_fit::Actions actions = fit.tick(nowSeconds(), vr.dashboardVisible(), model.status);
-            if (!actions.log.empty()) std::fprintf(stderr, "[fit] %s\n", actions.log.c_str());
+            const gaze_fit::Actions actions = fit.tick(nowSeconds(), dashboardOpen, model.status);
+            // One "[fit]" line each (a try's numbers, and at the end the tilt)
+            for (size_t start = 0; start < actions.log.size();) {
+                const size_t end = std::min(actions.log.find('\n', start), actions.log.size());
+                std::fprintf(stderr, "[fit] %s\n", actions.log.substr(start, end - start).c_str());
+                start = end + 1;
+            }
             // Cues follow what the target shows (a dot arriving, the countdown, the eyes-shut ending)
             const bool soundsOn = model.config.flag(key::kFitSounds);
             for (sounds::Cue cue : cues.update(fit.view(), actions)) {
@@ -1744,7 +1891,9 @@ int runOverlay(const Options& options) {
         }
     }
 
-    // The same shutdown for SIGTERM / SIGINT, SteamVR quitting, vrserver gone, "close" and "Quit"
+    // The same shutdown for SIGTERM / SIGINT, SteamVR quitting, vrserver gone, "close" and "Quit"; a recording is
+    // stopped (and its file written out) first
+    eyeLog.shutdown();
     vr.shutdown();
     autostart.stop();
     std::fprintf(stderr, "[VR] done\n");

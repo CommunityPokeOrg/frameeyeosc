@@ -22,7 +22,8 @@ UiText makeJapanese() {
     t.notRunningHint2 = "本体が起動すると反映されます";
     t.destination = "送り先";
     t.outputVrchatShort = "VRChat";
-    t.outputEtvrShort = "VRCFaceTracking";
+    t.outputEtvrShort = "VRCFT（ETVR）";
+    t.outputLivelinkShort = "VRCFT（LiveLink）";
     t.searchingPc = "PC を探しています…";
     t.modeAuto = "自動（Steam Link の相手）";
     t.modeFixed = "固定";
@@ -45,6 +46,7 @@ UiText makeJapanese() {
     t.errAutostart = "自動起動の切り替えに失敗（systemctl）";
 
     t.tabBasic = "基本";
+    t.tabOutput = "送り方";
     t.tabGaze = "視線";
     t.tabGazeFit = "目を合わせる";
     t.tabLids = "まぶた";
@@ -63,9 +65,20 @@ UiText makeJapanese() {
     t.send = "送る";
     t.stop = "止める";
     t.rowOutput = "送り先";
-    t.hintOutput = "VRCFT へは ETVR 形式";
+    t.hintOutput = "同期＝ほかの人からの見え方（△はアバターによる）";
     t.outputVrchat = "VRChat に直接";
-    t.outputEtvr = "VRCFaceTracking（ETVR）";
+    t.outputLivelink = "VRCFT（LiveLink）";
+    t.outputEtvr = "VRCFT（ETVR）";
+    t.outputRecommended = "おすすめ";
+    t.outputMarks[0][0] = "見開き ◯";
+    t.outputMarks[0][1] = "同期 △";
+    t.outputMarks[0][2] = "VRCFT 不要";
+    t.outputMarks[1][0] = "見開き ◯";
+    t.outputMarks[1][1] = "同期 ◯";
+    t.outputMarks[1][2] = "VRCFT 必要";
+    t.outputMarks[2][0] = "見開き ×";
+    t.outputMarks[2][1] = "同期 ◯";
+    t.outputMarks[2][2] = "VRCFT 必要";
     t.rowActiveType = "EyeTrackingActive の型";
     t.hintActiveType = "アバターによっては Float が必要";
     t.activeOff = "送らない";
@@ -82,7 +95,18 @@ UiText makeJapanese() {
     t.hostErrEmpty = "何も入っていません";
     t.hostErrIpv4 = "IP アドレスの形ではありません（0〜255 の数 4 つを . で区切る）";
     t.rowPort = "ポート";
-    t.portDefaultHint = "送り先の種類の既定";
+    t.portDefaultVrchat = "VRChat の既定は 9000";
+    t.portDefaultLivelink = "LiveLink の既定は 11111";
+    t.portDefaultEtvr = "ETVR の既定は 8889";
+    t.vrcftSetupTitle = "PC の VRCFT で準備すること";
+    t.vrcftStepsLivelink[0] = "VRCFT の「Module Registry」から LiveLink を入れる";
+    t.vrcftStepsLivelink[1] = "ほかの目のモジュール（ETVR など）はオフにする";
+    t.vrcftStepsLivelink[2] = "Windows のファイアウォールで UDP 11111 を通す";
+    t.vrcftStepsEtvr[0] = "VRCFT の「Module Registry」から ETVR Eye Tracking を入れる";
+    t.vrcftStepsEtvr[1] = "ほかの目のモジュール（LiveLink など）はオフにする";
+    t.vrcftStepsEtvr[2] = "Windows のファイアウォールで UDP 8889 を通す";
+    t.vrcftSetupNote = "パラメーター名や同期のしかたは、VRCFT がアバターに合わせて決めます。";
+    t.vrcftNoWide = "この形式では見開きは届きません。";
     t.portReset = "既定に戻す";
     t.rowLanguage = "言語";
     t.rowAutostart = "SteamVR と一緒に起動";
@@ -120,6 +144,7 @@ UiText makeJapanese() {
     t.fitStart = "目を合わせる";
     t.fitAgain = "もう一度合わせる";
     t.fitCenterOnly = "正面だけ合わせ直す";
+    t.fitCenterTilt = "正面と傾きを合わせ直す";
     t.fitStop = "やめる";
     t.fitIntro = "ダッシュボードを閉じると始まります。頭は動かさず、点を目で追ってください。最後は 3・2・1 のあと 3 秒間目を閉じ、"
                  "チャイムで開けます";
@@ -129,13 +154,15 @@ UiText makeJapanese() {
     t.fitHowTo = "頭は動かさず、点を目で追ってください。最後は 3・2・1 のあと 3 秒間目を閉じ、チャイムで開けます。"
                  "ダッシュボードを開くと止まります";
     t.fitWaitingCenter = "正面に点が出ます。頭は動かさず見てください。ダッシュボードを開くと止まります";
+    t.fitWaitingTilt = "正面、上、下の順に点が出ます。頭は動かさず、点を目で追ってください。ダッシュボードを開くと止まります";
     t.fitRunningFormat = "測っています: %s（%d / %d）";
     t.fitRetryFormat = "・%d 回目";
     t.fitDone = "合わせました";
     t.fitDoneCenter = "正面を合わせ直しました";
+    t.fitDoneTilt = "正面と傾きを合わせ直しました";
     t.fitFitted = "合わせてあります";
     t.fitNotYet = "まだ合わせていません";
-    t.fitGazeCenterFormat = "視線の正面: 左右 %s・上下 %s";
+    t.fitGazeCenterFormat = "視線の正面: 左右 %s・上下 %s・傾き %s";
     t.fitGazeRangeFormat = "視線の幅: 左右 %s・上 %s・下 %s";
     t.fitGazeNone = "視線: 合わせていません";
     t.fitEyeXFormat = "目ごとの左右: 左 %s・×%s　右 %s・×%s";
@@ -180,6 +207,11 @@ UiText makeJapanese() {
     t.fitDetails = "細かく直す";
     t.fitSoundsOn = "♪ 音を鳴らす: オン";
     t.fitSoundsOff = "♪ 音を鳴らす: オフ";
+    t.rowAutoRecenter = "被ったとき";
+    t.hintAutoRecenter = "被り直したら自動で合わせ直す";
+    t.autoRecenterOff = "何もしない";
+    t.autoRecenterCenter = "正面だけ";
+    t.autoRecenterTilt = "正面と傾き";
     t.rowOffset = "正面の位置";
     t.hintOffset = "＋ は右・上";
     t.rowGain = "動く幅";
@@ -194,12 +226,33 @@ UiText makeJapanese() {
     t.hintEyeX = "左右の目を別々に動かすときに使う";
     t.rowDownHold = "真下で左右を止める";
     t.hintDownHold = "0 = オフ";
+    t.rowTilt = "傾き";
+    t.rowEyeLog = "目のログ";
+    t.eyeLogRecord = "記録する";
+    t.eyeLogStopFormat = "止める %s";
+    t.eyeLogWhereFormat = "保存先 %s";
+    t.eyeLogLimit = "60 分たつと自動で止まります";
+    t.eyeLogFailedFormat = "記録できませんでした: %s";
+    t.eyeLogAutoStopped = "60 分たったので止めました";
+    t.recordingFormat = "記録中 %s";
+    t.hintTilt = "＋ は右が上";
     t.downHoldFormat = "%s° より下";
     t.rowLidFit = "まぶたの読んだ値";
     t.hintLidFit = "Frame の生の開き具合";
     t.capClosed = "閉じ";
     t.capAhead = "正面";
     t.lidFitInUse = "目を合わせた値を使っています";
+    t.rowWiden = "見開きやすさ";
+    t.hintWiden = "目を合わせた目の見開き";
+    t.widenModes[0] = "しない";
+    t.widenModes[1] = "控えめ";
+    t.widenModes[2] = "ふつう";
+    t.widenModes[3] = "出やすい";
+    t.widenFollowsLeft = "左目は右目に合わせて見開きます（開き具合が上限に近いため）";
+    t.widenFollowsRight = "右目は左目に合わせて見開きます（開き具合が上限に近いため）";
+    t.widenNoRoom = "両目とも開き具合が上限に近いため、見開きません";
+    t.lidMarksFitted = "閉じ・開きは目を合わせた値、見開きは「見開きやすさ」で決まります";
+    t.lidMarksUnused = "③④は目を合わせていない目のための目盛りです";
 
     t.rowCalibration = "自動キャリブレーション";
     t.learnedFormat = "覚えた値 左 %s・右 %s";
@@ -209,6 +262,7 @@ UiText makeJapanese() {
     t.rowScale = "左右の倍率";
     t.hintScaleAuto = "自動 = キャリブレーションの値";
     t.hintScaleFixed = "固定の倍率を使います";
+    t.hintScaleFitted = "目を合わせたあとの微調整";
     t.scaleAuto = "自動";
     t.scaleFixed = "固定";
     t.marksTitle = "目を開け閉めしながら、線を今の値に合わせます（倍率を掛けた後の生の値）";
@@ -224,6 +278,9 @@ UiText makeJapanese() {
     t.blinkSync = "両目";
     t.rowLidSmooth = "まぶたのなめらかさ";
 
+    t.sectionTools = "調べる道具";
+    t.sectionFiles = "ファイルと本体";
+    t.updateCheckChip = "起動時と 1 日 1 回確認";
     t.rowPrefix = "パラメーター名の頭";
     t.prefixNone = "なし";
     t.prefixExample = "例: ";
@@ -247,6 +304,9 @@ UiText makeJapanese() {
     t.promptVrchatDetail2 = "";
     t.promptEtvrDetail1 = "視線のなめらかさは標準、まぶたのなめらかさは弱めにします";
     t.promptEtvrDetail2 = "（ETVR 側でもまぶたをなめらかにしているため）";
+    t.promptLivelink = "VRCFT（LiveLink）向けのおすすめ設定にする？";
+    t.promptLivelinkDetail1 = "視線とまぶたのなめらかさを標準に戻します";
+    t.promptLivelinkDetail2 = "（LiveLink 側ではなめらかにしないため）";
     t.promptYes = "する";
     t.promptNo = "しない";
 
@@ -318,7 +378,8 @@ UiText makeEnglish() {
     t.notRunningHint2 = "when frameeyeosc starts";
     t.destination = "Destination";
     t.outputVrchatShort = "VRChat";
-    t.outputEtvrShort = "VRCFaceTracking";
+    t.outputEtvrShort = "VRCFT (ETVR)";
+    t.outputLivelinkShort = "VRCFT (LiveLink)";
     t.searchingPc = "Looking for the PC…";
     t.modeAuto = "Auto (Steam Link PC)";
     t.modeFixed = "Fixed";
@@ -341,6 +402,7 @@ UiText makeEnglish() {
     t.errAutostart = "Autostart change failed (systemctl)";
 
     t.tabBasic = "Basic";
+    t.tabOutput = "Output";
     t.tabGaze = "Gaze";
     t.tabGazeFit = "Eye fit";
     t.tabLids = "Eyelids";
@@ -359,9 +421,20 @@ UiText makeEnglish() {
     t.send = "Send";
     t.stop = "Pause";
     t.rowOutput = "Send to";
-    t.hintOutput = "VRCFT gets the ETVR format";
-    t.outputVrchat = "VRChat directly";
-    t.outputEtvr = "VRCFaceTracking (ETVR)";
+    t.hintOutput = "Sync = how other players see your eyes";
+    t.outputVrchat = "VRChat direct";
+    t.outputLivelink = "VRCFT (LiveLink)";
+    t.outputEtvr = "VRCFT (ETVR)";
+    t.outputRecommended = "Recommended";
+    t.outputMarks[0][0] = "✓ Wide eyes";
+    t.outputMarks[0][1] = "Sync: depends on avatar";
+    t.outputMarks[0][2] = "No VRCFT needed";
+    t.outputMarks[1][0] = "✓ Wide eyes";
+    t.outputMarks[1][1] = "✓ Synced to others";
+    t.outputMarks[1][2] = "Needs VRCFT";
+    t.outputMarks[2][0] = "✗ No wide eyes";
+    t.outputMarks[2][1] = "✓ Synced to others";
+    t.outputMarks[2][2] = "Needs VRCFT";
     t.rowActiveType = "EyeTrackingActive type";
     t.hintActiveType = "Some avatars need Float";
     t.activeOff = "Off";
@@ -378,7 +451,18 @@ UiText makeEnglish() {
     t.hostErrEmpty = "Nothing entered";
     t.hostErrIpv4 = "Not an IP address (four numbers 0-255 separated by dots)";
     t.rowPort = "Port";
-    t.portDefaultHint = "Default for the output";
+    t.portDefaultVrchat = "VRChat default: 9000";
+    t.portDefaultLivelink = "LiveLink default: 11111";
+    t.portDefaultEtvr = "ETVR default: 8889";
+    t.vrcftSetupTitle = "Set up in VRCFT on the PC";
+    t.vrcftStepsLivelink[0] = "Install LiveLink from VRCFT's Module Registry";
+    t.vrcftStepsLivelink[1] = "Turn off other eye modules (such as ETVR)";
+    t.vrcftStepsLivelink[2] = "Allow UDP 11111 in the Windows firewall";
+    t.vrcftStepsEtvr[0] = "Install ETVR Eye Tracking from VRCFT's Module Registry";
+    t.vrcftStepsEtvr[1] = "Turn off other eye modules (such as LiveLink)";
+    t.vrcftStepsEtvr[2] = "Allow UDP 8889 in the Windows firewall";
+    t.vrcftSetupNote = "VRCFT picks the parameter names and how they sync for your avatar, so there is nothing to set here.";
+    t.vrcftNoWide = "Wide eyes don't come through in this format.";
     t.portReset = "Default";
     t.rowLanguage = "Language";
     t.rowAutostart = "Start with SteamVR";
@@ -416,6 +500,7 @@ UiText makeEnglish() {
     t.fitStart = "Fit my eyes";
     t.fitAgain = "Fit again";
     t.fitCenterOnly = "Re-center only";
+    t.fitCenterTilt = "Re-center + tilt";
     t.fitStop = "Stop";
     t.fitIntro = "It starts when you close the dashboard. Keep your head still and follow the dot with your eyes. "
                  "At the end, after 3, 2, 1, close your eyes for 3 seconds and open them at the chime.";
@@ -426,13 +511,16 @@ UiText makeEnglish() {
                  "for 3 seconds and open them at the chime. Opening the dashboard stops it.";
     t.fitWaitingCenter = "A dot appears straight ahead. Keep your head still and look at it. Opening the dashboard "
                          "stops it.";
+    t.fitWaitingTilt = "A dot appears straight ahead, then up and down. Keep your head still and follow it with "
+                       "your eyes. Opening the dashboard stops it.";
     t.fitRunningFormat = "Measuring: %s (%d of %d)";
     t.fitRetryFormat = ", try %d";
     t.fitDone = "Fitted";
     t.fitDoneCenter = "Re-centered";
+    t.fitDoneTilt = "Re-centered and leveled";
     t.fitFitted = "Fitted";
     t.fitNotYet = "Not fitted yet";
-    t.fitGazeCenterFormat = "Gaze center: L-R %s, U-D %s";
+    t.fitGazeCenterFormat = "Gaze center: L-R %s, U-D %s, tilt %s";
     t.fitGazeRangeFormat = "Gaze range: L-R %s, up %s, down %s";
     t.fitGazeNone = "Gaze: not fitted";
     t.fitEyeXFormat = "Each eye sideways: L %s x%s, R %s x%s";
@@ -477,6 +565,11 @@ UiText makeEnglish() {
     t.fitDetails = "Fine-tune";
     t.fitSoundsOn = "♪ Sounds: on";
     t.fitSoundsOff = "♪ Sounds: off";
+    t.rowAutoRecenter = "When put on";
+    t.hintAutoRecenter = "Fits again when put back on";
+    t.autoRecenterOff = "Nothing";
+    t.autoRecenterCenter = "Re-center";
+    t.autoRecenterTilt = "Re-center + tilt";
     t.rowOffset = "Straight ahead";
     t.hintOffset = "+ is right / up";
     t.rowGain = "Range";
@@ -491,12 +584,33 @@ UiText makeEnglish() {
     t.hintEyeX = "Used when the eyes move separately";
     t.rowDownHold = "Hold sideways far down";
     t.hintDownHold = "0 = off";
+    t.rowTilt = "Tilt";
+    t.rowEyeLog = "Eye log";
+    t.eyeLogRecord = "Record";
+    t.eyeLogStopFormat = "Stop %s";
+    t.eyeLogWhereFormat = "Saved to %s";
+    t.eyeLogLimit = "Stops by itself after 60 minutes";
+    t.eyeLogFailedFormat = "Couldn't record: %s";
+    t.eyeLogAutoStopped = "Stopped after 60 minutes";
+    t.recordingFormat = "Recording %s";
+    t.hintTilt = "+ = right up";
     t.downHoldFormat = "Below %s°";
     t.rowLidFit = "Eyelid readings";
     t.hintLidFit = "Frame openness";
     t.capClosed = "Closed";
     t.capAhead = "Ahead";
     t.lidFitInUse = "Using the eye fit";
+    t.rowWiden = "Widen";
+    t.hintWiden = "For eyes with an eye fit";
+    t.widenModes[0] = "Off";
+    t.widenModes[1] = "Less";
+    t.widenModes[2] = "Normal";
+    t.widenModes[3] = "More";
+    t.widenFollowsLeft = "The left eye widens with the right (its openness is near the limit)";
+    t.widenFollowsRight = "The right eye widens with the left (its openness is near the limit)";
+    t.widenNoRoom = "Neither eye widens: both read near the openness limit";
+    t.lidMarksFitted = "Closing and opening come from the eye fit, widening from Widen";
+    t.lidMarksUnused = "Marks 3 and 4 are for eyes without an eye fit";
 
     t.rowCalibration = "Auto calibration";
     t.learnedFormat = "Learned L %s / R %s";
@@ -506,6 +620,7 @@ UiText makeEnglish() {
     t.rowScale = "Eye scales";
     t.hintScaleAuto = "Auto = from calibration";
     t.hintScaleFixed = "Uses fixed scales";
+    t.hintScaleFitted = "Fine-tune after the eye fit";
     t.scaleAuto = "Auto";
     t.scaleFixed = "Fixed";
     t.marksTitle = "Blink and open wide, then move the lines to match (raw value after scaling)";
@@ -521,6 +636,9 @@ UiText makeEnglish() {
     t.blinkSync = "Both";
     t.rowLidSmooth = "Eyelid smoothing";
 
+    t.sectionTools = "Diagnostics";
+    t.sectionFiles = "Files and process";
+    t.updateCheckChip = "Check at start and daily";
     t.rowPrefix = "Parameter prefix";
     t.prefixNone = "None";
     t.prefixExample = "e.g. ";
@@ -544,6 +662,9 @@ UiText makeEnglish() {
     t.promptVrchatDetail2 = "";
     t.promptEtvrDetail1 = "Gaze smoothing goes to default, eyelid smoothing gets lighter";
     t.promptEtvrDetail2 = "(ETVR already smooths the eyelids)";
+    t.promptLivelink = "Use the recommended settings for VRCFT (LiveLink)?";
+    t.promptLivelinkDetail1 = "Gaze and eyelid smoothing go back to default";
+    t.promptLivelinkDetail2 = "(the LiveLink module doesn't smooth anything)";
     t.promptYes = "Yes";
     t.promptNo = "No";
 

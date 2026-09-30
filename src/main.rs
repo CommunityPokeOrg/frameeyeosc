@@ -3,12 +3,13 @@
 mod capture;
 mod config;
 mod dots;
+mod livelink;
 mod replay;
 mod status;
 
 use capture::{Capture, CaptureResult, CaptureState};
 use clap::{CommandFactory, FromArgMatches, Parser};
-use config::{ActiveType, Config, LidFit, OutputKind, Reload, Settings};
+use config::{ActiveType, Config, LidFit, OutputKind, Reload, Settings, Widen};
 use memmap2::{MmapMut, MmapOptions};
 use rosc::{OscMessage, OscPacket, OscType, encoder};
 use status::{CalibrationStatus, RawValues, SentValues, Status, StatusFile};
@@ -33,6 +34,15 @@ const POLL: Duration = Duration::from_millis(100);
 const RATE_WINDOW: Duration = Duration::from_secs(1);
 // Relaxed open is 0.75 in VRCFT units but 1.0 for the ETVR Tracking Module, which does not widen by default.
 const ETVR_LID_SCALE: f32 = 1.0 / 0.75;
+// While sending to VRCFT's LiveLink module without eye data, a neutral packet this often: the module logs "connection
+// lost" after a second without packets, and only starts if one arrives within 180 s of VRCFT loading it.
+const LIVELINK_IDLE_INTERVAL: Duration = Duration::from_millis(500);
+// At most this many Live Link packets a second. VRCFT's LiveLink module (LiveLinkExtTrackingInterface.cs, Update)
+// does `Thread.Sleep(10)` and then reads a single datagram per loop, and a 10 ms sleep takes 10-15.6 ms on Windows,
+// so it takes in only about 64-100 packets a second. Sending every eye sample (90 Hz, up to ~136 Hz while streaming)
+// filled its socket queue until the eyes lagged by seconds. Samples in between are dropped, never queued: each packet
+// is the newest sample.
+const LIVELINK_MAX_HZ: u32 = 50;
 // The eye server produces samples at ~90 Hz.
 const NOMINAL_DT: f32 = 1.0 / 90.0;
 // Gaps longer than this restart the filters instead of smearing across them.
@@ -47,6 +57,23 @@ const LID_FIT_PITCH: f32 = 15.0 / 45.0;
 // so readings a little above the eyes-shut average still close the eyelid. On the 2026-09-27 worn
 // recording, 0.3 closed more blinks than no fit (53 vs 50 of 60), and 0.1 or 0.2 fewer.
 const LID_FIT_CLOSED_MARGIN: f32 = 0.3;
+// How far (raw openness) above a fitted eye's expected open reading widening starts, and where it is full, per
+// --lid-widen. The Frame's openness rises only about 0.05 when the eyes are opened wide (two eye fits on 2026-09-30:
+// +0.019 / -0.009 and +0.048 / +0.047), so widening can't be measured and is a chosen sensitivity. A relaxed open
+// eye also wanders above its usual reading: over the 2026-09-27..30 recordings (eyes with room, looking within about
+// 7° of straight ahead, relative to each recording's median) it was above +0.04 25.5% of the time, above +0.07
+// 12.7% and above +0.10 6.0%. Visibly widened (40% of the way to full or more, VRCFT 0.85 or more) by accident
+// that makes: high 14.9%, normal 6.3%, low 2.4%; a +0.10 widen shows fully (high), 43% (normal) or not (low).
+const WIDEN_LOW: (f32, f32) = (0.10, 0.18);
+const WIDEN_NORMAL: (f32, f32) = (0.07, 0.14);
+const WIDEN_HIGH: (f32, f32) = (0.04, 0.10);
+// The Frame's openness stops at 1.000. A fitted eye whose straight-ahead open reading puts the widening start above
+// this has no room to widen (one user's left eye read 0.945-0.975 straight ahead, and 21-40% of its open samples sat
+// at 1.000); it widens with the other eye. With "normal" that is an open reading above 0.90: the eyes with room in
+// the recordings read 0.80-0.88, the saturated ones 0.92-0.97.
+const WIDEN_ROOM_LIMIT: f32 = 0.97;
+// Full widening needs at most this reading (where the openness stops).
+const OPENNESS_CAP: f32 = 1.0;
 // How often the Steam Link PC is looked up again, to follow reconnects over another network.
 const RESOLVE_INTERVAL: Duration = Duration::from_secs(5);
 // Eyelid auto calibration keeps a decaying histogram of each eye's open readings (0.005 wide bins).
@@ -117,17 +144,22 @@ const _: () = {
 #[derive(Parser)]
 #[command(about = "Send Steam Frame eye tracking from shared memory over OSC")]
 struct Args {
-    /// What to send: VRChat avatar parameters, or VRCFaceTracking's ETVR Tracking Module format
+    /// What to send: VRChat avatar parameters, VRCFaceTracking's ETVR Tracking Module format, or Live Link Face
+    /// packets for VRCFaceTracking's LiveLink module
     #[arg(long, value_enum, default_value_t = OutputKind::Vrchat)]
     output: OutputKind,
     /// How EyeTrackingActive is sent in VRChat mode: a bool, a float (1.0 / 0.0; some avatars
     /// need it), or not at all
     #[arg(long, value_enum, default_value_t = ActiveType::Bool)]
     eye_tracking_active: ActiveType,
+    /// How easily an eye with an eye fit widens: off, low, normal or high (eyes without one use --lid-widen-start
+    /// and --lid-wide)
+    #[arg(long, value_enum, default_value_t = Widen::Normal)]
+    lid_widen: Widen,
     /// OSC destination as HOST:PORT, or "auto" for the PC that Steam Link is streaming from
     #[arg(long, default_value = "auto")]
     target: String,
-    /// OSC port used with --target auto [default: 9000 for vrchat, 8889 for etvr]
+    /// OSC port used with --target auto [default: 9000 for vrchat, 8889 for etvr, 11111 for livelink]
     #[arg(long)]
     port: Option<u16>,
     /// Parameter name prefix; "" or "/" for none
@@ -172,10 +204,12 @@ struct Args {
     /// Frame openness of a fully widened eye (VRCFT 1.0)
     #[arg(long, default_value_t = 1.00)]
     lid_wide: f32,
-    /// Fixed multiplier on the left eye's Frame openness; overrides auto calibration for that eye
+    /// Fixed multiplier on the left eye's Frame openness; overrides auto calibration for that eye. With an eye
+    /// fit, a fine-tune on the fitted openness instead (0.9 = 10% less open)
     #[arg(long)]
     lid_scale_left: Option<f32>,
-    /// Fixed multiplier on the right eye's Frame openness; overrides auto calibration for that eye
+    /// Fixed multiplier on the right eye's Frame openness; overrides auto calibration for that eye. With an eye
+    /// fit, a fine-tune on the fitted openness instead (0.9 = 10% less open)
     #[arg(long)]
     lid_scale_right: Option<f32>,
     /// Turn off learning each eye's relaxed openness (eyes without a fixed scale use 1.0)
@@ -216,6 +250,10 @@ struct Args {
     /// How far the gaze goes down, from --gaze-offset-y (0.5..2)
     #[arg(long, default_value_t = 1.0)]
     gaze_gain_down: f32,
+    /// How far the headset sits tilted, in degrees (-20..20; positive: looking right reads higher). Undone
+    /// around the zero point, before the gains
+    #[arg(long, default_value_t = 0.0, allow_negative_numbers = true)]
+    gaze_roll_deg: f32,
     /// Hold the sideways gaze when looking more than this many degrees down (fully 10° further down),
     /// where the Frame's x jumps; 0 disables
     #[arg(long, default_value_t = 24.0)]
@@ -622,18 +660,102 @@ fn expected_open(fit: &LidFit, vertical: f32) -> f32 {
 /// straight-ahead one, so far down, where the expected reading nears the closed one, a small wobble
 /// does not flip the lid between open and shut.
 fn fitted_openness(openness: f32, vertical: f32, fit: &LidFit, settings: &Settings) -> f32 {
-    let range = (expected_open(fit, vertical) - fit.closed).max(0.5 * (fit.open - fit.closed));
+    let range = open_reading(fit, vertical) - fit.closed;
     let fraction = (openness - fit.closed) / range;
     let fraction = (fraction - LID_FIT_CLOSED_MARGIN) / (1.0 - LID_FIT_CLOSED_MARGIN);
     settings.lid_closed + fraction * (settings.lid_open - settings.lid_closed)
 }
 
-/// Each eye's openness on the --lid-* scale: the eye fit when there is one, else the per-eye scale.
+/// The reading fitted_openness maps to --lid-open: the expected open reading, or further up far down, where the
+/// range keeps its minimum (half the straight-ahead one). Relaxed open is this reading, and widening counts from it.
+fn open_reading(fit: &LidFit, vertical: f32) -> f32 {
+    fit.closed + (expected_open(fit, vertical) - fit.closed).max(0.5 * (fit.open - fit.closed))
+}
+
+/// Where widening starts and is full above a fitted eye's expected open reading, for --lid-widen (None: off).
+fn widen_offsets(widen: Widen) -> Option<(f32, f32)> {
+    match widen {
+        Widen::Off => None,
+        Widen::Low => Some(WIDEN_LOW),
+        Widen::Normal => Some(WIDEN_NORMAL),
+        Widen::High => Some(WIDEN_HIGH),
+    }
+}
+
+/// Whether a fitted eye can widen by itself: widening on, and its straight-ahead open reading leaves room below
+/// where the openness stops (see WIDEN_ROOM_LIMIT). Judged on the straight-ahead reading, not where the eyes look, so
+/// an eye does not switch between widening itself and following the other one as the gaze moves.
+fn widen_room(fit: &LidFit, widen: Widen) -> bool {
+    widen_offsets(widen).is_some_and(|(start, _)| fit.open + start <= WIDEN_ROOM_LIMIT)
+}
+
+/// A fitted eye's openness on the --lid-* scale. Up to its open reading for where the eyes look (open_reading): as
+/// fitted_openness (closed..open -> --lid-closed..--lid-open, VRCFT 0..0.75). Above it, with room to widen: up to
+/// `start` above it onto --lid-open..--lid-widen-start (VRCFT stays 0.75), then up to `full` above it (or 1.000,
+/// where the openness stops, if that comes first) onto --lid-widen-start..--lid-wide, so lid_to_vrcft gives 0.75
+/// rising to 1 whatever marks 3 and 4 are, and carries on past it (clamped at 1). Without room, or with widening off,
+/// it stays at --lid-open above the open reading (VRCFT 0.75; lid_inputs may lend it the other eye's widening).
+/// Continuous and never falling: widening starts where the base mapping reaches --lid-open, which far down (where
+/// fitted_openness keeps a minimum range) is above the expected reading. Starting there from the expected reading
+/// instead made a step: 45° down with an expected 0.43, 0.430 sent VRCFT 0.31 and 0.431 sent 0.75.
+fn fitted_lid(openness: f32, vertical: f32, fit: &LidFit, settings: &Settings) -> f32 {
+    let expected = open_reading(fit, vertical);
+    if openness <= expected {
+        return fitted_openness(openness, vertical, fit, settings);
+    }
+    let Settings {
+        lid_open,
+        lid_widen_start,
+        lid_wide,
+        ..
+    } = *settings;
+    let Some((start, full)) = widen_offsets(settings.lid_widen).filter(|_| widen_room(fit, settings.lid_widen)) else {
+        return lid_open;
+    };
+    let start_at = expected + start;
+    // Looking up raises the expected reading, and the openness still stops at 1.000: keep some range
+    let full_at = (expected + full).min(OPENNESS_CAP).max(start_at + 0.01);
+    if openness <= start_at {
+        lid_open + (lid_widen_start - lid_open) * (openness - expected) / start
+    } else {
+        lid_widen_start + (lid_wide - lid_widen_start) * (openness - start_at) / (full_at - start_at)
+    }
+}
+
+/// Each eye's openness on the --lid-* scale, times the eye's scale (see lid_scales).
+///
+/// A fitted eye goes through fitted_lid. The scale then multiplies that value: the fitted openness is on the same
+/// scale that --lid-closed / --lid-open compare against (the fit maps its closed reading to --lid-closed and its
+/// expected open reading to --lid-open), so a scale of 0.9 makes that eye read 10% less open. It closes sooner and
+/// widens less (it reaches marks 3 and 4 only further open; with the default marks 0.97 takes a full widen to about
+/// 60%). 1.0 changes nothing.
+///
+/// A fitted eye without room to widen (see widen_room), while the other fitted eye has room, takes the other eye's
+/// value whenever it reads at or above its own open reading (open_reading, where its own lid reaches relaxed open) (widening is almost always both eyes), but
+/// never less than relaxed open (the other eye blinking or winking does not close it); below its open reading it
+/// follows its own lid. Its own scale then applies. Neither with room: no widening.
+///
+/// An eye without an eye fit keeps the lid marks: its raw openness times its scale, widening between
+/// --lid-widen-start and --lid-wide (--lid-widen does not apply, having no measured open reading to start from).
 fn lid_inputs(openness: [f32; 2], vertical: f32, scales: [f32; 2], settings: &Settings) -> [f32; 2] {
     let fits = settings.lid_fit();
-    [0, 1].map(|eye| match &fits[eye] {
-        Some(fit) => fitted_openness(openness[eye], vertical, fit, settings),
-        None => openness[eye] * scales[eye],
+    let own = [0, 1].map(|eye| fits[eye].as_ref().map(|fit| fitted_lid(openness[eye], vertical, fit, settings)));
+    [0, 1].map(|eye| {
+        let (Some(fit), Some(value)) = (&fits[eye], own[eye]) else {
+            return openness[eye] * scales[eye];
+        };
+        let other = 1 - eye;
+        let borrowed = match (&fits[other], own[other]) {
+            (Some(other_fit), Some(other_value))
+                if !widen_room(fit, settings.lid_widen)
+                    && widen_room(other_fit, settings.lid_widen)
+                    && openness[eye] >= open_reading(fit, vertical) =>
+            {
+                Some(other_value.max(settings.lid_open))
+            }
+            _ => None,
+        };
+        borrowed.unwrap_or(value) * scales[eye]
     })
 }
 
@@ -1042,15 +1164,23 @@ impl Output {
     /// Send one message. A network error (unreachable, refused, no address yet...) is logged when it
     /// starts and ends, and never returned: the next sample simply tries again.
     fn send(&mut self, addr: String, args: Vec<OscType>) -> Result<(), Box<dyn Error>> {
-        let Some((socket, target)) = &self.socket else {
+        if self.socket.is_none() {
             return Ok(());
-        };
+        }
         let packet = OscPacket::Message(OscMessage { addr, args });
-        let result = socket.send(&encoder::encode(&packet)?);
+        self.send_datagram(&encoder::encode(&packet)?);
+        Ok(())
+    }
+
+    /// Send one datagram as it is (an encoded OSC message or a Live Link packet); errors as in `send`.
+    fn send_datagram(&mut self, datagram: &[u8]) {
+        let Some((socket, target)) = &self.socket else {
+            return;
+        };
+        let result = socket.send(datagram);
         if let Some(line) = self.health.record(Instant::now(), *target, &result) {
             eprintln!("{line}");
         }
-        Ok(())
     }
 }
 
@@ -1150,30 +1280,35 @@ fn gaze_angles([x, y, z]: [f32; 3]) -> [f32; 2] {
     ]
 }
 
-/// Move each gaze pair's zero point to --gaze-offset-x/y and scale how far it goes from there;
-/// up and down have their own gains, and each eye's x may have its own zero point and gain (the
-/// combined x always uses the shared ones). The defaults leave the gaze exactly as it is.
+/// Move each gaze pair's zero point to --gaze-offset-x/y, undo the headset's tilt (--gaze-roll-deg) around it,
+/// and scale how far it goes from there; up and down have their own gains, and each eye's x may have its own zero
+/// point and gain (the combined x always uses the shared ones). The defaults leave the gaze exactly as it is.
 fn correct_gaze(angles: [f32; 6], settings: &Settings) -> [f32; 6] {
     let eye_offsets = [settings.gaze_offset_x_left, settings.gaze_offset_x_right];
     let eye_gains = [settings.gaze_gain_x_left, settings.gaze_gain_x_right];
-    std::array::from_fn(|i| {
-        let value = angles[i];
-        let corrected = if i % 2 == 0 {
-            let eye = i / 2;
-            let offset = eye_offsets.get(eye).copied().flatten().unwrap_or(settings.gaze_offset_x);
-            let gain = eye_gains.get(eye).copied().flatten().unwrap_or(settings.gaze_gain_x);
-            (value - offset) * gain
+    // Tilted by θ, looking along the headset's own level line reads as (d, d·tanθ); turning back by θ makes it level
+    let (sin, cos) = settings.gaze_roll_deg.to_radians().sin_cos();
+    let mut corrected = [0.0; 6];
+    for pair in 0..3 {
+        let offset = eye_offsets.get(pair).copied().flatten().unwrap_or(settings.gaze_offset_x);
+        let gain_x = eye_gains.get(pair).copied().flatten().unwrap_or(settings.gaze_gain_x);
+        let dx = angles[pair * 2] - offset;
+        let dy = angles[pair * 2 + 1] - settings.gaze_offset_y;
+        // No tilt: exactly the values from before there was one
+        let (x, y) = if settings.gaze_roll_deg == 0.0 {
+            (dx, dy)
         } else {
-            let from_center = value - settings.gaze_offset_y;
-            let gain = if from_center >= 0.0 {
-                settings.gaze_gain_up
-            } else {
-                settings.gaze_gain_down
-            };
-            from_center * gain
+            (dx * cos + dy * sin, -dx * sin + dy * cos)
         };
-        corrected.clamp(-1.0, 1.0)
-    })
+        let gain_y = if y >= 0.0 {
+            settings.gaze_gain_up
+        } else {
+            settings.gaze_gain_down
+        };
+        corrected[pair * 2] = (x * gain_x).clamp(-1.0, 1.0);
+        corrected[pair * 2 + 1] = (y * gain_y).clamp(-1.0, 1.0);
+    }
+    corrected
 }
 
 /// One eye-server sample worked through the eyelid mapping and the filters.
@@ -1195,17 +1330,25 @@ struct Sample {
     gaze_held: bool,
 }
 
-/// Per-eye multipliers on Frame openness: the fixed ones, else the learned ones, else 1.
+/// Per-eye multipliers as lid_inputs applies them. An unfitted eye: the fixed one, else the learned one, else 1.
+/// A fitted eye: the fixed one as a fine-tune after the fit, else 1 (never the learned one, which fitted eyes
+/// do not use).
 fn lid_scales(settings: &Settings, calibration: &LidCalibration) -> [f32; 2] {
     let learned = if settings.lid_calibration {
         calibration.scales(settings.lid_open)
     } else {
         [1.0; 2]
     };
-    [
-        settings.lid_scale_left.unwrap_or(learned[0]),
-        settings.lid_scale_right.unwrap_or(learned[1]),
-    ]
+    let fits = settings.lid_fit();
+    let fixed = [settings.lid_scale_left, settings.lid_scale_right];
+    [0, 1].map(|eye| match (&fits[eye], fixed[eye]) {
+        // A settings file from 0.5.x or earlier (no lid_widen in it): those versions ignored the scale of a fitted
+        // eye, so an old value there (1.15, say) would suddenly make that eye 15% more open. The panel clears such
+        // scales when it first reads the file and writes lid_widen, which ends this
+        (Some(_), Some(_)) if settings.scales_predate_fit => 1.0,
+        (Some(_), fixed) => fixed.unwrap_or(1.0),
+        (None, fixed) => fixed.unwrap_or(learned[eye]),
+    })
 }
 
 /// Let the eyelid calibration learn from a sample once `settled`, then work the sample through.
@@ -1304,12 +1447,22 @@ fn shut_lids(lids: &mut [f32; 2], shut: [bool; 2]) {
     }
 }
 
-/// Eyelids on the scale of the given output.
+/// Eyelids on the scale of the given output. LiveLink gets the VRCFT eyelids, split into blink and widening in the
+/// packet (VRCFT puts the same eyelid back together).
 fn output_lids(output: OutputKind, lids: [f32; 2]) -> [f32; 2] {
     match output {
-        OutputKind::Vrchat => lids,
+        OutputKind::Vrchat | OutputKind::LiveLink => lids,
         OutputKind::Etvr => lids.map(lid_to_etvr),
     }
+}
+
+/// The Live Link packet for one sample, stamped `time` seconds into the day. Each eye's gaze is its own with
+/// "move eyes separately", else the combined one (as for the other outputs). Nothing else goes to LiveLink: no
+/// EyeTrackingActive and no parameter prefix, which only VRChat reads.
+fn livelink_packet(sample: &Sample, time: f64) -> Vec<u8> {
+    let [left_x, left_y, right_x, right_y, _, _] = sample.gaze;
+    let lids = output_lids(OutputKind::LiveLink, sample.lids);
+    livelink::packet(time, &livelink::shapes(lids, [left_x, left_y, right_x, right_y]))
 }
 
 /// The OSC messages for one sample. VRChat gets the full VRCFT v2 eye set. The ETVR Tracking Module
@@ -1365,6 +1518,33 @@ fn vrchat_stream(settings: &Settings) -> Option<(&str, u16, &str, ActiveType)> {
     })
 }
 
+/// Lets a packet through at most once per interval, on a steady beat that neither bursts nor drifts: the next one is
+/// due an interval after the last one was due, or after now if the samples paused for longer than that.
+#[derive(Default)]
+struct Throttle {
+    next: Option<Instant>,
+}
+
+impl Throttle {
+    /// Whether a packet may go out at `now` (it is then counted as sent).
+    fn ready(&mut self, now: Instant, interval: Duration) -> bool {
+        if self.next.is_some_and(|next| now < next) {
+            return false;
+        }
+        self.next = Some(match self.next {
+            Some(next) if now.duration_since(next) < interval => next + interval,
+            _ => now + interval,
+        });
+        true
+    }
+}
+
+/// Where VRCFT's LiveLink module is being sent to, if anywhere. When this changes while eye tracking runs, the old
+/// destination gets a neutral packet (relaxed open eyes, straight ahead), since the module keeps the last values.
+fn livelink_stream(settings: &Settings) -> Option<(&str, u16)> {
+    (settings.sending && settings.output == OutputKind::LiveLink).then(|| (settings.host.as_str(), settings.port()))
+}
+
 /// Why the samples stopped, for the log line when tracking is lost.
 fn lost_reason(next: &Next) -> String {
     match next {
@@ -1393,6 +1573,10 @@ struct Bridge {
     capture_result: Option<CaptureResult>,
     // The panel's debug gaze dots (only while gaze_debug_dots is on).
     dots: dots::DotStream,
+    // When the last neutral Live Link packet went out.
+    livelink_neutral: Option<Instant>,
+    // Keeps the Live Link samples at or below LIVELINK_MAX_HZ.
+    livelink_throttle: Throttle,
 }
 
 impl Bridge {
@@ -1412,6 +1596,10 @@ impl Bridge {
         let stream = vrchat_stream(&self.settings);
         if self.active_since.is_some() && stream.is_some() && stream != vrchat_stream(&settings) {
             send_inactive(&mut self.output, &self.settings)?;
+        }
+        let stream = livelink_stream(&self.settings);
+        if self.active_since.is_some() && stream.is_some() && stream != livelink_stream(&settings) {
+            self.send_livelink_neutral();
         }
         self.output.set_target(Target::of(&settings));
         self.smoother.configure(&settings);
@@ -1442,10 +1630,21 @@ impl Bridge {
             self.calibration.save_if_due();
         }
         if self.settings.sending {
-            for (addr, arg) in osc_messages(&self.settings, &sample) {
-                self.output.send(addr, vec![arg])?;
-            }
-            if self.output.addr().is_some() {
+            let sent = if self.settings.output == OutputKind::LiveLink {
+                // The newest sample, at most LIVELINK_MAX_HZ times a second; the ones in between are dropped
+                let interval = Duration::from_secs(1) / LIVELINK_MAX_HZ;
+                let ready = self.livelink_throttle.ready(now, interval);
+                if ready {
+                    self.output.send_datagram(&livelink_packet(&sample, livelink::time_of_day(SystemTime::now())));
+                }
+                ready
+            } else {
+                for (addr, arg) in osc_messages(&self.settings, &sample) {
+                    self.output.send(addr, vec![arg])?;
+                }
+                true
+            };
+            if sent && self.output.addr().is_some() {
                 self.sent.push_back(now);
             }
         }
@@ -1493,10 +1692,29 @@ impl Bridge {
         if vrchat_stream(&self.settings).is_some() {
             send_inactive(&mut self.output, &self.settings)?;
         }
+        if livelink_stream(&self.settings).is_some() {
+            self.send_livelink_neutral();
+        }
         self.smoother.reset();
         self.active_since = None;
         self.latest = None;
         Ok(())
+    }
+
+    /// Relaxed open eyes looking straight ahead, to VRCFT's LiveLink module.
+    fn send_livelink_neutral(&mut self) {
+        self.output.send_datagram(&livelink::packet(livelink::time_of_day(SystemTime::now()), &livelink::neutral()));
+        self.livelink_neutral = Some(Instant::now());
+    }
+
+    /// While sending to VRCFT's LiveLink module without eye data (the headset off, the eye server stopped), keep
+    /// sending it the neutral packet, so the module can start and does not log "connection lost" over and over.
+    /// Paused, nothing goes out.
+    fn keep_livelink_alive(&mut self) {
+        let due = self.livelink_neutral.is_none_or(|sent| sent.elapsed() >= LIVELINK_IDLE_INTERVAL);
+        if self.active_since.is_none() && livelink_stream(&self.settings).is_some() && due {
+            self.send_livelink_neutral();
+        }
     }
 
     fn status(&self) -> Status<'_> {
@@ -1552,15 +1770,37 @@ impl Bridge {
     }
 }
 
-/// Write every sample the eye server produces to `path` until stopped. Nothing is sent, and the status
-/// and calibration files are left alone, so this can run next to the installed service.
+/// Set by SIGINT / SIGTERM while recording, so the recording ends with every sample so far written out.
+static STOP_RECORDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn stop_recording(_: libc::c_int) {
+    STOP_RECORDING.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Write every sample the eye server produces to `path` until stopped (Ctrl+C, SIGINT or SIGTERM: the file is then
+/// complete up to the stop). Nothing is sent, and the status and calibration files are left alone, so this can run
+/// next to the installed service (the panel's "Eye log" runs it).
 fn record(path: &Path) -> Result<(), Box<dyn Error>> {
+    // SAFETY: the handler only stores to an atomic, which is async-signal-safe.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = stop_recording as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        libc::sigemptyset(&mut action.sa_mask);
+        for signal in [libc::SIGINT, libc::SIGTERM] {
+            libc::sigaction(signal, &action, std::ptr::null_mut());
+        }
+    }
     let mut recorder = replay::Recorder::create(path)?;
     let mut source = EyeSource::open()?;
     eprintln!("Recording {SOURCE} to {}; stop with Ctrl+C", path.display());
     let mut last_flush = Instant::now();
     let mut reported = 0;
     loop {
+        if STOP_RECORDING.load(std::sync::atomic::Ordering::Relaxed) {
+            recorder.flush()?;
+            eprintln!("Stopped: {} samples in {}", recorder.count, path.display());
+            return Ok(());
+        }
         match source.next(POLL)? {
             Next::Sample(data) => recorder.write(&data)?,
             Next::Waiting | Next::Stopped if source.is_stale() => {
@@ -1569,7 +1809,7 @@ fn record(path: &Path) -> Result<(), Box<dyn Error>> {
             }
             _ => {}
         }
-        // Flushed every second, so stopping with Ctrl+C loses at most that much.
+        // Flushed every second, so being killed loses at most that much (a stop signal loses nothing).
         if last_flush.elapsed() >= Duration::from_secs(1) {
             recorder.flush()?;
             last_flush = Instant::now();
@@ -1617,6 +1857,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         capture: None,
         capture_result: None,
         dots: dots::DotStream::new(status::status_path().parent().unwrap_or(Path::new("/tmp"))),
+        livelink_neutral: None,
+        livelink_throttle: Throttle::default(),
     };
     let mut status_file = StatusFile::new(status::status_path());
     let mut source = EyeSource::open()?;
@@ -1650,6 +1892,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             _ => {}
         }
         bridge.check_capture();
+        bridge.keep_livelink_alive();
         if status_file.due() {
             status_file.write(&bridge.status());
         }
@@ -1836,6 +2079,98 @@ mod tests {
     }
 
     #[test]
+    fn gaze_correction_without_tilt_is_unchanged_to_the_bit() {
+        // The correction as it was before gaze_roll_deg
+        let before = |angles: [f32; 6], settings: &Settings| -> [f32; 6] {
+            let eye_offsets = [settings.gaze_offset_x_left, settings.gaze_offset_x_right];
+            let eye_gains = [settings.gaze_gain_x_left, settings.gaze_gain_x_right];
+            std::array::from_fn(|i| {
+                let value = angles[i];
+                let corrected = if i % 2 == 0 {
+                    let offset = eye_offsets.get(i / 2).copied().flatten().unwrap_or(settings.gaze_offset_x);
+                    let gain = eye_gains.get(i / 2).copied().flatten().unwrap_or(settings.gaze_gain_x);
+                    (value - offset) * gain
+                } else {
+                    let from_center = value - settings.gaze_offset_y;
+                    let gain = if from_center >= 0.0 {
+                        settings.gaze_gain_up
+                    } else {
+                        settings.gaze_gain_down
+                    };
+                    from_center * gain
+                };
+                corrected.clamp(-1.0, 1.0)
+            })
+        };
+        let fitted = Settings {
+            gaze_offset_x: 0.013,
+            gaze_offset_y: -0.021,
+            gaze_gain_x: 0.93,
+            gaze_gain_up: 1.1,
+            gaze_gain_down: 0.88,
+            gaze_offset_x_left: Some(0.031),
+            gaze_gain_x_right: Some(0.9),
+            ..settings()
+        };
+        for settings in [settings(), fitted] {
+            for step in -24i32..=24 {
+                let a = step as f32 * 0.043;
+                let angles = [a, -a * 0.7, a * 0.9, a * 0.3, -a, a, 0.0, -0.0, 0.013, -0.021];
+                let angles: [f32; 6] = std::array::from_fn(|i| angles[(i + step.unsigned_abs() as usize) % 10]);
+                let now = correct_gaze(angles, &settings).map(f32::to_bits);
+                assert_eq!(now, before(angles, &settings).map(f32::to_bits), "{angles:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn gaze_correction_undoes_the_tilt_around_the_zero_point() {
+        let tilted = Settings {
+            gaze_offset_x: 0.02,
+            gaze_offset_y: -0.03,
+            gaze_roll_deg: 8.0,
+            ..settings()
+        };
+        let tan = 8f32.to_radians().tan();
+        let cos = 8f32.to_radians().cos();
+        // Looking 20° right along the tilted headset's level line: it reads higher, and comes out level and as far
+        let d = 20.0 / 45.0;
+        let angles = [0.02 + d, -0.03 + d * tan, 0.02 - d, -0.03 - d * tan, 0.02 + d, -0.03 + d * tan];
+        let corrected = correct_gaze(angles, &tilted);
+        for (value, expected) in corrected.iter().zip([d / cos, 0.0, -d / cos, 0.0, d / cos, 0.0]) {
+            assert!((value - expected).abs() < 1e-6, "{corrected:?}");
+        }
+        // Straight up along the tilted headset leans left (dx = -sinθ·dy); it comes out straight up
+        let up = 15.0 / 45.0;
+        let (sin, cos) = 8f32.to_radians().sin_cos();
+        let corrected = correct_gaze([0.02 - sin * up, -0.03 + cos * up, 0.0, 0.0, 0.0, 0.0], &tilted);
+        assert!(corrected[0].abs() < 1e-6 && (corrected[1] - up).abs() < 1e-6, "{corrected:?}");
+        // The zero point stays put, and the gains apply after the turn (up / down by the turned y)
+        let fitted = Settings {
+            gaze_gain_x: 2.0,
+            gaze_gain_up: 1.5,
+            gaze_gain_down: 0.5,
+            ..tilted.clone()
+        };
+        assert_eq!(correct_gaze([0.02, -0.03, 0.02, -0.03, 0.02, -0.03], &fitted), [0.0; 6]);
+        let corrected = correct_gaze(angles, &fitted);
+        assert!((corrected[0] - 2.0 * d / cos).abs() < 1e-6 && corrected[1].abs() < 1e-6, "{corrected:?}");
+        let corrected = correct_gaze([0.02, 0.07, 0.02, -0.13, 0.0, 0.0], &fitted);
+        assert!((corrected[1] - 1.5 * 0.1 * cos).abs() < 1e-6, "{corrected:?}");
+        assert!((corrected[3] + 0.5 * 0.1 * cos).abs() < 1e-6, "{corrected:?}");
+        // Each eye turns around its own sideways zero point; the combined gaze around the shared one
+        let per_eye = Settings {
+            gaze_offset_x_left: Some(0.05),
+            gaze_offset_x_right: Some(-0.01),
+            ..tilted
+        };
+        let corrected = correct_gaze([0.05 + d, -0.03 + d * tan, -0.01 + d, -0.03 + d * tan, 0.02, -0.03], &per_eye);
+        for (value, expected) in corrected.iter().zip([d / cos, 0.0, d / cos, 0.0, 0.0, 0.0]) {
+            assert!((value - expected).abs() < 1e-6, "{corrected:?}");
+        }
+    }
+
+    #[test]
     fn corrected_gaze_is_sent_and_raw_gaze_reported() {
         let fitted = Settings {
             gaze_offset_y: -0.1,
@@ -1894,6 +2229,263 @@ mod tests {
         assert!(lid_to_vrcft(fitted_openness(1.2, 0.0, &fit, &settings), &settings) > 0.9);
         // Without a fit, the scale applies as before.
         assert_eq!(lid_inputs([0.7, 0.7], -0.3, [1.0, 1.1], &Settings::default()), [0.7, 0.7 * 1.1]);
+    }
+
+    #[test]
+    fn a_scale_fine_tunes_a_fitted_eye() {
+        let settings = fitted();
+        let fits = settings.lid_fit();
+        let (left, right) = (fits[0].unwrap(), fits[1].unwrap());
+        let reading = [0.9, 0.8];
+        let plain = [
+            fitted_openness(reading[0], 0.0, &left, &settings),
+            fitted_openness(reading[1], 0.0, &right, &settings),
+        ];
+        // Scale 1: the fit alone. 0.69 on the right: that eye reads 31% less open after the fit
+        let tuned = lid_inputs(reading, 0.0, [1.0, 0.69], &settings);
+        assert_eq!(tuned[0], plain[0]);
+        assert!((tuned[1] - plain[1] * 0.69).abs() < 1e-6);
+        // So a relaxed right eye is sent less open, and a wide one widens less
+        let vrcft = |value: f32| lid_to_vrcft(value, &settings);
+        assert!((vrcft(plain[1]) - 0.75).abs() < 1e-5);
+        assert!(vrcft(tuned[1]) < 0.5, "{}", vrcft(tuned[1]));
+        let wide = lid_inputs([0.9, 0.9], 0.0, [1.0, 1.0], &settings);
+        let less_wide = lid_inputs([0.9, 0.9], 0.0, [1.0, 0.95], &settings);
+        assert!(vrcft(wide[1]) > 0.75 && vrcft(less_wide[1]) < vrcft(wide[1]), "{:?} {:?}", wide, less_wide);
+    }
+
+    /// One user's fit (2026-09-30 logs): the left eye reads 0.945 straight ahead, too close to the Frame's 1.000 to
+    /// widen, the right 0.835 with room; their lid marks; widening as given.
+    fn user_fit(widen: Widen) -> Settings {
+        Settings {
+            lid_closed: 0.23,
+            lid_open: 0.85,
+            lid_widen_start: 0.95,
+            lid_wide: 1.03,
+            lid_widen: widen,
+            lid_fit_closed_left: Some(0.165),
+            lid_fit_up_left: Some(0.96),
+            lid_fit_open_left: Some(0.945),
+            lid_fit_down_left: Some(0.8),
+            lid_fit_closed_right: Some(0.26),
+            lid_fit_up_right: Some(0.85),
+            lid_fit_open_right: Some(0.835),
+            lid_fit_down_right: Some(0.7),
+            ..settings()
+        }
+    }
+
+    /// VRCFT eyelids for these readings straight ahead, with these scales.
+    fn sent_lids(settings: &Settings, openness: [f32; 2], scales: [f32; 2]) -> [f32; 2] {
+        lid_inputs(openness, 0.0, scales, settings).map(|value| lid_to_vrcft(value, settings))
+    }
+
+    #[test]
+    fn a_fitted_eye_widens_by_its_preset_above_its_open_reading() {
+        for (widen, (start, full)) in [(Widen::Low, WIDEN_LOW), (Widen::Normal, WIDEN_NORMAL), (Widen::High, WIDEN_HIGH)] {
+            // A right eye reading 0.80 straight ahead (0.82 up), so even "low" is full below 1.000
+            let settings = Settings {
+                lid_fit_open_right: Some(0.8),
+                lid_fit_up_right: Some(0.82),
+                ..user_fit(widen)
+            };
+            let right = |raw: f32| sent_lids(&settings, [0.945, raw], [1.0; 2])[1];
+            // At or below the open reading: as fitted_openness, the same for every preset
+            let fit = settings.lid_fit()[1].unwrap();
+            for raw in [0.3, 0.5, 0.7, 0.8] {
+                assert_eq!(right(raw), lid_to_vrcft(fitted_openness(raw, 0.0, &fit, &settings), &settings));
+            }
+            assert!((right(0.8) - 0.75).abs() < 1e-5);
+            // Relaxed up to `start` above it, half widened halfway to `full`, full at `full` and past it
+            assert!((right(0.8 + start - 0.001) - 0.75).abs() < 1e-5, "{widen:?}");
+            let half = 0.8 + (start + full) / 2.0;
+            assert!((right(half) - 0.875).abs() < 1e-3, "{widen:?}: {}", right(half));
+            assert!((right(0.8 + full) - 1.0).abs() < 1e-5, "{widen:?}");
+            assert_eq!(right(1.0), 1.0);
+            // Relative to the expected reading for where the eyes look: looking up the right eye reads 0.82
+            let up = lid_inputs([0.96, 0.82 + start - 0.001], LID_FIT_PITCH, [1.0; 2], &settings);
+            assert!((lid_to_vrcft(up[1], &settings) - 0.75).abs() < 1e-5);
+        }
+        // A +0.10 widen: fully with "high", partly with "normal", not with "low"
+        let widened = |widen| sent_lids(&user_fit(widen), [0.945, 0.935], [1.0; 2])[1];
+        assert_eq!(widened(Widen::High), 1.0);
+        assert!(widened(Widen::Normal) > 0.8 && widened(Widen::Normal) < 0.9);
+        assert!((widened(Widen::Low) - 0.75).abs() < 1e-5);
+        // The user's right eye (0.835) with "low" would be full at 1.015: it is full where the openness stops
+        assert_eq!(sent_lids(&user_fit(Widen::Low), [0.945, 1.0], [1.0; 2])[1], 1.0);
+        // Off: never above relaxed open, however wide
+        let off = user_fit(Widen::Off);
+        assert_eq!(sent_lids(&off, [1.0, 1.0], [1.0; 2]), [0.75, 0.75]);
+        assert!(sent_lids(&off, [0.3, 0.5], [1.0; 2])[1] < 0.75);
+    }
+
+    #[test]
+    fn an_eye_without_room_to_widen_follows_the_other_eye() {
+        let settings = user_fit(Widen::Normal);
+        let fits = settings.lid_fit().map(Option::unwrap);
+        assert!(!widen_room(&fits[0], Widen::Normal) && widen_room(&fits[1], Widen::Normal));
+        // With "high" the left eye still has no room (0.945 + 0.04 > 0.97); an eye reading 0.90 has with "normal"
+        assert!(!widen_room(&fits[0], Widen::High));
+        assert!(widen_room(&LidFit { open: 0.9, ..fits[1] }, Widen::Normal));
+        assert!(!widen_room(&LidFit { open: 0.91, ..fits[1] }, Widen::Normal));
+        // The saturated left eye at 1.000 widens with the right...
+        assert_eq!(sent_lids(&settings, [1.0, 0.835 + 0.14], [1.0; 2]), [1.0, 1.0]);
+        let half = 0.835 + 0.105;
+        let lids = sent_lids(&settings, [0.96, half], [1.0; 2]);
+        assert!((lids[0] - lids[1]).abs() < 1e-5 && (lids[0] - 0.875).abs() < 1e-3, "{lids:?}");
+        // ...stays relaxed while the right is relaxed or blinks...
+        assert!((sent_lids(&settings, [1.0, 0.835], [1.0; 2])[0] - 0.75).abs() < 1e-5);
+        assert!((sent_lids(&settings, [1.0, 0.3], [1.0; 2])[0] - 0.75).abs() < 1e-5);
+        // ...and below its own open reading follows its own lid
+        let closing = sent_lids(&settings, [0.4, 1.0], [1.0; 2]);
+        assert_eq!(closing[0], lid_to_vrcft(fitted_openness(0.4, 0.0, &fits[0], &settings), &settings));
+        assert!(closing[0] < 0.4);
+        // Neither eye with room: no widening at all
+        let both = Settings {
+            lid_fit_open_right: Some(0.95),
+            lid_fit_up_right: Some(0.96),
+            ..user_fit(Widen::Normal)
+        };
+        assert_eq!(sent_lids(&both, [1.0, 1.0], [1.0; 2]), [0.75, 0.75]);
+    }
+
+    #[test]
+    fn the_scale_still_fine_tunes_a_widening_eye() {
+        let settings = user_fit(Widen::Normal);
+        let full = 0.835 + 0.14;
+        assert_eq!(sent_lids(&settings, [0.945, full], [1.0; 2])[1], 1.0);
+        // 0.97 on the right: a full widen reaches (1.03 · 0.97 - 0.95) / 0.08 = 61% of the widening...
+        let tuned = sent_lids(&settings, [0.945, full], [1.0, 0.97])[1];
+        assert!((tuned - (0.75 + 0.25 * (1.03 * 0.97 - 0.95) / 0.08)).abs() < 1e-4, "{tuned}");
+        // ...and it closes sooner: the value on the lid scale times 0.97 everywhere
+        let plain = lid_inputs([0.5, 0.5], 0.0, [1.0; 2], &settings);
+        assert!((lid_inputs([0.5, 0.5], 0.0, [1.0, 0.97], &settings)[1] - plain[1] * 0.97).abs() < 1e-6);
+        // The left eye borrows the right's value and then takes its own scale
+        let borrowed = lid_inputs([1.0, full], 0.0, [0.97, 1.0], &settings);
+        assert!((borrowed[0] - borrowed[1] * 0.97).abs() < 1e-6);
+    }
+
+    #[test]
+    fn unfitted_eyes_keep_the_lid_marks_whatever_the_preset() {
+        let fitted_left = Settings {
+            lid_fit_closed_right: None,
+            lid_fit_up_right: None,
+            lid_fit_open_right: None,
+            lid_fit_down_right: None,
+            ..user_fit(Widen::Off)
+        };
+        for widen in [Widen::Off, Widen::Low, Widen::Normal, Widen::High] {
+            let settings = Settings {
+                lid_widen: widen,
+                ..fitted_left.clone()
+            };
+            // The right eye (no fit): raw openness times its scale against marks 3 and 4, as before
+            assert_eq!(lid_inputs([0.9, 0.99], 0.0, [1.0, 1.1], &settings)[1], 0.99 * 1.1);
+            assert_eq!(sent_lids(&settings, [0.9, 0.99], [1.0; 2])[1], lid_to_vrcft(0.99, &settings));
+            // Nor does a fitted eye without room borrow from an unfitted one
+            assert!((sent_lids(&settings, [1.0, 1.0], [1.0; 2])[0] - 0.75).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn scales_written_before_lid_widen_do_not_act_on_fitted_eyes() {
+        let calibration = LidCalibration::load(None, 0.8);
+        // A 0.5.x file: a scale next to a fitted left eye (ignored then) and an unfitted right eye's scale
+        let old = Settings {
+            lid_scale_left: Some(1.15),
+            lid_scale_right: Some(0.9),
+            lid_fit_closed_right: None,
+            lid_fit_up_right: None,
+            lid_fit_open_right: None,
+            lid_fit_down_right: None,
+            scales_predate_fit: true,
+            ..user_fit(Widen::Normal)
+        };
+        assert_eq!(lid_scales(&old, &calibration), [1.0, 0.9]);
+        // Once the file says lid_widen, the scale is the fine-tune after the fit
+        assert_eq!(lid_scales(&Settings { scales_predate_fit: false, ..old }, &calibration), [1.15, 0.9]);
+    }
+
+    #[test]
+    fn fitted_eyelids_are_continuous_and_never_fall() {
+        let generic = Settings {
+            lid_widen: Widen::Normal,
+            lid_fit_open_right: Some(0.8),
+            lid_fit_up_right: Some(0.82),
+            ..fitted()
+        };
+        let settings_list = [user_fit(Widen::Normal), user_fit(Widen::High), user_fit(Widen::Off), generic];
+        for settings in &settings_list {
+            let fits = settings.lid_fit();
+            for vertical in [-1.0, -0.8, -0.6, -0.45, -0.3, -0.15, 0.0, 0.2, 0.5] {
+                for eye in 0..2 {
+                    let fit = fits[eye].unwrap();
+                    let mut last_value = f32::NAN;
+                    let mut last_sent = f32::NAN;
+                    // Up to 1.000, where the Frame's openness stops
+                    for step in 0..=1000 {
+                        let raw = step as f32 * 0.001;
+                        let value = fitted_lid(raw, vertical, &fit, settings);
+                        let sent = lid_to_vrcft(value, settings);
+                        if step > 0 {
+                            // Never falls, and no step: 0.001 of raw openness moves it at most 0.01
+                            assert!(value >= last_value - 1e-6, "{vertical} eye {eye} at {raw}: {last_value} -> {value}");
+                            assert!(value - last_value <= 0.01, "{vertical} eye {eye} at {raw}: {last_value} -> {value}");
+                            assert!(sent - last_sent <= 0.02 && sent >= last_sent - 1e-6, "{vertical} {raw}: {last_sent} -> {sent}");
+                        }
+                        last_value = value;
+                        last_sent = sent;
+                    }
+                }
+                // Following the other eye: while the other one is relaxed, crossing its own open reading changes nothing
+                let left = fits[0].unwrap();
+                if settings.lid_widen != Widen::Off && !widen_room(&left, settings.lid_widen) {
+                    let open_at = open_reading(&left, vertical);
+                    let relaxed_right = open_reading(&fits[1].unwrap(), vertical);
+                    let below = lid_inputs([open_at - 0.0005, relaxed_right], vertical, [1.0; 2], settings)[0];
+                    let above = lid_inputs([open_at + 0.0005, relaxed_right], vertical, [1.0; 2], settings)[0];
+                    assert!((lid_to_vrcft(below, settings) - lid_to_vrcft(above, settings)).abs() < 0.01, "{vertical}");
+                }
+            }
+        }
+        // The case that stepped before: 45° down, where the expected reading is far below the open one
+        let settings = user_fit(Widen::Normal);
+        let right = settings.lid_fit()[1].unwrap();
+        let expected = expected_open(&right, -1.0);
+        let at = lid_to_vrcft(fitted_lid(expected, -1.0, &right, &settings), &settings);
+        let past = lid_to_vrcft(fitted_lid(expected + 0.001, -1.0, &right, &settings), &settings);
+        assert!(at < 0.75 && past - at < 0.01, "{expected}: {at} -> {past}");
+    }
+
+    #[test]
+    fn fitted_eyes_take_only_their_fixed_scale() {
+        // Learned scales that are not 1 (relaxed 0.7 against lid_open 0.8)
+        let calibration = LidCalibration::load(None, 0.7);
+        let learned = calibration.scales(0.8);
+        assert!(learned[0] > 1.0);
+        // Unfitted: fixed, else learned (unchanged)
+        let unfitted = Settings {
+            lid_scale_left: Some(0.9),
+            ..settings()
+        };
+        assert_eq!(lid_scales(&unfitted, &calibration), [0.9, learned[1]]);
+        // Fitted: fixed as the fine-tune, else 1, never the learned one
+        let fitted_unset = fitted();
+        assert_eq!(lid_scales(&fitted_unset, &calibration), [1.0, 1.0]);
+        let fitted_tuned = Settings {
+            lid_scale_right: Some(0.69),
+            ..fitted()
+        };
+        assert_eq!(lid_scales(&fitted_tuned, &calibration), [1.0, 0.69]);
+        // One eye fitted: the other still learns its scale
+        let half = Settings {
+            lid_fit_closed_right: None,
+            lid_fit_up_right: None,
+            lid_fit_open_right: None,
+            lid_fit_down_right: None,
+            ..fitted()
+        };
+        assert_eq!(lid_scales(&half, &calibration), [1.0, learned[1]]);
     }
 
     #[test]
@@ -2269,6 +2861,8 @@ mod tests {
         assert_eq!(lid_to_etvr(1.0), 1.0);
         assert_eq!(output_lids(OutputKind::Vrchat, [0.375, 1.0]), [0.375, 1.0]);
         assert_eq!(output_lids(OutputKind::Etvr, [0.375, 1.0]), [0.5, 1.0]);
+        // LiveLink keeps the VRCFT eyelids (the packet splits them into blink and widening)
+        assert_eq!(output_lids(OutputKind::LiveLink, [0.375, 1.0]), [0.375, 1.0]);
     }
 
     fn sample() -> Sample {
@@ -2394,6 +2988,220 @@ mod tests {
     }
 
     #[test]
+    fn livelink_gets_each_eyes_gaze_and_eyelid_in_one_packet() {
+        let packet = livelink_packet(&sample(), 12.0);
+        let [left, right] = livelink::tests::module_eyes(&packet).unwrap();
+        // Eyelid 0.375: half closed; 0.75: relaxed open, not widened
+        assert_eq!((left.0, left.1), (0.5, 0.0));
+        assert_eq!((right.0, right.1), (1.0, 0.0));
+        // The per-eye gaze, not the combined one (sample() has different values in each; choose_gaze puts the
+        // combined gaze in both eyes unless "move eyes separately" is on)
+        assert_eq!((left.2, left.3), (0.1, 0.2));
+        assert_eq!((right.2, right.3), (0.3, 0.4));
+        // Widened
+        let wide = Sample {
+            lids: [1.0, 0.875],
+            ..sample()
+        };
+        let [left, right] = livelink::tests::module_eyes(&livelink_packet(&wide, 12.0)).unwrap();
+        assert_eq!((left.0, left.1), (1.0, 1.0));
+        assert_eq!((right.0, right.1), (1.0, 0.5));
+    }
+
+    /// A bridge sending to a local UDP listener, with no config file, calibration file or status folder.
+    fn test_bridge(settings: Settings) -> Bridge {
+        let mut bridge = Bridge {
+            config: Config::new(None, Args::parse_from(["frameeyeosc"]), HashSet::new()),
+            output: Output::new(Target::of(&settings)),
+            smoother: Smoother::new(&settings),
+            calibration: LidCalibration::load(None, settings.lid_open),
+            settings,
+            started: SystemTime::now(),
+            active_since: None,
+            last_data: None,
+            latest: None,
+            sent: VecDeque::new(),
+            received: VecDeque::new(),
+            capture: None,
+            capture_result: None,
+            dots: dots::DotStream::new(Path::new("/nonexistent")),
+            livelink_neutral: None,
+            livelink_throttle: Throttle::default(),
+        };
+        bridge.output.refresh();
+        bridge
+    }
+
+    fn reload(settings: &Settings) -> Reload {
+        Reload {
+            settings: settings.clone(),
+            reset_calibration: false,
+            gaze_capture: None,
+        }
+    }
+
+    /// The next datagram within 300 ms.
+    fn receive(listener: &UdpSocket) -> Option<Vec<u8>> {
+        let mut buffer = [0u8; 1024];
+        listener.set_read_timeout(Some(Duration::from_millis(300))).unwrap();
+        listener.recv(&mut buffer).ok().map(|size| buffer[..size].to_vec())
+    }
+
+    #[test]
+    fn livelink_sends_a_packet_per_sample_and_neutral_when_the_eyes_stop() {
+        let listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let live = Settings {
+            output: OutputKind::LiveLink,
+            host: "127.0.0.1".into(),
+            port: Some(listener.local_addr().unwrap().port()),
+            lid_calibration: false,
+            ..settings()
+        };
+        let mut bridge = test_bridge(live.clone());
+        let neutral = |packet: Vec<u8>| livelink::tests::module_eyes(&packet) == Some([(1.0, 0.0, 0.0, 0.0); 2]);
+        // Before any eye data: the neutral packet, twice a second
+        bridge.keep_livelink_alive();
+        assert!(neutral(receive(&listener).unwrap()));
+        bridge.keep_livelink_alive();
+        assert!(receive(&listener).is_none());
+        // Looking right and down (22.5°) with the left eye wide open: one packet per sample, as processed
+        let look = [(std::f32::consts::PI / 8.0).tan(), -(std::f32::consts::PI / 8.0).tan()];
+        for index in 0..3 {
+            // (the rate limit is tested on its own below)
+            bridge.livelink_throttle = Throttle::default();
+            bridge.on_sample(reading(index, look, [1.0, 0.55])).unwrap();
+            let packet = receive(&listener).unwrap();
+            let [left, right] = livelink::tests::module_eyes(&packet).unwrap();
+            let sample = bridge.latest.as_ref().unwrap();
+            for ((openness, wide, x, y), (lid, gaze)) in [left, right].into_iter().zip([
+                (sample.lids[0], [sample.gaze[0], sample.gaze[1]]),
+                (sample.lids[1], [sample.gaze[2], sample.gaze[3]]),
+            ]) {
+                assert!((openness * 0.75 + wide * 0.25 - lid).abs() < 1e-6);
+                assert_eq!([x, y], gaze);
+            }
+            assert!(left.1 > 0.0 && right.0 < 1.0);
+            assert!(left.2 > 0.0 && left.3 < 0.0);
+        }
+        // Tracking runs, so no neutral packets in between
+        bridge.keep_livelink_alive();
+        assert!(receive(&listener).is_none());
+        // Pausing sends one neutral packet, and nothing after it
+        let paused = Settings {
+            sending: false,
+            ..live.clone()
+        };
+        bridge.apply(reload(&paused)).unwrap();
+        assert!(neutral(receive(&listener).unwrap()));
+        bridge.on_sample(reading(3, look, [1.0, 0.55])).unwrap();
+        bridge.on_lost("test").unwrap();
+        bridge.livelink_neutral = None;
+        bridge.keep_livelink_alive();
+        assert!(receive(&listener).is_none());
+        // Losing the eye data sends one, then again only after LIVELINK_IDLE_INTERVAL
+        bridge.apply(reload(&live)).unwrap();
+        bridge.livelink_throttle = Throttle::default();
+        bridge.on_sample(reading(4, look, [1.0, 0.55])).unwrap();
+        assert!(!neutral(receive(&listener).unwrap()));
+        bridge.on_lost("test").unwrap();
+        assert!(neutral(receive(&listener).unwrap()));
+        bridge.keep_livelink_alive();
+        assert!(receive(&listener).is_none());
+        bridge.livelink_neutral = Some(Instant::now() - LIVELINK_IDLE_INTERVAL);
+        bridge.keep_livelink_alive();
+        assert!(neutral(receive(&listener).unwrap()));
+        // Switching to VRChat while tracking: a last neutral packet, then OSC
+        bridge.livelink_throttle = Throttle::default();
+        bridge.on_sample(reading(5, look, [1.0, 0.55])).unwrap();
+        receive(&listener).unwrap();
+        let vrchat = Settings {
+            output: OutputKind::Vrchat,
+            ..live.clone()
+        };
+        bridge.apply(reload(&vrchat)).unwrap();
+        assert!(neutral(receive(&listener).unwrap()));
+        bridge.on_sample(reading(6, look, [1.0, 0.55])).unwrap();
+        let (_, packet) = rosc::decoder::decode_udp(&receive(&listener).unwrap()).unwrap();
+        let OscPacket::Message(message) = packet else { panic!("not a message") };
+        assert_eq!(message.addr, "/avatar/parameters/FT/EyeTrackingActive");
+        while receive(&listener).is_some() {}
+        // VRChat mode never gets the neutral packet while idle
+        bridge.on_lost("test").unwrap();
+        let (_, packet) = rosc::decoder::decode_udp(&receive(&listener).unwrap()).unwrap();
+        let OscPacket::Message(message) = packet else { panic!("not a message") };
+        assert_eq!(message.args, [OscType::Bool(false)]);
+        bridge.livelink_neutral = None;
+        bridge.keep_livelink_alive();
+        assert!(receive(&listener).is_none());
+    }
+
+    #[test]
+    fn the_livelink_rate_stays_at_or_below_the_limit() {
+        let interval = Duration::from_secs(1) / LIVELINK_MAX_HZ;
+        let start = Instant::now();
+        // 90 Hz and 136 Hz for ten seconds: never more than 50 in any second, and no bursts (a late packet may be
+        // followed by one a sample later, but any 200 ms hold at most one more than 200 ms / interval)
+        for hz in [90u32, 136] {
+            let mut throttle = Throttle::default();
+            let times: Vec<Instant> = (0..hz * 10)
+                .map(|i| start + Duration::from_secs(1) * i / hz)
+                .filter(|&time| throttle.ready(time, interval))
+                .collect();
+            assert!(times.len() as u32 <= LIVELINK_MAX_HZ * 10, "{hz} Hz: {}", times.len());
+            assert!(times.len() as u32 >= LIVELINK_MAX_HZ * 10 * 8 / 10, "{hz} Hz: {}", times.len());
+            for (i, &from) in times.iter().enumerate() {
+                let window = Duration::from_millis(200);
+                let count = times[i..].iter().take_while(|&&time| time < from + window).count();
+                assert!(count as u32 <= window.as_millis() as u32 / interval.as_millis() as u32 + 1, "{hz} Hz: {count}");
+            }
+            for second in 0..10 {
+                let from = start + Duration::from_secs(second);
+                let count = times.iter().filter(|&&time| time >= from && time < from + Duration::from_secs(1)).count();
+                assert!(count as u32 <= LIVELINK_MAX_HZ, "{hz} Hz, second {second}: {count}");
+            }
+        }
+        // Slower samples all go out, and a pause does not let a burst through afterwards
+        let mut throttle = Throttle::default();
+        let slow: Vec<bool> = (0..10u32).map(|i| throttle.ready(start + Duration::from_millis(30) * i, interval)).collect();
+        assert!(slow.iter().all(|&ready| ready));
+        let later = start + Duration::from_secs(5);
+        assert!(throttle.ready(later, interval));
+        assert!(!throttle.ready(later + Duration::from_millis(5), interval));
+    }
+
+    #[test]
+    fn livelink_sends_the_newest_sample_and_the_rate_counts_only_what_went_out() {
+        let listener = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let live = Settings {
+            output: OutputKind::LiveLink,
+            host: "127.0.0.1".into(),
+            port: Some(listener.local_addr().unwrap().port()),
+            raw: true,
+            lid_calibration: false,
+            ..settings()
+        };
+        let mut bridge = test_bridge(live);
+        let gaze_of = |packet: Vec<u8>| livelink::tests::module_eyes(&packet).unwrap()[0].2;
+        // Looking left, then (right away) ahead, then after the interval right
+        let x = |deg: f32| deg.to_radians().tan();
+        bridge.on_sample(reading(0, [x(-20.0), 0.0], [0.8; 2])).unwrap();
+        bridge.on_sample(reading(1, [0.0, 0.0], [0.8; 2])).unwrap();
+        assert!(gaze_of(receive(&listener).unwrap()) < 0.0);
+        assert!(receive(&listener).is_none(), "the sample in between is dropped, not queued");
+        std::thread::sleep(Duration::from_secs(1) / LIVELINK_MAX_HZ + Duration::from_millis(5));
+        bridge.on_sample(reading(2, [x(20.0), 0.0], [0.8; 2])).unwrap();
+        assert!(gaze_of(receive(&listener).unwrap()) > 0.0, "the newest sample goes out");
+        // Three samples in, two packets out
+        assert_eq!((bridge.received.len(), bridge.sent.len()), (3, 2));
+        // The keepalive still goes out once the eye data stops
+        bridge.on_lost("test").unwrap();
+        assert!(livelink::tests::module_eyes(&receive(&listener).unwrap()) == Some([(1.0, 0.0, 0.0, 0.0); 2]));
+        bridge.livelink_neutral = Some(Instant::now() - LIVELINK_IDLE_INTERVAL);
+        bridge.keep_livelink_alive();
+        assert!(receive(&listener).is_some());
+    }
+
+    #[test]
     fn empty_prefix_sends_bare_names() {
         let messages = sent(&Settings {
             prefix: String::new(),
@@ -2413,6 +3221,13 @@ mod tests {
         assert_eq!(etvr.port(), 8889);
         assert_eq!(Settings { port: Some(9100), ..etvr }.port(), 9100);
         assert!(Target::of(&settings()) == Target::SteamLink { port: 9000 });
+        let livelink = Settings {
+            output: OutputKind::LiveLink,
+            ..settings()
+        };
+        assert_eq!(livelink.port(), 11111);
+        assert_eq!(Settings { port: Some(11112), ..livelink.clone() }.port(), 11112);
+        assert!(Target::of(&livelink) == Target::SteamLink { port: 11111 });
     }
 
     #[test]
@@ -2438,6 +3253,18 @@ mod tests {
             ..settings()
         };
         assert_eq!(vrchat_stream(&base), vrchat_stream(&tweaked));
+        // The same for LiveLink
+        let livelink = Settings {
+            output: OutputKind::LiveLink,
+            ..settings()
+        };
+        assert_eq!(livelink_stream(&livelink), Some(("auto", 11111)));
+        assert!(livelink_stream(&base).is_none() && livelink_stream(&etvr).is_none());
+        assert!(livelink_stream(&Settings { sending: false, ..livelink.clone() }).is_none());
+        assert_ne!(livelink_stream(&livelink), livelink_stream(&Settings { port: Some(11112), ..livelink.clone() }));
+        assert_eq!(livelink_stream(&livelink), livelink_stream(&Settings { lid_open: 0.85, ..livelink.clone() }));
+        // LiveLink is not VRChat: no EyeTrackingActive stream to end
+        assert!(vrchat_stream(&livelink).is_none());
     }
 
     #[test]

@@ -71,6 +71,7 @@ constexpr const char* kGazeOffsetY = "gaze_offset_y";
 constexpr const char* kGazeGainX = "gaze_gain_x";
 constexpr const char* kGazeGainUp = "gaze_gain_up";
 constexpr const char* kGazeGainDown = "gaze_gain_down";
+constexpr const char* kGazeRollDeg = "gaze_roll_deg";
 constexpr const char* kGazeDownHoldXDeg = "gaze_down_hold_x_deg";
 constexpr const char* kGazeOffsetXLeft = "gaze_offset_x_left";
 constexpr const char* kGazeOffsetXRight = "gaze_offset_x_right";
@@ -81,6 +82,11 @@ constexpr const char* kGazeDebugDots = "gaze_debug_dots";
 constexpr const char* kGazeDebugDotsDistanceM = "gaze_debug_dots_distance_m";
 /** The panel's own: play sound cues during the eye fit (frameeyeosc ignores it). */
 constexpr const char* kFitSounds = "fit_sounds";
+/** The panel's own: the fit run by itself when the headset is put on, "center" (the default), "tilt" or "off"
+ *  (see kAutoRecenterModes; frameeyeosc ignores it). */
+constexpr const char* kAutoRecenter = "auto_recenter";
+/** How easily an eye with an eye fit widens: see kLidWidenModes. */
+constexpr const char* kLidWiden = "lid_widen";
 constexpr const char* kLidFitClosedLeft = "lid_fit_closed_left";
 constexpr const char* kLidFitClosedRight = "lid_fit_closed_right";
 constexpr const char* kLidFitUpLeft = "lid_fit_up_left";
@@ -99,11 +105,18 @@ constexpr const char* kUpdateCheck = "update_check";  ///< panel only: look for 
 /** Output types (the "output" key). */
 constexpr const char* kOutputVrchat = "vrchat";
 constexpr const char* kOutputEtvr = "etvr";
+constexpr const char* kOutputLivelink = "livelink";  ///< Live Link Face packets for VRCFaceTracking's LiveLink module
 /** eye_tracking_active values: how EyeTrackingActive is sent in VRChat mode */
 constexpr const char* kActiveTypes[3] = {"bool", "float", "off"};
+/** auto_recenter values, in the order the Eye fit tab's "When put on" row shows them: nothing, one dot (the
+ *  default), the dot and the up / down dots */
+constexpr const char* kAutoRecenterModes[3] = {"off", "center", "tilt"};
+/** lid_widen values, in the order the Eyelids tab shows them: never, less, normal (the default), more */
+constexpr const char* kLidWidenModes[4] = {"off", "low", "normal", "high"};
 /** Default ports of the output types (used while "port" is null). */
 constexpr int kPortVrchat = 9000;
 constexpr int kPortEtvr = 8889;
+constexpr int kPortLivelink = 11111;
 
 /**
  * All keys in the order a new config.json is written.

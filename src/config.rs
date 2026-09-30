@@ -18,6 +18,8 @@ const CHECK_INTERVAL: Duration = Duration::from_millis(100);
 // Allowed gaze zero points and gains (the panel's steppers stay inside these too).
 const GAZE_OFFSET_RANGE: std::ops::RangeInclusive<f32> = -0.5..=0.5;
 const GAZE_GAIN_RANGE: std::ops::RangeInclusive<f32> = 0.5..=2.0;
+// Allowed headset tilt (degrees).
+const GAZE_ROLL_RANGE: std::ops::RangeInclusive<f32> = -20.0..=20.0;
 // A fitted eye's open readings must be at least this far above its closed one.
 const LID_FIT_MIN_RANGE: f32 = 0.1;
 // A gaze capture's target name is only echoed back, so it is kept short.
@@ -37,6 +39,9 @@ pub enum OutputKind {
     Vrchat,
     /// VRCFaceTracking's ETVR Tracking Module (six values, eyelid 1.0 = relaxed)
     Etvr,
+    /// VRCFaceTracking's LiveLink module (Live Link Face packets: eyelids, widening and gaze per eye)
+    #[value(name = "livelink")]
+    LiveLink,
 }
 
 impl OutputKind {
@@ -44,6 +49,7 @@ impl OutputKind {
         match self {
             Self::Vrchat => 9000,
             Self::Etvr => 8889,
+            Self::LiveLink => crate::livelink::DEFAULT_PORT,
         }
     }
 }
@@ -61,6 +67,21 @@ pub enum ActiveType {
     Off,
 }
 
+/// How easily a fitted eye widens (see main.rs, WIDEN_*): never, or from a small, medium or large rise above its
+/// expected open reading. Eyes without an eye fit use the lid marks instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Widen {
+    /// never widens
+    Off,
+    /// only a large rise widens
+    Low,
+    /// the default
+    Normal,
+    /// a small rise widens
+    High,
+}
+
 /// Everything that can change while running. Field names are the config.json keys, and the
 /// defaults match the command-line defaults in `Args`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -75,6 +96,12 @@ pub struct Settings {
     /// Without a trailing slash; empty for no prefix.
     pub prefix: String,
     pub eye_tracking_active: ActiveType,
+    /// How easily a fitted eye widens.
+    pub lid_widen: Widen,
+    /// The settings file has no `lid_widen` (written by 0.5.x or earlier, whose lid_scale_* did nothing for fitted
+    /// eyes): a fitted eye's scale is then ignored (see main.rs, lid_scales). Not a setting of its own.
+    #[serde(skip)]
+    pub scales_predate_fit: bool,
     pub raw: bool,
     pub gaze_min_cutoff: f32,
     pub gaze_beta: f32,
@@ -102,6 +129,9 @@ pub struct Settings {
     pub gaze_gain_x: f32,
     pub gaze_gain_up: f32,
     pub gaze_gain_down: f32,
+    /// How far the headset sits tilted, in degrees (positive: looking right reads higher). Undone around the zero
+    /// point before the gains; see `correct_gaze`.
+    pub gaze_roll_deg: f32,
     /// Degrees below straight ahead (the tracker's own, before the zero point and gains) from where the
     /// sideways gaze is held; 0 disables. See `Smoother::hold_down_x`.
     pub gaze_down_hold_x_deg: f32,
@@ -144,6 +174,8 @@ impl Default for Settings {
             port: None,
             prefix: "/FT".into(),
             eye_tracking_active: ActiveType::Bool,
+            lid_widen: Widen::Normal,
+            scales_predate_fit: false,
             raw: false,
             gaze_min_cutoff: 0.4,
             gaze_beta: 0.8,
@@ -170,6 +202,7 @@ impl Default for Settings {
             gaze_gain_x: 1.0,
             gaze_gain_up: 1.0,
             gaze_gain_down: 1.0,
+            gaze_roll_deg: 0.0,
             gaze_down_hold_x_deg: 24.0,
             gaze_offset_x_left: None,
             gaze_offset_x_right: None,
@@ -254,6 +287,7 @@ impl Settings {
             self.gaze_gain_x,
             self.gaze_gain_up,
             self.gaze_gain_down,
+            self.gaze_roll_deg,
             self.gaze_down_hold_x_deg,
         ];
         let scales = [self.lid_scale_left, self.lid_scale_right];
@@ -318,6 +352,9 @@ impl Settings {
         let gains = [self.gaze_gain_x, self.gaze_gain_up, self.gaze_gain_down];
         if !gains.iter().all(|gain| GAZE_GAIN_RANGE.contains(gain)) {
             return Err("gaze_gain_x/up/down must be between 0.5 and 2".into());
+        }
+        if !GAZE_ROLL_RANGE.contains(&self.gaze_roll_deg) {
+            return Err("gaze_roll_deg must be between -20 and 20".into());
         }
         if !(0.0..=45.0).contains(&self.gaze_down_hold_x_deg) {
             return Err("gaze_down_hold_x_deg must be between 0 and 45".into());
@@ -394,7 +431,12 @@ struct Asked {
 
 /// Parse config.json: missing keys keep their defaults and unknown keys are ignored.
 fn parse(text: &str) -> Result<(Settings, Asked), String> {
-    let settings: Settings = serde_json::from_str(text).map_err(|error| error.to_string())?;
+    let mut settings: Settings = serde_json::from_str(text).map_err(|error| error.to_string())?;
+    let written: serde_json::Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
+    let scaled = ["lid_scale_left", "lid_scale_right"]
+        .iter()
+        .any(|name| written.get(name).is_some_and(|value| !value.is_null()));
+    settings.scales_predate_fit = scaled && written.get("lid_widen").is_none();
     let requests: Requests = serde_json::from_str(text).map_err(|error| error.to_string())?;
     let (capture_id, capture) = requests.gaze_capture();
     let asked = Asked {
@@ -436,7 +478,11 @@ pub fn apply_args(settings: &mut Settings, args: &Args, given: &HashSet<String>)
             }
         )*};
     }
-    pin!(output, eye_tracking_active);
+    pin!(output, eye_tracking_active, lid_widen);
+    // Given on the command line: this is 0.6.0 or later, whatever the file says
+    if given.contains("lid_widen") {
+        settings.scales_predate_fit = false;
+    }
     if given.contains("target") {
         locked.push("host");
         // main() has already rejected anything that is neither "auto" nor HOST:PORT.
@@ -490,6 +536,7 @@ pub fn apply_args(settings: &mut Settings, args: &Args, given: &HashSet<String>)
         gaze_gain_x,
         gaze_gain_up,
         gaze_gain_down,
+        gaze_roll_deg,
         gaze_down_hold_x_deg,
         gaze_offset_x_left,
         gaze_offset_x_right,
@@ -679,6 +726,30 @@ mod tests {
     }
 
     #[test]
+    fn scales_from_before_lid_widen_are_marked() {
+        let old = r#"{"lid_scale_left": 1.15, "lid_fit_closed_left": 0.2, "lid_fit_up_left": 0.9,
+            "lid_fit_open_left": 0.85, "lid_fit_down_left": 0.7}"#;
+        assert!(merged(old, &[]).unwrap().0.scales_predate_fit);
+        // Written by 0.6.0 (lid_widen in it), or no scale at all, or --lid-widen given: not
+        let new = old.replacen('{', r#"{"lid_widen": "normal", "#, 1);
+        assert!(!merged(&new, &[]).unwrap().0.scales_predate_fit);
+        assert!(!merged(r#"{"lid_scale_left": null}"#, &[]).unwrap().0.scales_predate_fit);
+        assert!(!merged(old, &["--lid-widen", "low"]).unwrap().0.scales_predate_fit);
+    }
+
+    #[test]
+    fn lid_widen_is_one_of_four() {
+        for (text, kind) in [("off", Widen::Off), ("low", Widen::Low), ("normal", Widen::Normal), ("high", Widen::High)] {
+            let (settings, _) = merged(&format!(r#"{{"lid_widen": "{text}"}}"#), &[]).unwrap();
+            assert_eq!(settings.lid_widen, kind);
+        }
+        assert_eq!(merged("{}", &[]).unwrap().0.lid_widen, Widen::Normal);
+        assert!(merged(r#"{"lid_widen": "max"}"#, &[]).is_err());
+        let (settings, locked) = merged(r#"{"lid_widen": "off"}"#, &["--lid-widen", "high"]).unwrap();
+        assert_eq!((settings.lid_widen, locked), (Widen::High, vec!["lid_widen"]));
+    }
+
+    #[test]
     fn eye_tracking_active_is_bool_float_or_off() {
         for (text, kind) in [("bool", ActiveType::Bool), ("float", ActiveType::Float), ("off", ActiveType::Off)] {
             let (settings, _) = merged(&format!(r#"{{"eye_tracking_active": "{text}"}}"#), &[]).unwrap();
@@ -729,6 +800,8 @@ mod tests {
         assert!(merged(r#"{"gaze_gain_x": 0.4}"#, &[]).is_err());
         assert!(merged(r#"{"gaze_offset_x": 0.5, "gaze_gain_down": 0.5}"#, &[]).is_ok());
         assert!(merged(r#"{"gaze_down_hold_x_deg": -1}"#, &[]).is_err());
+        assert!(merged(r#"{"gaze_roll_deg": 20.5}"#, &[]).is_err());
+        assert!(merged(r#"{"gaze_roll_deg": -20}"#, &[]).is_ok());
         assert!(merged(r#"{"gaze_down_hold_x_deg": 0}"#, &[]).is_ok());
         assert!(merged(r#"{"gaze_offset_x_left": 0.6}"#, &[]).is_err());
         assert!(merged(r#"{"gaze_gain_x_right": 3}"#, &[]).is_err());
@@ -741,6 +814,19 @@ mod tests {
             "lid_fit_down_left": 0.55}"#, &[]).is_err());
         assert!(merged(r#"{"lid_fit_closed_left": -0.1, "lid_fit_up_left": 0.9, "lid_fit_open_left": 0.9,
             "lid_fit_down_left": 0.8}"#, &[]).is_err());
+    }
+
+    #[test]
+    fn livelink_is_an_output() {
+        let (settings, _) = merged(r#"{"output": "livelink"}"#, &[]).unwrap();
+        assert_eq!(settings.output, OutputKind::LiveLink);
+        assert_eq!(settings.port(), 11111);
+        let (settings, locked) = merged(r#"{"output": "etvr"}"#, &["--output", "livelink"]).unwrap();
+        assert_eq!(settings.output, OutputKind::LiveLink);
+        assert_eq!(locked, ["output"]);
+        // The status file and the panel spell it the same way
+        assert_eq!(serde_json::to_string(&OutputKind::LiveLink).unwrap(), r#""livelink""#);
+        assert!(merged(r#"{"output": "live-link"}"#, &[]).is_err());
     }
 
     #[test]
@@ -781,6 +867,10 @@ mod tests {
         let (settings, locked) = merged("{}", &["--gaze-offset-y", "-0.1", "--gaze-gain-down", "1.2"]).unwrap();
         assert_eq!((settings.gaze_offset_y, settings.gaze_gain_down), (-0.1, 1.2));
         assert_eq!(locked, ["gaze_offset_y", "gaze_gain_down"]);
+        let (settings, locked) = merged(r#"{"gaze_roll_deg": 3.5}"#, &["--gaze-roll-deg", "-6.5"]).unwrap();
+        assert_eq!(settings.gaze_roll_deg, -6.5);
+        assert_eq!(locked, ["gaze_roll_deg"]);
+        assert_eq!(merged(r#"{"gaze_roll_deg": 3.5}"#, &[]).unwrap().0.gaze_roll_deg, 3.5);
     }
 
     #[test]

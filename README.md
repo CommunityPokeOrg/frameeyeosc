@@ -17,14 +17,14 @@ This is a fork of [konsti219/frameeyeosc](https://github.com/konsti219/frameeyeo
 - Eyelids calibrate themselves. It learns how far each of your eyes opens when relaxed, so if your face or the headset fit makes one eye look more open, the avatar still looks even. Winks still come through.
 - It runs as a service that starts with SteamVR and restarts if it stops.
 - Settings live in a file that is picked up while running, and an optional panel on the SteamVR dashboard changes them from inside the headset.
-- It can send in the format the ETVR Tracking Module for VRCFaceTracking reads (see [VRCFaceTracking (ETVR) mode](#vrcfacetracking-etvr-mode)).
+- It can send in the format the ETVR Tracking Module for VRCFaceTracking reads (see [VRCFaceTracking (ETVR) mode](#vrcfacetracking-etvr-mode)), or as Live Link Face packets for VRCFaceTracking's LiveLink module, which also carries widened eyes (see [VRCFaceTracking (LiveLink) mode](#vrcfacetracking-livelink-mode)).
 
 ## Requirements
 
 - A Steam Frame with Developer Mode on and SSH access (Settings > System > Developer Mode, then set a password under Developer). Choose a strong password: with SSH on, anyone on your network who knows it can log in to the headset.
 - PC VRChat streamed with Steam Link, OSC enabled in VRChat (Action Menu > Options > OSC > Enabled).
-- An avatar with VRCFaceTracking eye parameters (`FT/v2/EyeLeftX`, `EyeLidLeft`, ...) as floats. Avatars that pack parameters into binary bits are not supported when sending to VRChat directly. frameeyeosc also sends `EyeTrackingActive` as a bool; some avatars declare it as a float and stop tracking on a bool. For those, choose "Float" under "EyeTrackingActive type" on the Basic tab (`eye_tracking_active`), or "Off" to not send it at all.
-- For the VRCFaceTracking (ETVR) mode: VRCFaceTracking on the PC with the ETVR Tracking Module.
+- An avatar with VRCFaceTracking eye parameters (`FT/v2/EyeLeftX`, `EyeLidLeft`, ...) as floats. Avatars that pack parameters into binary bits are not supported when sending to VRChat directly. frameeyeosc also sends `EyeTrackingActive` as a bool; some avatars declare it as a float and stop tracking on a bool. For those, choose "Float" under "EyeTrackingActive type" on the Output tab (`eye_tracking_active`), or "Off" to not send it at all.
+- For the VRCFaceTracking (ETVR) mode: VRCFaceTracking on the PC with the ETVR Tracking Module. For the LiveLink mode: VRCFaceTracking with the LiveLink module.
 
 ## Install
 
@@ -63,7 +63,7 @@ cd frameeyeosc
 
 No sudo is needed. Everything goes into your home directory (`~/.local/bin`, `~/.config`, `~/.local/share`), so SteamOS updates don't remove it. Run the same command again to update. Without `--with-panel` an installed panel is left as it is.
 
-After that, turn off Steam Link's own OSC output on your PC (SteamVR settings > Steam Link > OSC). Steam Link sends its own unsmoothed eye data to VRChat, and with both running, two sources fight over the avatar's eyes. This is needed in the ETVR mode too, where VRCFaceTracking drives the avatar's eyes.
+After that, turn off Steam Link's own OSC output on your PC (SteamVR settings > Steam Link > OSC). Steam Link sends its own unsmoothed eye data to VRChat, and with both running, two sources fight over the avatar's eyes. This is needed in the ETVR and LiveLink modes too, where VRCFaceTracking drives the avatar's eyes.
 
 #### Updating from a version before 0.4.0
 
@@ -83,26 +83,27 @@ From 0.4.0 on, the panel's "Update" button does the update. The panel's Advanced
 
 `./install.sh --with-panel` adds an "Eye" panel to the SteamVR dashboard. It starts together with SteamVR from the next SteamVR start; to open it right away, pick "frameeyeosc panel" under Launch program (+) on the dashboard.
 
-| Basic | Gaze |
+| Basic | Output |
 |---|---|
-| ![The Basic tab](docs/images/panel-basic-en_2026-09-28_06-07-01.png) | ![The Gaze tab](docs/images/panel-gaze-en_2026-09-28_06-07-01.png) |
-| **Eye fit** | **Eyelids** |
-| ![The Eye fit tab](docs/images/panel-eyefit-en_2026-09-28_06-07-01.png) | ![The Eyelids tab](docs/images/panel-lids-en_2026-09-28_06-07-01.png) |
-| **Advanced** | |
-| ![The Advanced tab](docs/images/panel-advanced-en_2026-09-28_06-07-01.png) | |
+| ![The Basic tab](docs/images/panel-basic-en_2026-10-01_02-00-00.png) | ![The Output tab](docs/images/panel-output-en_2026-10-01_02-00-00.png) |
+| **Gaze** | **Eye fit** |
+| ![The Gaze tab](docs/images/panel-gaze-en_2026-10-01_02-00-00.png) | ![The Eye fit tab](docs/images/panel-eyefit-en_2026-10-01_02-00-00.png) |
+| **Eyelids** | **Advanced** |
+| ![The Eyelids tab](docs/images/panel-lids-en_2026-10-01_02-00-00.png) | ![The Advanced tab](docs/images/panel-advanced-en_2026-10-01_02-00-00.png) |
 
 - The left column always shows what frameeyeosc is doing: sending or paused, where it sends to, messages per second, how many samples a second the eye tracker delivers (marked "low" below 60), both eyelids and the gaze (raw and sent), and a config error if there is one.
-- Basic: pause sending, VRChat or VRCFaceTracking (ETVR), target PC (automatic, fixed to the PC it sends to now, or typed: see below), port, language (Japanese / English), start with SteamVR, reset all, quit.
+- Basic: pause sending, where to send (three cards: VRChat directly, VRCFT (LiveLink), marked recommended, and VRCFT (ETVR), each saying whether wide eyes come through, how others see your eyes, and whether VRCFaceTracking is needed), language (Japanese / English), start with SteamVR, reset all, quit.
+- Output: target PC (automatic, fixed to the PC it sends to now, or typed: see below) and port. For VRChat directly also the parameter prefix and the EyeTrackingActive type; for LiveLink and ETVR what to set up in VRCFaceTracking on the PC instead.
 - Gaze: smoothing on or off, light / medium / strong presets and the three filter values, deadzone, holding the gaze while blinking, per-eye gaze, skipping unreliable gaze, removing one-sample glitches.
-- Eye fit: one button that fits your gaze and eyelids in about 20 seconds (see [Eye fit](#eye-fit)), re-centering the gaze only, the result with "Reset", and the values by hand under "Fine-tune".
-- Eyelids: auto calibration and its learned values, per-eye scales, the four openness marks drawn over each eye's live openness (blink and open wide to set them), left/right sync, keeping blinks visible (hold time and closing both eyes), eyelid smoothing.
-- Advanced: parameter prefix, the version with checking for and installing updates, showing gaze dots (debug) and their distance, file locations, options locked by the command line.
+- Eye fit: one button that fits your gaze and eyelids in about 20 seconds (see [Eye fit](#eye-fit)), fitting straight ahead again, what to fit by itself when you put the headset on ("When put on": nothing, re-center, or re-center + tilt), the result with "Reset", and the values by hand under "Fine-tune".
+- Eyelids: auto calibration and its learned values, per-eye scales, the four openness marks drawn over each eye's live openness (blink and open wide to set them), left/right sync, keeping blinks visible (hold time and closing both eyes), eyelid smoothing. Once the eyes are fitted, "Widen" (Off / Less / Normal / More) takes the auto calibration's place, a line says whether an eye widens with the other one, and the marks fold away under "Fine-tune" (3 and 4 greyed there: they are for eyes without a fit).
+- Advanced: the version with checking for and installing updates (and the automatic check on or off), diagnostics (showing gaze dots and their distance, recording the eye log: see below), and files and process (file locations, frameeyeosc's PID, options locked by the command line).
 
-The panel writes `config.json` and reads the status file. To pick its default language, it also reads the `language` line of Steam's `~/.steam/registry.vdf` once at startup (read only). For updates it runs `~/.local/share/frameeyeosc/frame-update.sh` (see above). Closing it, quitting it, or not installing it doesn't stop frameeyeosc. While it isn't open on the dashboard it draws nothing. Besides running the update check, the only thing it reads then is the update state file (`~/.cache/frameeyeosc/update-state.json`), about twice a second. The exceptions are an eye fit (it then also reads the status file and shows the dot with the dashboard closed, until the fit is over) and the debug gaze dots while they're switched on (it then listens on their socket and moves the dots about 90 times a second while samples arrive, and reads the status file and checks `config.json` for changes 10 times a second). Its "Start with SteamVR" switch enables or disables its systemd user unit (`frameeyeosc-panel.service`). Build notes and debugging options are in [panel/README.md](panel/README.md) (Japanese).
+The panel writes `config.json` and reads the status file. To pick its default language, it also reads the `language` line of Steam's `~/.steam/registry.vdf` once at startup (read only). For updates it runs `~/.local/share/frameeyeosc/frame-update.sh` (see above). Closing it, quitting it, or not installing it doesn't stop frameeyeosc. While it isn't open on the dashboard it draws nothing. Besides running the update check, the only thing it reads then is the update state file (`~/.cache/frameeyeosc/update-state.json`), about twice a second. The exceptions are an eye fit (it then also reads the status file and shows the dot with the dashboard closed, until the fit is over) and the debug gaze dots while they're switched on (it then listens on their socket and moves the dots about 90 times a second while samples arrive, and reads the status file and checks `config.json` for changes 10 times a second), and "When put on" while the gaze is fitted (it then reads the status file every 0.5 s while the dashboard is closed, to notice the headset being put on). Its "Start with SteamVR" switch enables or disables its systemd user unit (`frameeyeosc-panel.service`). Build notes and debugging options are in [panel/README.md](panel/README.md) (Japanese).
 
 ### Setting the target PC by hand
 
-"Auto" sends to the PC Steam Link is streaming from. If that is the wrong PC, press "Enter IP" in the Target PC row on the Basic tab. A keypad opens: type the PC's IPv4 address (for example `192.168.1.20`) and press "OK". Leave the port out; it goes in the Port row. The panel writes it to `host` in `config.json`, and the row shows "Manual 192.168.1.20". "Auto" switches back. To use a host name instead of an address, set `host` in `config.json` by hand; the row then shows "Manual" and the name, and "Auto" still switches back.
+"Auto" sends to the PC Steam Link is streaming from. If that is the wrong PC, press "Enter IP" in the Target PC row on the Output tab. A keypad opens: type the PC's IPv4 address (for example `192.168.1.20`) and press "OK". Leave the port out; it goes in the Port row. The panel writes it to `host` in `config.json`, and the row shows "Manual 192.168.1.20". "Auto" switches back. To use a host name instead of an address, set `host` in `config.json` by hand; the row then shows "Manual" and the name, and "Auto" still switches back.
 
 ## Settings
 
@@ -114,12 +115,12 @@ Settings are in `~/.config/frameeyeosc/config.json`. The panel writes it, and yo
 
 | Key | Option | Default | What it does |
 |---|---|---|---|
-| `sending` | | `true` | `false` pauses sending (in VRChat mode `EyeTrackingActive=false` is sent once, as `eye_tracking_active` says) |
-| `output` | `--output` | `"vrchat"` | `"vrchat"` sends avatar parameters to VRChat, `"etvr"` sends to VRCFaceTracking's ETVR Tracking Module |
+| `sending` | | `true` | `false` pauses sending (in VRChat mode `EyeTrackingActive=false` is sent once, as `eye_tracking_active` says; in LiveLink mode relaxed open eyes looking ahead) |
+| `output` | `--output` | `"vrchat"` | `"vrchat"` sends avatar parameters to VRChat, `"etvr"` sends to VRCFaceTracking's ETVR Tracking Module, `"livelink"` sends Live Link Face packets to VRCFaceTracking's LiveLink module |
 | `host` | `--target` | `"auto"` | `"auto"` = the PC Steam Link is streaming from, else an IP address or host name without a port |
-| `port` | `--port`, `--target` | `null` | `null` = 9000 for `vrchat`, 8889 for `etvr` |
-| `prefix` | `--prefix` | `"/FT"` | Parameter name prefix; `""` for none |
-| `eye_tracking_active` | `--eye-tracking-active` | `"bool"` | How `EyeTrackingActive` is sent in VRChat mode: `"bool"` (true / false), `"float"` (1.0 / 0.0; some avatars need it) or `"off"` (never, not even the one-time "not active" on pausing or losing tracking). ETVR mode never sends it |
+| `port` | `--port`, `--target` | `null` | `null` = 9000 for `vrchat`, 8889 for `etvr`, 11111 for `livelink` |
+| `prefix` | `--prefix` | `"/FT"` | Parameter name prefix; `""` for none. Not used in LiveLink mode |
+| `eye_tracking_active` | `--eye-tracking-active` | `"bool"` | How `EyeTrackingActive` is sent in VRChat mode: `"bool"` (true / false), `"float"` (1.0 / 0.0; some avatars need it) or `"off"` (never, not even the one-time "not active" on pausing or losing tracking). ETVR and LiveLink modes never send it |
 | `raw` | `--raw` | `false` | No smoothing, and none of the time-based steps (glitch removal, gaze holding, the quality check, blink hold, holding the sideways gaze far down) |
 | `gaze_min_cutoff` | `--gaze-min-cutoff` | `0.4` | Lower = steadier gaze at rest, more lag |
 | `gaze_beta` | `--gaze-beta` | `0.8` | Higher = follows fast eye movements with less lag |
@@ -131,21 +132,24 @@ Settings are in `~/.config/frameeyeosc/config.json`. The panel writes it, and yo
 | `despike` | `--no-despike` | `true` | Remove one-sample glitches in gaze and openness (median of 3 samples; everything arrives ~11 ms later) |
 | `lid_min_cutoff` / `lid_beta` | `--lid-min-cutoff` / `--lid-beta` | `6.0` / `5.0` | Eyelid smoothing, the same way as for gaze |
 | `lid_closed` / `lid_open` / `lid_widen_start` / `lid_wide` | `--lid-closed` ... | `0.30` / `0.80` / `0.92` / `1.00` | How Frame eye openness maps onto closed / relaxed / widened |
-| `lid_scale_left` / `lid_scale_right` | `--lid-scale-left` / `--lid-scale-right` | `null` (learned) | Fixed per-eye multiplier instead of the learned one |
+| `lid_widen` | `--lid-widen` | `"normal"` | How easily an eye with an eye fit widens: `"off"`, `"low"`, `"normal"` or `"high"` (see [Eye fit](#eye-fit)). Eyes without a fit use `lid_widen_start` / `lid_wide` instead |
+| `lid_scale_left` / `lid_scale_right` | `--lid-scale-left` / `--lid-scale-right` | `null` (learned) | Fixed per-eye multiplier instead of the learned one. For an eye with an eye fit, a fine-tune after the fit instead: 0.9 makes that eye read 10% less open (it closes sooner and widens less), `null` = 1.0. The full eye fit and its "Reset" set it back to `null` |
 | `lid_calibration` | `--no-lid-calibration` | `true` | Learn eyelid calibration |
 | `lid_sync` | `--lid-sync` | `0.4` | Evens out small left/right eyelid differences; larger ones (winks) pass through. `0` turns it off |
 | `blink_hold_ms` | `--blink-hold-ms` | `80` | Once an eye is closed, it is sent fully closed for at least this long, so short blinks reach other players. `0` turns it off |
 | `blink_sync_below` | `--blink-sync-below` | `0.35` | When one eye is closed and the other is below this (VRCFT scale), both are sent closed. Winks, with the other eye open, pass through. `0` turns it off |
 | `gaze_offset_x` / `gaze_offset_y` | `--gaze-offset-x` / `--gaze-offset-y` | `0` / `0` | The gaze that counts as straight ahead, from -0.5 to 0.5 (1.0 = 45°; + is right / up). Set by the eye fit |
 | `gaze_gain_x` / `gaze_gain_up` / `gaze_gain_down` | `--gaze-gain-x` / `--gaze-gain-up` / `--gaze-gain-down` | `1.0` | How far the gaze moves from there, sideways, up and down, from 0.5 to 2. Set by the eye fit |
+| `gaze_roll_deg` | `--gaze-roll-deg` | `0` | How far the headset sits tilted, in degrees (-20 to 20; positive: looking right reads higher). The tilt is undone around straight ahead, before the gains, for both eyes and the combined gaze. Set by the eye fit |
 | `gaze_offset_x_left` / `_right`, `gaze_gain_x_left` / `_right` | `--gaze-offset-x-left` ... | `null` | Each eye's own sideways zero point and gain, used for the per-eye gaze (`independent_eyes`). Set by the eye fit so that each eye points where it really has to at 2 m (they turn in a little); `null` = use `gaze_offset_x` / `gaze_gain_x`. The up/down gaze is shared by both eyes on the Frame, so there is no per-eye one |
 | `gaze_down_hold_x_deg` | `--gaze-down-hold-x-deg` | `24` | Looking far down, the Frame's sideways gaze jumps (about 19° to the right). Below this many degrees down, the sideways gaze (both eyes and combined) fades into its value from just before, fully held 10° further down. The angle is the tracker's own, before the zero point and gains. Up and down are not affected. `0` turns it off |
 | `gaze_debug_dots` | | `false` | Debug: show a small dot 1 m ahead (`gaze_debug_dots_distance_m`) where the gaze being sent points (one per eye, from each eye, with `independent_eyes`: left cyan, right orange), so you can see what the avatar gets. frameeyeosc then passes every processed sample to the panel over a Unix socket in its status folder; nothing leaves the headset, and nothing is passed while it's off. Hidden during an eye fit |
-| `lid_fit_closed_left` ... `lid_fit_down_right` | | `null` | Each eye's Frame openness with the eyes shut, and open while looking up, straight ahead and down (`closed` / `up` / `open` / `down`, `_left` / `_right`). Set by the eye fit; `null` = not fitted. A fitted eye uses these instead of the learned calibration and `lid_scale_*`, and doesn't close when you look down |
+| `lid_fit_closed_left` ... `lid_fit_down_right` | | `null` | Each eye's Frame openness with the eyes shut, and open while looking up, straight ahead and down (`closed` / `up` / `open` / `down`, `_left` / `_right`). Set by the eye fit; `null` = not fitted. A fitted eye uses these instead of the learned calibration, and doesn't close when you look down; `lid_scale_*` then fine-tunes the result |
 | `calibration_reset` | | `0` | Increase it to make the eyelid calibration start over |
 | `language` | | Steam's language | Panel language, `"ja"` or `"en"`. Without it, the panel is in Japanese if Steam is set to Japanese and in English otherwise |
 | `gaze_debug_dots_distance_m` | | `1.0` | How far ahead the debug gaze dots are (0.3–2.0 m, "Dot distance" on the Advanced tab), the same with the dashboard open or closed. Beyond about 1.2 m the open dashboard hides them. The panel uses it; frameeyeosc ignores it |
 | `fit_sounds` | | `true` | The panel plays short sounds during the eye fit. frameeyeosc itself ignores it |
+| `auto_recenter` | | `"center"` | What the panel fits by itself once each time the headset is put on (when the gaze is fitted): `"center"` straight ahead only (one dot, 2.5 seconds), `"tilt"` straight ahead and the tilt (straight ahead, up and down, about 7.5 seconds), `"off"` nothing. The button next to "Fit again" runs the same (`"center"` when it is off). frameeyeosc itself ignores it |
 | `update_check` | | `true` | The panel looks for a new release on GitHub at start and once a day (an hour later after a failed check). frameeyeosc itself ignores it |
 
 Command-line options win over the file. They go in `~/.config/frameeyeosc/env` (then `systemctl --user restart frameeyeosc`):
@@ -165,7 +169,7 @@ frameeyeosc writes what it is doing to `$XDG_RUNTIME_DIR/frameeyeosc/status.json
 frameeyeosc can send in the format that the ETVR Tracking Module for VRCFaceTracking reads. VRCFaceTracking then drives the avatar, so the Frame's eyes can be combined with other trackers such as a mouth tracker. The ETVR Tracking Module is a third-party module ([EyeTrackVR/ETVRTrackingModule](https://github.com/EyeTrackVR/ETVRTrackingModule)); frameeyeosc is not part of it.
 
 1. On the PC, install VRCFaceTracking and add the ETVR Tracking Module from its module registry. By default it listens on UDP 8889.
-2. Switch the output to "VRCFaceTracking (ETVR)" in the panel, or set `"output": "etvr"` (or `--output etvr`). The destination works as usual (the Steam Link PC or a fixed host) on port 8889.
+2. Choose "VRCFT (ETVR)" under "Send to" on the panel's Basic tab, or set `"output": "etvr"` (or `--output etvr`). The destination works as usual (the Steam Link PC or a fixed host) on port 8889.
 
 Notes:
 
@@ -175,6 +179,22 @@ Notes:
 - After VRCFaceTracking starts, its window can show "Not Responding" for close to two minutes while the module loads. It isn't broken; wait.
 - The PC has to accept UDP 8889. VRCFaceTracking's ModuleProcess usually has an inbound firewall rule already.
 
+## VRCFaceTracking (LiveLink) mode
+
+frameeyeosc can also send Live Link Face packets (the format of Epic's Live Link Face iPhone app) to VRCFaceTracking's LiveLink module. Unlike the ETVR mode, widened eyes come through, so avatars that take their eyelids from VRCFaceTracking, including avatars with binary (bit-packed) parameters, show them too. The LiveLink module comes from the VRCFaceTracking project ([VRCFaceTracking/LiveLinkTrackingModule](https://github.com/VRCFaceTracking/LiveLinkTrackingModule)); frameeyeosc is not part of it.
+
+1. On the PC, install VRCFaceTracking and add the "LiveLink" module from its module registry. Turn off or remove other eye tracking modules (such as the ETVR Tracking Module), so the eyes come from the LiveLink module. It listens on UDP 11111.
+2. Choose "VRCFT (LiveLink)" under "Send to" on the panel's Basic tab, or set `"output": "livelink"` (or `--output livelink`). The left column then shows "VRCFT (LiveLink) → …", and the Output tab lists these steps. The destination works as usual (the Steam Link PC or a fixed host) on port 11111.
+3. Let UDP 11111 in to VRCFaceTracking in Windows Defender Firewall (allow VRCFaceTracking when Windows asks, or add an inbound rule for UDP port 11111). Without it nothing arrives.
+
+Notes:
+
+- Each eye's eyelid, widening and gaze are sent (the ARKit shapes EyeBlink and EyeWide, and the eye's yaw and pitch). VRCFaceTracking's eyelid then comes out the same as in VRChat mode (0 closed, 0.75 relaxed, 1 widened), and so does the gaze. Squint, mouth, brows and head are sent as 0.
+- The module doesn't smooth anything, so frameeyeosc's own smoothing settings apply as they are.
+- It is sent at up to 50 packets a second (always the newest sample): the module reads one packet every 10-16 ms, and sending every eye sample (90 or more a second) made the eyes lag more and more.
+- VRCFaceTracking keeps the last values it got. So when the eye data stops (the headset comes off) or you pause or switch the output, frameeyeosc sends relaxed open eyes looking straight ahead once. While sending is on without eye data, it repeats that twice a second: the module only starts if something arrives within 180 seconds of VRCFaceTracking loading it (if it gave up, reload the module in VRCFaceTracking). Paused, nothing is sent.
+- `prefix` and `eye_tracking_active` don't apply: VRCFaceTracking sends the avatar parameters.
+
 ## Eye fit
 
 If the avatar's eyes look a little off (looking too far down, or eyelids that close when you look down), the panel's "Eye fit" tab fits them to you. Press "Fit my eyes", then close the dashboard:
@@ -182,13 +202,15 @@ If the avatar's eyes look a little off (looking too far down, or eyelids that cl
 1. A dot appears straight ahead, then 15° up, 15° down, 20° left and 20° right, 2.5 seconds each. Keep your head still and follow it with your eyes. The ring around the dot runs down, and the seconds being measured (2, 1) show under it.
 2. Then the target says "Close your eyes for 3 s" and counts down 3, 2, 1. Close them at the end of the count and keep them closed for 3 seconds, until the chime. It then says "Open them".
 
-It takes about 20 seconds. Opening the dashboard stops it. Soft sounds mark each step, so you can follow it without watching the panel: a pop when a dot is in place, a pip when it's measured, a low buzz when it's measured again, a tick for each of 3, 2, 1, a chime when you can open your eyes, and a rising chime at the end (two falling tones if it stops). Turn them off with "♪ Sounds" on the tab. A step where the gaze is unsteady (or the eyes aren't shut in the last step) is measured again, up to three times. The result shows on the tab. From then on the one button there says "Fit again", and "Reset" undoes the fit. After putting the headset back on, "Re-center only" measures straight ahead again (about 3 seconds). The values can also be changed by hand under "Fine-tune".
+It takes about 20 seconds. Opening the dashboard stops it. Soft sounds mark each step, so you can follow it without watching the panel: a pop when a dot is in place, a pip when it's measured, a low buzz when it's measured again, a tick for each of 3, 2, 1, a chime when you can open your eyes, and a rising chime at the end (two falling tones if it stops). Turn them off with "♪ Sounds" on the tab. A step where the gaze is unsteady (or the eyes aren't shut in the last step) is measured again, up to three times. The result shows on the tab. From then on the one button there says "Fit again", and "Reset" undoes the fit. Straight ahead shifts a little each time the headset is put on, so once the gaze is fitted the panel measures it again by itself: about 3 seconds after you put the headset on (with the dashboard closed), a dot shows straight ahead for 2.5 seconds; look at it. The gains, the tilt and the eyelids stay as they are. The "When put on" row on the tab chooses that ("Re-center", the default), "Re-center + tilt" (the dot, then up and down, 2.5 seconds each, and the tilt measured again) or "Nothing" (`auto_recenter`), and the button next to "Fit again" runs the same by hand (re-center only when it is "Nothing"). Re-centering only is the default because the tilt measured this way scatters by about ±5° from one try to the next (+3.1°, -8.9°, +2.6° and +0.6° within three minutes of one wearing), about as much as it corrects. The values can also be changed by hand under "Fine-tune".
 
 What the fit sets:
 
 - Gaze: where straight ahead is (`gaze_offset_x` / `gaze_offset_y`) and how far the gaze moves sideways, up and down (`gaze_gain_x`, `gaze_gain_up`, `gaze_gain_down`), so that looking 15° up sends 15° up.
+- The headset's tilt (`gaze_roll_deg`), from how the move from the down dot to the up one leans: when the headset sits tilted, looking sideways also moves the gaze up or down (at 8°, about 3° for 20° sideways). Between wearings it was seen from +1.1° to +8.4°. The line between the side dots scattered more from fit to fit (three fits in a row: -3.8°, +2.7°, -2.1° from the sides against +2.0°, +2.4°, +1.7° from up/down), so it is only logged next to it. frameeyeosc turns the gaze back by it around straight ahead, before the gains.
 - Each eye's sideways gaze, for "Move eyes separately" (`gaze_offset_x_left/right`, `gaze_gain_x_left/right`). The dots are 2 m away, so each eye's true angle to a dot is not the angle from between the eyes: seen from between the eyes a dot straight ahead is at 0°, but the left eye turns about 0.9° right and the right eye about 0.9° left to see it (with a 63 mm distance between the eyes). Each eye is fitted to its own angles, using the distance between the eyes that SteamVR reports (63 mm if it doesn't), so the avatar's eyes turn in naturally.
-- Eyelids: each eye's openness with the eyes shut, and open while looking up, straight ahead and down (`lid_fit_*`). The Frame reads an eye as less open when you look down (about 30% less 20° down), so a fitted eye is judged against what is normal for where you look, and doesn't close when you only look down. A fitted eye counts as closed below 30% of the way from its shut to its open reading. The learned calibration and `lid_scale_*` are not used for fitted eyes, and the "Closed" and "Open" lid marks give way to the fit (widening works as before). On a recording, the fit cut the times an eye looking down was sent a third closed from 35 to 5, and more blinks were sent fully closed (53 of 60, from 50).
+- Eyelids: each eye's openness with the eyes shut, and open while looking up, straight ahead and down (`lid_fit_*`). The Frame reads an eye as less open when you look down (about 30% less 20° down), so a fitted eye is judged against what is normal for where you look, and doesn't close when you only look down. A fitted eye counts as closed below 30% of the way from its shut to its open reading. The learned calibration is not used for fitted eyes, and the lid marks give way to the fit. If one eye still looks too open or too closed, "Eye scales" on the Eyelids tab fine-tunes it after the fit (`lid_scale_*`: 0.9 = 10% less open); a new full fit starts it over at 1.0. On a recording, the fit cut the times an eye looking down was sent a third closed from 35 to 5, and more blinks were sent fully closed (53 of 60, from 50).
+- Widening can't be measured: the Frame's openness rises only about 0.05 when the eyes are opened wide (two fits measured +0.019 / -0.009 and +0.048 / +0.047), and it stops at 1.000. So a fitted eye widens by "Widen" on the Eyelids tab (`lid_widen`), counted from its own expected open reading for where you look: "Less" from 0.10 above it (full at 0.18), "Normal" from 0.07 (full at 0.14), "More" from 0.04 (full at 0.10), "Off" never. A relaxed eye wanders above its usual reading too; over the recordings so far it read visibly widened (40% of the way or more) by accident 2.4% (Less), 6.3% (Normal) or 14.9% (More) of the time. An eye whose straight-ahead reading leaves no room below 1.000 (one user's left eye read 0.945) widens with the other eye; with neither, nothing widens.
 
 The dot is fixed to the headset 2 m ahead and only shows while the dashboard is closed. How it works: the panel writes a `gaze_capture` request into `config.json`, frameeyeosc averages the tracker's gaze and each eye's openness for as long as the panel asks (2 seconds skipping the first 0.3 s for a dot, 3 seconds skipping the first 0.5 s with the eyes shut; samples with the eyes shut are skipped except in the last step) and reports the averages in the status file with how many samples came in and at what rate. A dot counts when at least 60% of the samples that came in were usable (at least 12, and never more than 45 are needed), since the tracker's rate varies (90 to 136 a second while streaming, 15 has been seen), and its gaze spread is at most 2.7°. The panel turns them into the settings. Each measurement is logged (`journalctl --user -u frameeyeosc`). With the defaults nothing changes.
 
@@ -213,7 +235,7 @@ Eyelid calibration is automatic. For the first 20 seconds after you put the head
 
 ## Known issues
 
-- Avatars that use binary (bit-packed) VRCFT parameters are not supported when sending to VRChat directly. In the ETVR mode, the avatar side is up to VRCFaceTracking.
+- Avatars that use binary (bit-packed) VRCFT parameters are not supported when sending to VRChat directly. In the ETVR and LiveLink modes, the avatar side is up to VRCFaceTracking; use the LiveLink mode for widened eyes.
 
 ## Privacy
 
@@ -261,9 +283,11 @@ gh release upload v0.4.0 dist/frameeyeosc-0.4.0-steamframe-aarch64.tar.gz dist/S
 To tune the eye processing against real data, record the eye tracker's raw samples (nothing is sent while recording, so it can run next to the service), then replay the file. The replay prints a few numbers for the current settings next to the same settings with the 0.4.0 steps turned off; settings come from `config.json` and options as usual. Recordings are personal data, so keep them out of the repository.
 
 ```sh
-frameeyeosc --record ~/eyes.csv              # stop with Ctrl+C
+frameeyeosc --record ~/eyes.csv              # stop with Ctrl+C (or SIGINT / SIGTERM); the file is complete up to the stop
 frameeyeosc --replay ~/eyes.csv --blink-hold-ms 120 --replay-out ~/processed.csv   # also writes the processed values
 ```
+
+The panel can make the same recording while you play: "Eye log" on the Advanced tab starts it and turns into "Stop 1:23"; the left column shows "Recording 1:23" in red meanwhile. It stops by itself after 60 minutes, and when the panel exits. The files go to `~/.local/share/frameeyeosc/recordings/`: `eyes_YYYY-MM-DD_HH-MM-SS.csv` (about 2.3 MB a minute), the `config.json` in use as `eyes_….config.json`, and the recorder's messages as `eyes_….log`. Nothing leaves the headset; delete them when you no longer need them.
 
 ## License
 

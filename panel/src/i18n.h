@@ -31,6 +31,7 @@ struct UiText {
     const char* destination;        ///< "Destination" label
     const char* outputVrchatShort;  ///< "VRChat" in the destination line
     const char* outputEtvrShort;    ///< "VRCFaceTracking" in the destination line
+    const char* outputLivelinkShort;  ///< "VRCFT (LiveLink)" in the destination line
     const char* searchingPc;        ///< auto target not found yet
     const char* modeAuto;           ///< target chosen automatically
     const char* modeFixed;          ///< target fixed
@@ -54,6 +55,7 @@ struct UiText {
 
     // Tabs
     const char* tabBasic;
+    const char* tabOutput;
     const char* tabGaze;
     const char* tabGazeFit;
     const char* tabLids;
@@ -74,9 +76,13 @@ struct UiText {
     const char* send;
     const char* stop;
     const char* rowOutput;
-    const char* hintOutput;
-    const char* outputVrchat;
+    const char* hintOutput;         ///< what "sync" means on the cards
+    const char* outputVrchat;       ///< the destination cards' titles
+    const char* outputLivelink;
     const char* outputEtvr;
+    const char* outputRecommended;  ///< the tag on the LiveLink card
+    /** Each card's three lines (VRChat, LiveLink, ETVR): wide eyes, sync, VRCFT. A leading "✓ " or "✗ " is drawn. */
+    const char* outputMarks[3][3];
     const char* rowActiveType;      ///< how EyeTrackingActive is sent
     const char* hintActiveType;
     const char* activeOff;
@@ -93,8 +99,16 @@ struct UiText {
     const char* hostErrEmpty;
     const char* hostErrIpv4;
     const char* rowPort;
-    const char* portDefaultHint;    ///< port follows the output type
+    const char* portDefaultVrchat;  ///< the port row's hint: the default port of the output type
+    const char* portDefaultLivelink;
+    const char* portDefaultEtvr;
     const char* portReset;          ///< back to default port
+    // Output tab, for LiveLink and ETVR: what to set up in VRCFT on the PC
+    const char* vrcftSetupTitle;
+    const char* vrcftStepsLivelink[3];
+    const char* vrcftStepsEtvr[3];
+    const char* vrcftSetupNote;     ///< the parameter names and syncing are up to VRCFT
+    const char* vrcftNoWide;        ///< ETVR: widened eyes don't come through
     const char* rowLanguage;
     const char* rowAutostart;
     const char* hintAutostart;
@@ -132,7 +146,8 @@ struct UiText {
     const char* hintFit;
     const char* fitStart;            ///< the one big button before any fit
     const char* fitAgain;            ///< the same button once fitted
-    const char* fitCenterOnly;       ///< small button: re-center the gaze only
+    const char* fitCenterOnly;       ///< small button: re-center the gaze only...
+    const char* fitCenterTilt;       ///< ...or re-center and measure the tilt (as auto_recenter says)
     const char* fitStop;
     const char* fitIntro;            ///< before any fit
     const char* fitNeedsRunning;
@@ -140,13 +155,15 @@ struct UiText {
     const char* fitWaiting;          ///< "Close the dashboard to start"
     const char* fitHowTo;            ///< while waiting / running (full fit)
     const char* fitWaitingCenter;    ///< while waiting / running (re-centering)
+    const char* fitWaitingTilt;      ///< while waiting / running (re-centering and the tilt)
     const char* fitRunningFormat;    ///< "Measuring: %s (%d of %d)"
     const char* fitRetryFormat;      ///< appended: ", try %d"
     const char* fitDone;             ///< right after a full fit
     const char* fitDoneCenter;       ///< right after re-centering
+    const char* fitDoneTilt;         ///< right after re-centering and the tilt
     const char* fitFitted;           ///< a fit is in config.json
     const char* fitNotYet;           ///< the folded result line before any fit
-    const char* fitGazeCenterFormat; ///< "Gaze center: L-R %s, U-D %s"
+    const char* fitGazeCenterFormat; ///< "Gaze center: L-R %s, U-D %s, tilt %s"
     const char* fitGazeRangeFormat;  ///< "Gaze range: L-R %s, up %s, down %s"
     const char* fitGazeNone;
     const char* fitEyeXFormat;       ///< "Each eye: L %s x%s, R %s x%s" (zero point, gain)
@@ -192,6 +209,11 @@ struct UiText {
     const char* fitDetails;          ///< the fold with the values by hand
     const char* fitSoundsOn;         ///< the sound switch, on ("Sounds: on")
     const char* fitSoundsOff;
+    const char* rowAutoRecenter;     ///< the row for what runs when the headset is put on...
+    const char* hintAutoRecenter;
+    const char* autoRecenterOff;     ///< ...and its choices: nothing...
+    const char* autoRecenterCenter;  ///< ...re-centering...
+    const char* autoRecenterTilt;    ///< ...or re-centering and the tilt
     const char* rowOffset;
     const char* hintOffset;
     const char* rowGain;
@@ -206,12 +228,30 @@ struct UiText {
     const char* hintEyeX;
     const char* rowDownHold;         ///< holding the sideways gaze when looking far down
     const char* hintDownHold;
+    const char* rowEyeLog;           ///< the eye log row (Advanced tab)
+    const char* eyeLogRecord;        ///< its button: start...
+    const char* eyeLogStopFormat;    ///< ...and stop, with the time so far ("Stop 1:23")
+    const char* eyeLogWhereFormat;   ///< where the files go ("Saved to %s")...
+    const char* eyeLogLimit;         ///< ...and that it stops by itself after 60 minutes
+    const char* eyeLogFailedFormat;  ///< it could not start or ended by itself ("Couldn't record: %s")
+    const char* eyeLogAutoStopped;   ///< the last one was stopped by the 60-minute limit
+    const char* recordingFormat;     ///< the mark in the left column while recording ("Recording 1:23")
+    const char* rowTilt;             ///< the headset's tilt (gaze_roll_deg), next to the far-down hold
+    const char* hintTilt;
     const char* downHoldFormat;      ///< "Below %s°"
     const char* rowLidFit;
     const char* hintLidFit;
     const char* capClosed;
     const char* capAhead;
     const char* lidFitInUse;         ///< Eyelids tab, instead of the learned values
+    const char* rowWiden;            ///< how easily a fitted eye widens (lid_widen)...
+    const char* hintWiden;
+    const char* widenModes[4];       ///< ...off, less, normal, more
+    const char* widenFollowsLeft;    ///< the left eye has no room and widens with the right
+    const char* widenFollowsRight;
+    const char* widenNoRoom;         ///< neither eye has room
+    const char* lidMarksFitted;      ///< above the bars for fitted eyes (the marks folded away)
+    const char* lidMarksUnused;      ///< the same, the marks open: 3 and 4 are only for eyes without a fit
 
     // Lids tab
     const char* rowCalibration;
@@ -222,6 +262,7 @@ struct UiText {
     const char* rowScale;
     const char* hintScaleAuto;
     const char* hintScaleFixed;
+    const char* hintScaleFitted;    ///< the scales of fitted eyes fine-tune the fit
     const char* scaleAuto;
     const char* scaleFixed;
     const char* marksTitle;         ///< "Open and close your eyes and match the lines"
@@ -238,6 +279,9 @@ struct UiText {
     const char* rowLidSmooth;
 
     // Advanced tab
+    const char* sectionTools;       ///< section titles: the gaze dots and the eye log...
+    const char* sectionFiles;       ///< ...and the file locations and the process
+    const char* updateCheckChip;    ///< the automatic update check, as a chip in the version row ("... On")
     const char* rowPrefix;
     const char* prefixNone;
     const char* prefixExample;      ///< "e.g." before an OSC address
@@ -262,6 +306,9 @@ struct UiText {
     const char* promptVrchatDetail2;
     const char* promptEtvrDetail1;
     const char* promptEtvrDetail2;
+    const char* promptLivelink;
+    const char* promptLivelinkDetail1;
+    const char* promptLivelinkDetail2;
     const char* promptYes;
     const char* promptNo;
 

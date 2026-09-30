@@ -81,6 +81,10 @@ const std::vector<ContrastPair>& contrastPairs() {
         {"\"not running\" badge", kText, kDangerTint, ContrastKind::Text},
         {"error line (card)", kDanger, kCard, ContrastKind::Text},
         {"new release notice text (accent tint)", kText, kAccentTint, ContrastKind::Text},
+        {"destination card lines (card; chosen or hovered ones use body text)", kTextMuted, kControl, ContrastKind::Text},
+        {"chosen destination card text (accent tint)", kText, kAccentTint, ContrastKind::Text},
+        {"update check chip \"On\" (pill)", kAccent, kControl, ContrastKind::Text},
+        {"update check chip \"On\" (hovered)", kAccent, kControlHover, ContrastKind::Text},
         // Controls (WCAG 1.4.11)
         {"control outlines, bar tracks (card)", kBorder, kCard, ContrastKind::Ui},
         {"locked choice outline (pill)", kBorder, kControl, ContrastKind::Ui},

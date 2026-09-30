@@ -58,7 +58,10 @@ std::string SettingsView::text(const std::string& name) const {
 int SettingsView::port() const {
     const double value = number(key::kPort);
     if (std::isfinite(value)) return static_cast<int>(std::lround(value));
-    return text(key::kOutput) == kOutputEtvr ? kPortEtvr : kPortVrchat;
+    const std::string output = text(key::kOutput);
+    if (output == kOutputEtvr) return kPortEtvr;
+    if (output == kOutputLivelink) return kPortLivelink;
+    return kPortVrchat;
 }
 
 bool SettingsView::portIsDefault() const {
@@ -80,6 +83,19 @@ int matchingGazePreset(const SettingsView& view) {
             return i;
         }
     }
+    return -1;
+}
+
+const char* outputOfArg(int arg) {
+    if (arg == 1) return kOutputEtvr;
+    if (arg == 2) return kOutputLivelink;
+    return kOutputVrchat;
+}
+
+int argOfOutput(const std::string& output) {
+    if (output == kOutputVrchat) return 0;
+    if (output == kOutputEtvr) return 1;
+    if (output == kOutputLivelink) return 2;
     return -1;
 }
 
@@ -107,6 +123,116 @@ const char* const kLidFitKeys[2][4] = {
     {key::kLidFitClosedRight, key::kLidFitUpRight, key::kLidFitOpenRight, key::kLidFitDownRight},
 };
 
+bool fitKeysLocked(const SettingsView& view) {
+    for (const char* name : {key::kGazeOffsetX, key::kGazeOffsetY, key::kGazeGainX, key::kGazeGainUp, key::kGazeGainDown,
+                             key::kGazeRollDeg, key::kGazeOffsetXLeft, key::kGazeOffsetXRight, key::kGazeGainXLeft,
+                             key::kGazeGainXRight}) {
+        if (view.locked(name)) return true;
+    }
+    for (const auto& eye : kLidFitKeys) {
+        for (const char* name : eye) {
+            if (view.locked(name)) return true;
+        }
+    }
+    return false;
+}
+
+bool migrateLidScales(JsonValue& root, std::string& log) {
+    log.clear();
+    if (root.type != JsonValue::Type::Object || root.get(key::kLidWiden) != nullptr) return false;
+    const char* scaleKeys[2] = {key::kLidScaleLeft, key::kLidScaleRight};
+    for (int eye = 0; eye < 2; ++eye) {
+        bool fitted = true;
+        for (const char* name : kLidFitKeys[eye]) {
+            const JsonValue* value = root.get(name);
+            fitted &= value != nullptr && value->isNumber();
+        }
+        const JsonValue* scale = root.get(scaleKeys[eye]);
+        if (!fitted || scale == nullptr || !scale->isNumber()) continue;
+        char text[96];
+        std::snprintf(text, sizeof(text), "%s%s %.2f -> null (it did nothing next to the eye fit before 0.6.0)",
+                      log.empty() ? "" : ", ", scaleKeys[eye], scale->number);
+        log += text;
+        root.set(scaleKeys[eye], JsonValue::makeNull());
+    }
+    root.set(key::kLidWiden, JsonValue::makeString(kLidWidenModes[2]));
+    return true;
+}
+
+WidenState widenState(const SettingsView& view) {
+    // frameeyeosc's WIDEN_LOW / WIDEN_NORMAL / WIDEN_HIGH starts and WIDEN_ROOM_LIMIT
+    constexpr double kWidenStart[4] = {NAN, 0.10, 0.07, 0.04};
+    constexpr double kWidenRoomLimit = 0.97;
+    WidenState state;
+    const std::string mode = view.text(key::kLidWiden);
+    for (int i = 0; i < 4; ++i) {
+        if (mode == kLidWidenModes[i]) state.mode = i;
+    }
+    const FitInConfig fit = fitInConfig(view);
+    for (int eye = 0; eye < 2; ++eye) {
+        state.fitted[eye] = fit.lidsFitted[eye];
+        const double open = view.number(kLidFitKeys[eye][2]);
+        state.room[eye] =
+            state.fitted[eye] && state.mode > 0 && open + kWidenStart[state.mode] <= kWidenRoomLimit + 1e-9;
+    }
+    return state;
+}
+
+AutoRecenter autoRecenter(const ConfigFile& config) {
+    const JsonValue* written = config.root.get(key::kAutoRecenter);
+    if (written != nullptr && written->isBool()) return written->boolean ? AutoRecenter::Center : AutoRecenter::Off;
+    const std::string mode = config.text(key::kAutoRecenter);
+    if (mode == kAutoRecenterModes[0]) return AutoRecenter::Off;
+    if (mode == kAutoRecenterModes[2]) return AutoRecenter::Tilt;
+    return AutoRecenter::Center;
+}
+
+gaze_fit::Mode rewearMode(AutoRecenter kind) {
+    return kind == AutoRecenter::Tilt ? gaze_fit::Mode::Tilt : gaze_fit::Mode::Center;
+}
+
+void applyFitValues(JsonValue& root, const gaze_fit::Values& values, gaze_fit::Mode mode) {
+    const bool full = mode == gaze_fit::Mode::Full;
+    const bool roll = mode != gaze_fit::Mode::Center;
+    root.set(key::kGazeOffsetX, JsonValue::makeNumber(values.offsetX));
+    root.set(key::kGazeOffsetY, JsonValue::makeNumber(values.offsetY));
+    if (roll) root.set(key::kGazeRollDeg, JsonValue::makeNumber(values.rollDeg));
+    // Each eye's own sideways values: re-centering moves their zero points; a full fit sets them, or clears them
+    // when this frameeyeosc could not measure each eye
+    const char* eyeOffsets[2] = {key::kGazeOffsetXLeft, key::kGazeOffsetXRight};
+    const char* eyeGains[2] = {key::kGazeGainXLeft, key::kGazeGainXRight};
+    for (int eye = 0; eye < 2; ++eye) {
+        if (values.hasEyeX) {
+            root.set(eyeOffsets[eye], JsonValue::makeNumber(values.eyeOffsetX[eye]));
+            root.set(eyeGains[eye], JsonValue::makeNumber(values.eyeGainX[eye]));
+        } else if (full) {
+            root.set(eyeOffsets[eye], JsonValue::makeNull());
+            root.set(eyeGains[eye], JsonValue::makeNull());
+        }
+    }
+    if (!full) return;
+    root.set(key::kGazeGainX, JsonValue::makeNumber(values.gainX));
+    root.set(key::kGazeGainUp, JsonValue::makeNumber(values.gainUp));
+    root.set(key::kGazeGainDown, JsonValue::makeNumber(values.gainDown));
+    if (!values.hasLids) return;
+    for (int eye = 0; eye < 2; ++eye) {
+        const double readings[4] = {values.lidClosed[eye], values.lidUp[eye], values.lidOpen[eye], values.lidDown[eye]};
+        for (int i = 0; i < 4; ++i) root.set(kLidFitKeys[eye][i], JsonValue::makeNumber(readings[i]));
+    }
+    // A fitted eye's scale fine-tunes the fit, so a tweak of the old fit starts over at 1.0
+    root.set(key::kLidScaleLeft, JsonValue::makeNull());
+    root.set(key::kLidScaleRight, JsonValue::makeNull());
+}
+
+std::vector<std::string> fitResetKeys() {
+    std::vector<std::string> names = {key::kGazeOffsetX,     key::kGazeOffsetY,      key::kGazeGainX,
+                                      key::kGazeGainUp,      key::kGazeGainDown,     key::kGazeRollDeg,
+                                      key::kGazeOffsetXLeft, key::kGazeOffsetXRight, key::kGazeGainXLeft,
+                                      key::kGazeGainXRight,  key::kLidScaleLeft,     key::kLidScaleRight};
+    for (const auto& eye : kLidFitKeys) names.insert(names.end(), std::begin(eye), std::end(eye));
+    return names;
+}
+
 FitInConfig fitInConfig(const SettingsView& view) {
     FitInConfig fit;
     gaze_fit::Values& v = fit.values;
@@ -115,8 +241,9 @@ FitInConfig fitInConfig(const SettingsView& view) {
     v.gainX = view.number(key::kGazeGainX);
     v.gainUp = view.number(key::kGazeGainUp);
     v.gainDown = view.number(key::kGazeGainDown);
+    v.rollDeg = view.number(key::kGazeRollDeg);
     fit.gazeFitted = std::fabs(v.offsetX) > 1e-9 || std::fabs(v.offsetY) > 1e-9 || std::fabs(v.gainX - 1) > 1e-9 ||
-                     std::fabs(v.gainUp - 1) > 1e-9 || std::fabs(v.gainDown - 1) > 1e-9;
+                     std::fabs(v.gainUp - 1) > 1e-9 || std::fabs(v.gainDown - 1) > 1e-9 || std::fabs(v.rollDeg) > 1e-9;
     for (int eye = 0; eye < 2; ++eye) {
         double readings[4];
         bool all = true;

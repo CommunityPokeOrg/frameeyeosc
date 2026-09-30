@@ -6,6 +6,7 @@
 #include "config.h"
 #include "gaze_fit.h"
 #include "i18n.h"
+#include "recorder.h"
 #include "status.h"
 #include "update_check.h"
 
@@ -24,6 +25,7 @@ struct PanelModel {
     Language language = Language::Ja;
     frame_updater::UpdateStatus update;  ///< new-release check and install (see frame-updater)
     gaze_fit::View fit;          ///< the eye fit session (Eye fit tab)
+    recorder::View recording;    ///< the eye log (Advanced tab, and a mark in the left column while it records)
 };
 
 /**
@@ -90,7 +92,7 @@ private:
 
 /** The eye fit as config.json holds it (shown on the Eye fit tab even when frameeyeosc is not running). */
 struct FitInConfig {
-    bool gazeFitted = false;              ///< the zero point or a gain is not the default
+    bool gazeFitted = false;              ///< the zero point, a gain or the tilt is not the default
     bool eyeXFitted = false;              ///< each eye's own sideways zero point and gain are set
     bool lidsFitted[2] = {false, false};  ///< all four readings of that eye are set
     gaze_fit::Values values;              ///< hasLids when both eyes are fitted
@@ -105,6 +107,78 @@ extern const char* const kLidFitKeys[2][4];
  * @return what is fitted, and the values
  */
 FitInConfig fitInConfig(const SettingsView& view);
+
+/**
+ * Whether a key the eye fit writes is set on frameeyeosc's command line (then the fit can't run).
+ * @param view the settings
+ * @return true if any is locked
+ */
+bool fitKeysLocked(const SettingsView& view);
+
+/** Whether each eye can widen by itself (lid_widen, for eyes with an eye fit). */
+struct WidenState {
+    int mode = 2;                        ///< index into kLidWidenModes (0 = off)
+    bool fitted[2] = {false, false};     ///< the eye has a lid fit (the setting applies to it)
+    bool room[2] = {false, false};       ///< ...and its straight-ahead reading leaves room below 1.000 to widen
+};
+
+/**
+ * How lid_widen works out for each eye, the way frameeyeosc decides it (widen_room): a fitted eye has room when its
+ * straight-ahead open reading plus the mode's widening start is at most 0.97 (the openness stops at 1.000). An eye
+ * without room widens with the other eye; neither with room: no widening.
+ * @param view the settings
+ * @return the state
+ */
+WidenState widenState(const SettingsView& view);
+
+/**
+ * Bring a settings file from 0.5.x or earlier (no lid_widen in it) up to date, once: those versions ignored
+ * lid_scale_left/right for an eye with a lid fit, so a value left there (1.15, say) would suddenly move that eye now
+ * that the scale fine-tunes the fit. Such scales go back to null, and lid_widen is written ("normal", the default),
+ * which marks the file as done (a scale set afterwards is kept).
+ * @param root the config's root object (changed in place)
+ * @param log what was changed, for the log (empty if only lid_widen was added)
+ * @return true if root changed (lid_widen was missing)
+ */
+bool migrateLidScales(JsonValue& root, std::string& log);
+
+/** The fit run by itself when the headset is put on (auto_recenter). */
+enum class AutoRecenter { Off, Center, Tilt };
+
+/**
+ * auto_recenter as written: "off", "center" or "tilt". A true / false from before it had three values reads as
+ * the default / "off", and anything else as the default, "center" (the tilt from one wearing's re-wear fits
+ * scattered by about ±5°, as much as it corrects).
+ * @param config the config
+ * @return the kind
+ */
+AutoRecenter autoRecenter(const ConfigFile& config);
+
+/**
+ * The re-wear fit for an auto_recenter kind: the one it runs by itself, and the one the button next to "Fit again"
+ * runs (re-centering only when auto_recenter is off).
+ * @param kind the kind
+ * @return gaze_fit::Mode::Center or gaze_fit::Mode::Tilt
+ */
+gaze_fit::Mode rewearMode(AutoRecenter kind);
+
+/**
+ * Write an eye fit's result into config.json: the gaze zero point; with the side dots (the whole fit, and the
+ * re-wear fit with the tilt) also the tilt; each eye's sideways values when measured; for the whole fit also the
+ * gains, each eye's lid readings, and lid_scale_left/right back to null when it measured the eyelids (an old
+ * tweak must not sit on a new fit).
+ * @param root the config's root object
+ * @param values the result
+ * @param mode the mode
+ */
+void applyFitValues(JsonValue& root, const gaze_fit::Values& values, gaze_fit::Mode mode);
+
+/**
+ * What "Reset" on the Eye fit tab puts back to the defaults: the gaze fit, each eye's sideways values, the lid
+ * readings and the per-eye lid scales (fine-tunes of the lid fit).
+ * @return the keys
+ */
+std::vector<std::string> fitResetKeys();
 
 /** A gaze smoothing preset (the three One Euro values). */
 struct GazePreset {
@@ -133,10 +207,24 @@ struct SettingChange {
 };
 
 /**
+ * The output type a SetOutput / PromptYes button stands for.
+ * @param arg 0 VRChat, 1 ETVR, 2 LiveLink (anything else is VRChat)
+ * @return kOutputVrchat, kOutputEtvr or kOutputLivelink
+ */
+const char* outputOfArg(int arg);
+
+/**
+ * The button argument of an output type (the other way round from outputOfArg).
+ * @param output the "output" value
+ * @return 0 VRChat, 1 ETVR, 2 LiveLink; -1 for anything else
+ */
+int argOfOutput(const std::string& output);
+
+/**
  * The recommended settings of an output type (asked once after switching). Locked keys are left out.
- * VRChat: the default gaze and eyelid smoothing. ETVR: default gaze smoothing and lighter eyelid smoothing,
- * because the ETVR module already smooths the eyelids.
- * @param output kOutputVrchat or kOutputEtvr
+ * VRChat and LiveLink: the default gaze and eyelid smoothing (the LiveLink module smooths nothing). ETVR: default
+ * gaze smoothing and lighter eyelid smoothing, because the ETVR module already smooths the eyelids.
+ * @param output kOutputVrchat, kOutputEtvr or kOutputLivelink
  * @param view the settings (to skip locked keys)
  * @return the changes
  */
