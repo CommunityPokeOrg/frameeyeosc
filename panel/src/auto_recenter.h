@@ -41,13 +41,15 @@ struct Step {
  * Watches for the headset being put on and says when to re-center, once per wearing. Armed at start (the first
  * wearing) and whenever tracking comes back after at least kOffSec off; fires when armed, tracking has been on for
  * kSettleSec, the dashboard closed for kClosedSec, and re-centering can run. Time while frameeyeosc is not running
- * counts for nothing (a restart while worn does not look like putting the headset on).
+ * counts for nothing (a restart while worn does not look like putting the headset on); the time since the last
+ * update counts for the state seen then, so a suspend right after taking the headset off counts as off.
  */
 class Watcher {
 public:
     /**
      * Move on.
-     * @param now monotonic seconds
+     * @param now seconds on a clock that keeps running while the Frame sleeps (CLOCK_BOOTTIME): taking the headset
+     *            off usually lets the Frame suspend, and that time has to count as off
      * @param in the state now
      * @return whether to start re-centering, and what to log
      */

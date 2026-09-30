@@ -10,6 +10,7 @@
 #include "i18n.h"
 #include "model.h"
 #include "panel.h"
+#include "recorder.h"
 #include "sounds.h"
 #include "status.h"
 #include "target.h"
@@ -98,6 +99,7 @@ struct Options {
     std::string fakePrompt;       ///< vrchat / etvr
     std::string fakeUpdate;       ///< a made-up update state (see printUsage)
     std::string fakeFit;          ///< a made-up eye fit state (see printUsage)
+    std::string fakeRecord;       ///< a made-up eye log state: "recording" or "failed"
     bool updateLive = false;      ///< --dump-png: run the real update checker (and wait for it after clicks)
     std::vector<std::pair<double, double>> clicks;  ///< --click X,Y: presses carried out before the PNG is drawn
     Autostart fakeAutostart = Autostart::Disabled;
@@ -140,6 +142,16 @@ void installSignalHandlers() {
 double nowSeconds() {
     using namespace std::chrono;
     return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+/**
+ * Seconds since boot, counting the time the Frame was suspended (CLOCK_BOOTTIME; the monotonic clock stops then).
+ * @return seconds
+ */
+double bootSeconds() {
+    timespec now {};
+    ::clock_gettime(CLOCK_BOOTTIME, &now);
+    return static_cast<double>(now.tv_sec) + now.tv_nsec / 1e9;
 }
 
 /**
@@ -199,6 +211,7 @@ void printUsage() {
         "                 fitted|fitted-gaze|\n"
         "                 failed-unsteady|failed-notclosed|failed-movement|failed-lidrange|failed-cancelled|\n"
         "                 failed-noresult  A made-up eye fit (Eye fit tab)\n"
+        "      --fake-record recording|failed  A made-up eye log (Advanced tab, and the left column)\n"
         "      --update-live     Run the real update checker: check first, and after each --click wait for the\n"
         "                        check or install it started (installs really happen; for testing with a fake GitHub)\n"
         "      --click X,Y       Press the panel at X,Y first (repeatable; writes --config; not with --fake)\n"
@@ -353,6 +366,13 @@ bool parseOptions(int argc, char** argv, Options& options) {
                                                   "installing", "installed", "checkfailed", "installfailed"};
             if (std::find(std::begin(kStates), std::end(kStates), options.fakeUpdate) == std::end(kStates)) {
                 std::fprintf(stderr, "--fake-update: unknown state %s\n", options.fakeUpdate.c_str());
+                return false;
+            }
+            options.fake = true;
+        } else if (arg == "--fake-record" && hasNext) {
+            options.fakeRecord = argv[++i];
+            if (options.fakeRecord != "recording" && options.fakeRecord != "failed") {
+                std::fprintf(stderr, "--fake-record must be recording or failed: %s\n", options.fakeRecord.c_str());
                 return false;
             }
             options.fake = true;
@@ -511,6 +531,12 @@ PanelModel fakeModel(const Options& options) {
     }
     if (options.fakeBroken) m.config.error = "expected , or } between members (near character 212)";
     if (options.fakeIndependent) root.set(key::kIndependentEyes, JsonValue::makeBool(true));
+    if (options.fakeRecord == "recording") {
+        m.recording.recording = true;
+        m.recording.elapsedSec = 83.4;
+    } else if (options.fakeRecord == "failed") {
+        m.recording.error = "can't open /dev/shm/eye-server.mmap: No such file or directory (os error 2)";
+    }
     if (!options.fakeFit.empty()) {
         using gaze_fit::Failure;
         using gaze_fit::Phase;
@@ -656,7 +682,8 @@ PanelModel fakeModel(const Options& options) {
 }
 
 void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, AutostartWorker& autostart,
-              frame_updater::UpdateChecker* updater, gaze_fit::Session* fit, const VrOverlay* vr);
+              frame_updater::UpdateChecker* updater, gaze_fit::Session* fit, const VrOverlay* vr,
+              recorder::Recorder* eyeLog);
 std::string targetLabel(const UiText& t, gaze_fit::TargetStyle style);
 
 /**
@@ -721,7 +748,7 @@ int runDumpPng(const Options& options) {
             std::printf("click %.0f,%.0f -> action %d key %s arg %d\n", click.first, click.second,
                         static_cast<int>(hit.action), hit.key != nullptr ? hit.key : "-", hit.arg);
             if (hit.action != PanelAction::Quit) {
-                applyHit(hit, model, panel, idleAutostart, updater.get(), nullptr, nullptr);
+                applyHit(hit, model, panel, idleAutostart, updater.get(), nullptr, nullptr, nullptr);
             }
             panel.pointerUp();
             if (updater) {
@@ -1059,9 +1086,11 @@ void startFit(gaze_fit::Session& fit, gaze_fit::Mode mode, const SettingsView& v
  * @param updater the update checker (null in --dump-png without --update-live)
  * @param fit the eye fit session (null in --dump-png)
  * @param vr the connection to SteamVR, for the IPD (null in --dump-png)
+ * @param eyeLog the eye log (null in --dump-png)
  */
 void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, AutostartWorker& autostart,
-              frame_updater::UpdateChecker* updater, gaze_fit::Session* fit, const VrOverlay* vr) {
+              frame_updater::UpdateChecker* updater, gaze_fit::Session* fit, const VrOverlay* vr,
+              recorder::Recorder* eyeLog) {
     const SettingsView view(model);
     std::function<void(JsonValue&)> change;
     std::string openPrompt;
@@ -1130,6 +1159,15 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
             change = [type](JsonValue& root) { root.set(key::kEyeTrackingActive, JsonValue::makeString(type)); };
             break;
         }
+        case PanelAction::RecordToggle:
+            if (eyeLog == nullptr) return;
+            if (eyeLog->recording()) {
+                eyeLog->stop(nowSeconds());
+            } else if (!eyeLog->busy()) {
+                eyeLog->start(recorder::findFrameeyeosc(), recorder::defaultDir(), model.configPath, nowSeconds());
+            }
+            model.recording = eyeLog->view(nowSeconds());
+            return;
         case PanelAction::SetAutoRecenter: {
             if (hit.arg < 0 || hit.arg > 2) return;
             const std::string mode = kAutoRecenterModes[hit.arg];
@@ -1509,6 +1547,9 @@ int runOverlay(const Options& options) {
     }
 
     gaze_fit::Session fit;
+    // The eye log (frameeyeosc --record as a child), and what the panel last drew of it
+    recorder::Recorder eyeLog;
+    std::string drawnRecording;
     // Re-centering by itself when the headset is put on (auto_recenter); armed now for the first wearing
     auto_recenter::Watcher recenter;
     long long lastCaptureId = 0;
@@ -1608,7 +1649,7 @@ int runOverlay(const Options& options) {
                         std::fprintf(stderr, "[VR] quitting from the panel's \"Quit\"\n");
                         userQuit = true;
                     } else {
-                        applyHit(hit, model, panel, autostart, &updater, &fit, &vr);
+                        applyHit(hit, model, panel, autostart, &updater, &fit, &vr, &eyeLog);
                         lastStamp = configStamp(model.configPath);
                     }
                     dirty = true;
@@ -1634,6 +1675,18 @@ int runOverlay(const Options& options) {
             dirty = true;
         }
 
+        // The eye log: reaped when it ends, stopped at its limit; redrawn when its time or state changes
+        {
+            eyeLog.poll(nowSeconds());
+            model.recording = eyeLog.view(nowSeconds());
+            const recorder::View& r = model.recording;
+            const std::string shown = (r.recording ? recorder::elapsedText(r.elapsedSec) : std::string("-")) + r.error;
+            if (shown != drawnRecording) {
+                drawnRecording = shown;
+                dirty = true;
+            }
+        }
+
         const bool dashboardOpen = vr.dashboardVisible();
         // Re-centering by itself once the headset is put on and the eyes have settled: the same one-dot fit as
         // "Re-center only", once per wearing (see auto_recenter.h)
@@ -1647,7 +1700,8 @@ int runOverlay(const Options& options) {
             in.tracking = model.status.tracking;
             in.dashboardOpen = dashboardOpen;
             in.fitActive = fit.active();
-            const auto_recenter::Step step = recenter.update(nowSeconds(), in);
+            // On a clock that runs through suspend: taking the headset off usually lets the Frame sleep
+            const auto_recenter::Step step = recenter.update(bootSeconds(), in);
             if (!step.log.empty()) std::fprintf(stderr, "[fit] %s\n", step.log.c_str());
             if (step.start) startFit(fit, rewearMode(model.config), view, &vr);
         }
@@ -1813,7 +1867,9 @@ int runOverlay(const Options& options) {
         }
     }
 
-    // The same shutdown for SIGTERM / SIGINT, SteamVR quitting, vrserver gone, "close" and "Quit"
+    // The same shutdown for SIGTERM / SIGINT, SteamVR quitting, vrserver gone, "close" and "Quit"; a recording is
+    // stopped (and its file written out) first
+    eyeLog.shutdown();
     vr.shutdown();
     autostart.stop();
     std::fprintf(stderr, "[VR] done\n");

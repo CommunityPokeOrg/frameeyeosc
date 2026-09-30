@@ -11,7 +11,7 @@
 namespace gaze_fit {
 
 /** The whole fit (five gaze points and the eyes-shut step); re-centering the gaze only (one dot); or re-centering and
- *  measuring the headset's tilt again (straight ahead, left and right), for putting the headset back on. */
+ *  measuring the headset's tilt again (straight ahead, up and down), for putting the headset back on. */
 enum class Mode { Full, Center, Tilt };
 
 /** The steps, in the order the full fit shows them. */
@@ -202,21 +202,22 @@ struct Values {
 double eyeAngle(double yawDeg, int eye, double ipd);
 
 /**
- * The headset's tilt from the side dots: the angle of the line from the left dot to the right one, which is level
- * when the headset is. Only the side dots are used, so the full fit and the re-wear fit agree.
- * @param left the left capture
- * @param right the right capture
- * @return the setting (within ±kRollLimitDeg, 0.1° steps); positive: looking right reads higher
- */
-double rollFromSides(const Measured& left, const Measured& right);
-
-/**
- * The tilt as the up / down dots see it (the move from down to up leans the other way), for the log only.
+ * The headset's tilt from the up / down dots: tilted by θ, the move from the down dot to the up one leans the other
+ * way (dx = -sinθ·dy). Only these dots are used, so the full fit and the re-wear fit agree; they gave a steadier tilt
+ * than the side dots between fits (+2.0°, +2.4°, +1.7° against -3.8°, +2.7°, -2.1°).
  * @param up the up capture
  * @param down the down capture
- * @return degrees, not rounded
+ * @return the setting (within ±kRollLimitDeg, 0.1° steps); positive: looking right reads higher
  */
 double rollFromUpDown(const Measured& up, const Measured& down);
+
+/**
+ * The tilt as the side dots see it (the angle of the line from the left dot to the right one), for the log only.
+ * @param left the left capture
+ * @param right the right capture
+ * @return degrees, not rounded
+ */
+double rollFromSides(const Measured& left, const Measured& right);
 
 /**
  * A raw gaze relative to the zero point, with the tilt undone (what frameeyeosc does before the gains).
@@ -265,7 +266,7 @@ bool fitEyes(const Measured points[kPointCount], double ipd, Values& out, Failur
 Values fitCenter(const Measured& center, const Values& current, double ipd = kDefaultIpdM);
 
 /**
- * The zero point, the tilt (rollFromSides) and the three gains from the five gaze captures. Every point is leveled
+ * The zero point, the tilt (rollFromUpDown) and the three gains from the five gaze captures. Every point is leveled
  * around the center first; each gain then makes the target angle come out as that angle:
  * gain = target / (point - center), with left and right averaged into one gain.
  * @param points the captures, indexed by Point
@@ -276,16 +277,16 @@ Values fitCenter(const Measured& center, const Values& current, double ipd = kDe
 bool fitGaze(const Measured points[kPointCount], Values& out, Point& failed, FailureDetail* detail = nullptr);
 
 /**
- * The re-wear fit: the zero point from the center capture and the tilt from the side captures; each eye's own zero
- * point follows with its gain kept. The gains and the eyelids stay as they are. The side dots must move as far as
- * in the full fit.
- * @param points the captures, indexed by Point (Center, Left and Right used)
+ * The re-wear fit: the zero point from the center capture and the tilt from the up / down captures; each eye's own
+ * zero point follows with its gain kept. The gains and the eyelids stay as they are. The up / down dots must move as
+ * far as in the full fit.
+ * @param points the captures, indexed by Point (Center, Up and Down used)
  * @param current the settings now
  * @param ipd the distance between the eyes (m)
  * @param out the new settings (rounded, within range)
- * @param failed the side point that did not move far enough the right way
+ * @param failed the point that did not move far enough the right way
  * @param detail on failure, how far it moved (may be null)
- * @return false if a side point (or an eye's own sideways gaze) did not move far enough
+ * @return false if the up or the down point did not move far enough
  */
 bool fitTilt(const Measured points[kPointCount], const Values& current, double ipd, Values& out, Point& failed,
              FailureDetail* detail = nullptr);

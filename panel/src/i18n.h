@@ -212,6 +212,13 @@ struct UiText {
     const char* hintEyeX;
     const char* rowDownHold;         ///< holding the sideways gaze when looking far down
     const char* hintDownHold;
+    const char* rowEyeLog;           ///< the eye log row (Advanced tab)
+    const char* eyeLogRecord;        ///< its button: start...
+    const char* eyeLogStopFormat;    ///< ...and stop, with the time so far ("Stop 1:23")
+    const char* eyeLogWhereFormat;   ///< where the files go ("Saved to %s")...
+    const char* eyeLogLimit;         ///< ...and that it stops by itself after 60 minutes
+    const char* eyeLogFailedFormat;  ///< it could not start or ended by itself ("Couldn't record: %s")
+    const char* recordingFormat;     ///< the mark in the left column while recording ("Recording 1:23")
     const char* rowTilt;             ///< the headset's tilt (gaze_roll_deg), next to the far-down hold
     const char* hintTilt;
     const char* downHoldFormat;      ///< "Below %s°"

@@ -19,10 +19,13 @@ Step Watcher::update(double now, const Inputs& in) {
         dashboardOpen_ = in.dashboardOpen;
         if (!in.dashboardOpen) closedAt_ = now;
     }
-    // Only while frameeyeosc runs: its status says nothing about the eyes otherwise, and a restart while the headset
-    // is worn must not look like putting it on (the time in between counts for nothing)
+    // The time since the last update counts for what was seen then, if frameeyeosc ran. So the time the Frame slept
+    // after the headset came off counts as off, even when the first status after waking up is still the stale one
+    // from before (read as "not running") or has not been read again yet
+    if (wasRunning_) (tracking_ ? onFor_ : offFor_) += dt;
+    // Changes only while frameeyeosc runs: its status says nothing about the eyes otherwise, and a restart while the
+    // headset is worn must not look like putting it on (the time it was not running counts for nothing)
     if (in.running) {
-        if (wasRunning_) (tracking_ ? onFor_ : offFor_) += dt;
         if (in.tracking != tracking_) {
             if (in.tracking) {
                 // Back after a real break (not one of the tracker's hiccups): the headset was put on

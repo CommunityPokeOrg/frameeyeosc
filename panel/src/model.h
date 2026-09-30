@@ -6,6 +6,7 @@
 #include "config.h"
 #include "gaze_fit.h"
 #include "i18n.h"
+#include "recorder.h"
 #include "status.h"
 #include "update_check.h"
 
@@ -24,6 +25,7 @@ struct PanelModel {
     Language language = Language::Ja;
     frame_updater::UpdateStatus update;  ///< new-release check and install (see frame-updater)
     gaze_fit::View fit;          ///< the eye fit session (Eye fit tab)
+    recorder::View recording;    ///< the eye log (Advanced tab, and a mark in the left column while it records)
 };
 
 /**

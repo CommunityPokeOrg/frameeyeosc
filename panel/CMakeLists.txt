@@ -40,6 +40,7 @@ add_executable(frameeyeosc-panel
   src/json.cpp
   src/model.cpp
   src/panel.cpp
+  src/recorder.cpp
   src/sounds.cpp
   src/status.cpp
   src/target.cpp
@@ -91,6 +92,13 @@ add_executable(auto-recenter-test tests/auto_recenter_test.cpp src/auto_recenter
 target_include_directories(auto-recenter-test PRIVATE src)
 target_compile_options(auto-recenter-test PRIVATE -Wall -Wextra)
 add_test(NAME auto-recenter COMMAND auto-recenter-test)
+
+# The eye log: starting, stopping and reaping the recording child (a stand-in, or a real frameeyeosc given as the
+# argument): panel/build/recorder-test [target/release/frameeyeosc]
+add_executable(recorder-test tests/recorder_test.cpp src/recorder.cpp)
+target_include_directories(recorder-test PRIVATE src)
+target_compile_options(recorder-test PRIVATE -Wall -Wextra)
+add_test(NAME recorder COMMAND recorder-test)
 
 # Checking a typed target PC and the eye fit's failure texts (both languages): panel/build/text-test
 add_executable(text-test tests/text_test.cpp src/host_entry.cpp src/fit_text.cpp src/i18n.cpp src/gaze_fit.cpp

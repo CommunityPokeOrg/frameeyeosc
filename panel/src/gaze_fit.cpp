@@ -59,15 +59,15 @@ const Measured& at(const Measured points[kPointCount], Point point) {
 }
 
 /** The re-wear fit's steps. */
-constexpr Point kTiltPoints[3] = {Point::Center, Point::Left, Point::Right};
+constexpr Point kTiltPoints[3] = {Point::Center, Point::Up, Point::Down};
 
 /**
- * Whether the three captures a per-eye fit needs all have each eye's x.
+ * Whether the three captures a per-eye fit needs (straight ahead, left and right) all have each eye's x.
  * @param points the captures
  * @return true if they do
  */
 bool haveEyeX(const Measured points[kPointCount]) {
-    for (Point point : kTiltPoints) {
+    for (Point point : {Point::Center, Point::Left, Point::Right}) {
         if (!at(points, point).hasEyeX) return false;
     }
     return true;
@@ -235,14 +235,14 @@ double eyeAngle(double yawDeg, int eye, double ipd) {
     return std::atan2(side, kTargetDistanceM * std::cos(yaw)) * 180.0 / M_PI / kFullScaleDeg;
 }
 
-double rollFromSides(const Measured& left, const Measured& right) {
-    const double deg = std::atan2(right.y - left.y, right.x - left.x) * 180.0 / M_PI;
+double rollFromUpDown(const Measured& up, const Measured& down) {
+    // Tilted by θ, a move straight up along the headset leans the other way: dx = -sinθ·dy
+    const double deg = std::atan2(-(up.x - down.x), up.y - down.y) * 180.0 / M_PI;
     return roundTo(std::clamp(deg, -kRollLimitDeg, kRollLimitDeg), 1);
 }
 
-double rollFromUpDown(const Measured& up, const Measured& down) {
-    // Tilted by θ, a move straight up along the headset leans the other way: dx = -sinθ·dy
-    return std::atan2(-(up.x - down.x), up.y - down.y) * 180.0 / M_PI;
+double rollFromSides(const Measured& left, const Measured& right) {
+    return std::atan2(right.y - left.y, right.x - left.x) * 180.0 / M_PI;
 }
 
 void level(double dx, double dy, double rollDeg, double& x, double& y) {
@@ -293,7 +293,7 @@ Values fitCenter(const Measured& center, const Values& current, double ipd) {
 bool fitGaze(const Measured points[kPointCount], Values& out, Point& failed, FailureDetail* detail) {
     const double side = kSideDeg / kFullScaleDeg;
     const double upDown = kUpDownDeg / kFullScaleDeg;
-    const double roll = rollFromSides(at(points, Point::Left), at(points, Point::Right));
+    const double roll = rollFromUpDown(at(points, Point::Up), at(points, Point::Down));
     // How far each point moved from the center, leveled and counted in its own direction
     const Point checks[4] = {Point::Up, Point::Down, Point::Left, Point::Right};
     if (!pointsMoved(points, checks, 4, roll, failed, detail)) return false;
@@ -311,8 +311,8 @@ bool fitGaze(const Measured points[kPointCount], Values& out, Point& failed, Fai
 
 bool fitTilt(const Measured points[kPointCount], const Values& current, double ipd, Values& out, Point& failed,
              FailureDetail* detail) {
-    const double roll = rollFromSides(at(points, Point::Left), at(points, Point::Right));
-    const Point checks[2] = {Point::Left, Point::Right};
+    const double roll = rollFromUpDown(at(points, Point::Up), at(points, Point::Down));
+    const Point checks[2] = {Point::Up, Point::Down};
     if (!pointsMoved(points, checks, 2, roll, failed, detail)) return false;
     Values values = current;
     const Measured& center = at(points, Point::Center);
@@ -320,12 +320,8 @@ bool fitTilt(const Measured points[kPointCount], const Values& current, double i
     values.offsetY = offsetSetting(center.y);
     values.rollDeg = roll;
     // Each eye's own zero point for the new tilt, keeping its gain
-    if (current.hasEyeX && haveEyeX(points)) {
+    if (current.hasEyeX && center.hasEyeX) {
         for (int eye = 0; eye < 2; ++eye) {
-            if (!eyeMoved(points, eye, roll, ipd, detail)) {
-                failed = Point::Right;
-                return false;
-            }
             values.eyeOffsetX[eye] =
                 offsetSetting(eyeOffset(center, eye, values.offsetY, roll, current.eyeGainX[eye], ipd));
         }
@@ -447,18 +443,18 @@ void Session::finish(Actions& actions) {
     if (mode_ == Mode::Center) {
         result_ = fitCenter(measured_[static_cast<int>(Point::Center)], current_, ipd_);
     } else if (mode_ == Mode::Tilt) {
-        std::snprintf(text, sizeof(text), "tilt %+.1f° from the sides (was %+.1f°)",
-                      rollFromSides(at(measured_, Point::Left), at(measured_, Point::Right)), current_.rollDeg);
+        std::snprintf(text, sizeof(text), "tilt %+.1f° from up/down (was %+.1f°)",
+                      rollFromUpDown(at(measured_, Point::Up), at(measured_, Point::Down)), current_.rollDeg);
         note(text);
         if (!fitTilt(measured_, current_, ipd_, result_, failed, &detail_)) {
             failMovement(failed);
             return;
         }
     } else {
-        // Both ways of seeing the tilt, to tell how well they agree (only the sides' is used)
-        std::snprintf(text, sizeof(text), "tilt %+.1f° from the sides, %+.1f° from up/down",
-                      rollFromSides(at(measured_, Point::Left), at(measured_, Point::Right)),
-                      rollFromUpDown(at(measured_, Point::Up), at(measured_, Point::Down)));
+        // Both ways of seeing the tilt, to tell how well they agree (only the up / down one is used)
+        std::snprintf(text, sizeof(text), "tilt %+.1f° from up/down, %+.1f° from the sides",
+                      rollFromUpDown(at(measured_, Point::Up), at(measured_, Point::Down)),
+                      rollFromSides(at(measured_, Point::Left), at(measured_, Point::Right)));
         note(text);
         result_ = current_;
         if (!fitGaze(measured_, result_, failed, &detail_)) {

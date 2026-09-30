@@ -236,6 +236,42 @@ void testNotRunningFreezes() {
     CHECK(split.starts == 2);
 }
 
+void testSuspendCountsAsOff() {
+    // Taken off, and the Frame slept a minute (no updates at all; the clock keeps running): put on again, it arms.
+    // The first status after waking up is the stale one from before, read as "not running"
+    Run stale;
+    stale.wait(5);
+    stale.finishFit();
+    stale.in.tracking = false;
+    stale.wait(3);
+    stale.now += 60;
+    stale.in.running = false;
+    stale.wait(0.25);
+    stale.in.running = true;
+    stale.in.tracking = true;
+    stale.wait(0.25);
+    CHECK(stale.watcher.armed() && stale.logged("put on (tracking was off 63.") == 1);
+    stale.wait(4);
+    CHECK(stale.starts == 2);
+    // ...or the status from before the sleep had not been read again yet (still running, tracking off)
+    Run cached;
+    cached.wait(5);
+    cached.finishFit();
+    cached.in.tracking = false;
+    cached.wait(3);
+    cached.now += 60;
+    cached.in.tracking = true;
+    cached.wait(4);
+    CHECK(cached.starts == 2 && cached.logged("put on (tracking was off 63.") == 1);
+    // Slept while worn (tracking on before and after): nothing to do
+    Run worn;
+    worn.wait(5);
+    worn.finishFit();
+    worn.now += 600;
+    worn.wait(10);
+    CHECK(worn.starts == 1 && worn.logged("put on") == 0);
+}
+
 void testDisabledDisarms() {
     // Switched off: disarmed without firing, and put-ons don't arm it
     Run run;
@@ -311,6 +347,7 @@ int main() {
     testSettleRestarts();
     testDashboardOpenBlocks();
     testNotRunningFreezes();
+    testSuspendCountsAsOff();
     testDisabledDisarms();
     testOneShotPerPutOn();
     if (gFailures == 0) std::printf("auto-recenter-test: all passed\n");

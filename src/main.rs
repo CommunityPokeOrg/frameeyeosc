@@ -1561,15 +1561,37 @@ impl Bridge {
     }
 }
 
-/// Write every sample the eye server produces to `path` until stopped. Nothing is sent, and the status
-/// and calibration files are left alone, so this can run next to the installed service.
+/// Set by SIGINT / SIGTERM while recording, so the recording ends with every sample so far written out.
+static STOP_RECORDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn stop_recording(_: libc::c_int) {
+    STOP_RECORDING.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Write every sample the eye server produces to `path` until stopped (Ctrl+C, SIGINT or SIGTERM: the file is then
+/// complete up to the stop). Nothing is sent, and the status and calibration files are left alone, so this can run
+/// next to the installed service (the panel's "Eye log" runs it).
 fn record(path: &Path) -> Result<(), Box<dyn Error>> {
+    // SAFETY: the handler only stores to an atomic, which is async-signal-safe.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = stop_recording as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        libc::sigemptyset(&mut action.sa_mask);
+        for signal in [libc::SIGINT, libc::SIGTERM] {
+            libc::sigaction(signal, &action, std::ptr::null_mut());
+        }
+    }
     let mut recorder = replay::Recorder::create(path)?;
     let mut source = EyeSource::open()?;
     eprintln!("Recording {SOURCE} to {}; stop with Ctrl+C", path.display());
     let mut last_flush = Instant::now();
     let mut reported = 0;
     loop {
+        if STOP_RECORDING.load(std::sync::atomic::Ordering::Relaxed) {
+            recorder.flush()?;
+            eprintln!("Stopped: {} samples in {}", recorder.count, path.display());
+            return Ok(());
+        }
         match source.next(POLL)? {
             Next::Sample(data) => recorder.write(&data)?,
             Next::Waiting | Next::Stopped if source.is_stale() => {
@@ -1578,7 +1600,7 @@ fn record(path: &Path) -> Result<(), Box<dyn Error>> {
             }
             _ => {}
         }
-        // Flushed every second, so stopping with Ctrl+C loses at most that much.
+        // Flushed every second, so being killed loses at most that much (a stop signal loses nothing).
         if last_flush.elapsed() >= Duration::from_secs(1) {
             recorder.flush()?;
             last_flush = Instant::now();

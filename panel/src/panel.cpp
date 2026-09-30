@@ -4,6 +4,7 @@
 #include "draw.h"
 #include "fit_text.h"
 #include "host_entry.h"
+#include "recorder.h"
 #include "theme.h"
 
 #include <cairo.h>
@@ -757,6 +758,14 @@ void EyePanel::drawStatus(const Pen& pen, const UiText& t, const PanelModel& m) 
     const double x0 = kStatusX + 20;
     const double x1 = kStatusX + kStatusW - 20;
     pen.text(x0, 66, t.title, fitSize(pen, t.title, 26, 18, x1 - x0, true), kText, true);
+    // While the eye log records: a red mark with the time, right of the title, so it isn't forgotten
+    if (m.recording.recording) {
+        const std::string text = formatText(t.recordingFormat, recorder::elapsedText(m.recording.elapsedSec));
+        const double size = 16;
+        const double w = pen.measure(text, size, true);
+        pen.text(x1 - w, 64, text, size, kDanger, true);
+        drawDot(cr, x1 - w - 12, 58, 5.5, kDanger);
+    }
 
     // Badge: a symbol and a word, never color alone
     {
@@ -1874,7 +1883,38 @@ void EyePanel::drawAdvanced(const Pen& pen, const UiText& t, const PanelModel& m
                     formatSetting(key::kGazeDebugDotsDistanceM, distance) + " m", on, false);
         y += h + kRowGap;
     }
-    const double infoH = 38;
+    // The eye log: record the raw eye data to a file, from now until "Stop" (or 60 minutes)
+    {
+        const double h = 44;
+        const recorder::View& r = m.recording;
+        drawRowLabel(pen, t, y, h, t.rowEyeLog, "", false);
+        const std::string label =
+            r.recording ? formatText(t.eyeLogStopFormat, recorder::elapsedText(r.elapsedSec)) : std::string(t.eyeLogRecord);
+        const double buttonW = 160;
+        drawButton(pen, kControlX, y + (h - 38) / 2, buttonW, 38, label, {PanelAction::RecordToggle, nullptr, 0}, true,
+                   false);
+        const double textX = kControlX + buttonW + 14;
+        const double textW = kInnerRight - textX;
+        // Two short lines next to the button: where the files go and the limit, or why it could not record
+        std::vector<std::string> lines;
+        Color color = kTextMuted;
+        bool bold = false;
+        if (!r.error.empty() && !r.recording) {
+            lines = wrapText(pen, formatText(t.eyeLogFailedFormat, r.error), 14, true, textW, 2);
+            color = kDanger;
+            bold = true;
+        } else {
+            const std::string where = formatText(t.eyeLogWhereFormat, recorder::shortPath(recorder::defaultDir()));
+            lines = {ellipsize(pen, where, 14, false, textW, true), t.eyeLogLimit};
+        }
+        double baseline = y + h / 2 - (lines.size() - 1) * 9 + 5;
+        for (const std::string& line : lines) {
+            pen.text(textX, baseline, line, 14, color, bold);
+            baseline += 18;
+        }
+        y += h + kRowGap;
+    }
+    const double infoH = 31;
     /**
      * A read-only row: title on the left, text on the right.
      */

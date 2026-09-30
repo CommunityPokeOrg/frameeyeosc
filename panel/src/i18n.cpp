@@ -130,7 +130,7 @@ UiText makeJapanese() {
     t.fitHowTo = "頭は動かさず、点を目で追ってください。最後は 3・2・1 のあと 3 秒間目を閉じ、チャイムで開けます。"
                  "ダッシュボードを開くと止まります";
     t.fitWaitingCenter = "正面に点が出ます。頭は動かさず見てください。ダッシュボードを開くと止まります";
-    t.fitWaitingTilt = "正面、左、右の順に点が出ます。頭は動かさず、点を目で追ってください。ダッシュボードを開くと止まります";
+    t.fitWaitingTilt = "正面、上、下の順に点が出ます。頭は動かさず、点を目で追ってください。ダッシュボードを開くと止まります";
     t.fitRunningFormat = "測っています: %s（%d / %d）";
     t.fitRetryFormat = "・%d 回目";
     t.fitDone = "合わせました";
@@ -201,6 +201,13 @@ UiText makeJapanese() {
     t.rowDownHold = "真下で左右を止める";
     t.hintDownHold = "0 = オフ";
     t.rowTilt = "傾き";
+    t.rowEyeLog = "目のログ";
+    t.eyeLogRecord = "記録する";
+    t.eyeLogStopFormat = "止める %s";
+    t.eyeLogWhereFormat = "保存先 %s";
+    t.eyeLogLimit = "60 分たつと自動で止まります";
+    t.eyeLogFailedFormat = "記録できませんでした: %s";
+    t.recordingFormat = "記録中 %s";
     t.hintTilt = "＋ は右が上";
     t.downHoldFormat = "%s° より下";
     t.rowLidFit = "まぶたの読んだ値";
@@ -435,7 +442,7 @@ UiText makeEnglish() {
                  "for 3 seconds and open them at the chime. Opening the dashboard stops it.";
     t.fitWaitingCenter = "A dot appears straight ahead. Keep your head still and look at it. Opening the dashboard "
                          "stops it.";
-    t.fitWaitingTilt = "A dot appears straight ahead, then left and right. Keep your head still and follow it with "
+    t.fitWaitingTilt = "A dot appears straight ahead, then up and down. Keep your head still and follow it with "
                        "your eyes. Opening the dashboard stops it.";
     t.fitRunningFormat = "Measuring: %s (%d of %d)";
     t.fitRetryFormat = ", try %d";
@@ -507,6 +514,13 @@ UiText makeEnglish() {
     t.rowDownHold = "Hold sideways far down";
     t.hintDownHold = "0 = off";
     t.rowTilt = "Tilt";
+    t.rowEyeLog = "Eye log";
+    t.eyeLogRecord = "Record";
+    t.eyeLogStopFormat = "Stop %s";
+    t.eyeLogWhereFormat = "Saved to %s";
+    t.eyeLogLimit = "Stops by itself after 60 minutes";
+    t.eyeLogFailedFormat = "Couldn't record: %s";
+    t.recordingFormat = "Recording %s";
     t.hintTilt = "+ = right up";
     t.downHoldFormat = "Below %s°";
     t.rowLidFit = "Eyelid readings";
