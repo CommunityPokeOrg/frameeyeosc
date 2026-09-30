@@ -67,6 +67,21 @@ pub enum ActiveType {
     Off,
 }
 
+/// How easily a fitted eye widens (see main.rs, WIDEN_*): never, or from a small, medium or large rise above its
+/// expected open reading. Eyes without an eye fit use the lid marks instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Widen {
+    /// never widens
+    Off,
+    /// only a large rise widens
+    Low,
+    /// the default
+    Normal,
+    /// a small rise widens
+    High,
+}
+
 /// Everything that can change while running. Field names are the config.json keys, and the
 /// defaults match the command-line defaults in `Args`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -81,6 +96,8 @@ pub struct Settings {
     /// Without a trailing slash; empty for no prefix.
     pub prefix: String,
     pub eye_tracking_active: ActiveType,
+    /// How easily a fitted eye widens.
+    pub lid_widen: Widen,
     pub raw: bool,
     pub gaze_min_cutoff: f32,
     pub gaze_beta: f32,
@@ -133,10 +150,6 @@ pub struct Settings {
     pub lid_fit_open_right: Option<f32>,
     pub lid_fit_down_left: Option<f32>,
     pub lid_fit_down_right: Option<f32>,
-    /// Each eye's Frame openness with the eyes opened wide (the eye fit's last step). None when not measured, or when
-    /// that eye had no room above its open reading; see `LidFit::wide`.
-    pub lid_fit_wide_left: Option<f32>,
-    pub lid_fit_wide_right: Option<f32>,
 }
 
 /// One eye's fitted openness readings (Frame openness, before any scale).
@@ -146,8 +159,6 @@ pub struct LidFit {
     pub up: f32,
     pub open: f32,
     pub down: f32,
-    /// Opened wide, if measured.
-    pub wide: Option<f32>,
 }
 
 impl Default for Settings {
@@ -159,6 +170,7 @@ impl Default for Settings {
             port: None,
             prefix: "/FT".into(),
             eye_tracking_active: ActiveType::Bool,
+            lid_widen: Widen::Normal,
             raw: false,
             gaze_min_cutoff: 0.4,
             gaze_beta: 0.8,
@@ -200,8 +212,6 @@ impl Default for Settings {
             lid_fit_open_right: None,
             lid_fit_down_left: None,
             lid_fit_down_right: None,
-            lid_fit_wide_left: None,
-            lid_fit_wide_right: None,
         }
     }
 }
@@ -211,15 +221,14 @@ impl Settings {
         self.port.unwrap_or(self.output.default_port())
     }
 
-    /// Each eye's fit, if all four of its readings are set (with the wide reading when there is one).
+    /// Each eye's fit, if all four of its readings are set.
     pub fn lid_fit(&self) -> [Option<LidFit>; 2] {
-        let fit = |closed: Option<f32>, up: Option<f32>, open: Option<f32>, down: Option<f32>, wide: Option<f32>| {
+        let fit = |closed: Option<f32>, up: Option<f32>, open: Option<f32>, down: Option<f32>| {
             Some(LidFit {
                 closed: closed?,
                 up: up?,
                 open: open?,
                 down: down?,
-                wide,
             })
         };
         [
@@ -228,14 +237,12 @@ impl Settings {
                 self.lid_fit_up_left,
                 self.lid_fit_open_left,
                 self.lid_fit_down_left,
-                self.lid_fit_wide_left,
             ),
             fit(
                 self.lid_fit_closed_right,
                 self.lid_fit_up_right,
                 self.lid_fit_open_right,
                 self.lid_fit_down_right,
-                self.lid_fit_wide_right,
             ),
         ]
     }
@@ -282,8 +289,7 @@ impl Settings {
         let eye_offsets = [self.gaze_offset_x_left, self.gaze_offset_x_right];
         let eye_gains = [self.gaze_gain_x_left, self.gaze_gain_x_right];
         let lid_fit = self.lid_fit_readings();
-        let wide = [self.lid_fit_wide_left, self.lid_fit_wide_right];
-        let fitted = lid_fit.iter().flatten().flatten().chain(wide.iter().flatten());
+        let fitted = lid_fit.iter().flatten().flatten();
         if !numbers
             .iter()
             .chain(scales.iter().flatten())
@@ -462,7 +468,7 @@ pub fn apply_args(settings: &mut Settings, args: &Args, given: &HashSet<String>)
             }
         )*};
     }
-    pin!(output, eye_tracking_active);
+    pin!(output, eye_tracking_active, lid_widen);
     if given.contains("target") {
         locked.push("host");
         // main() has already rejected anything that is neither "auto" nor HOST:PORT.
@@ -703,6 +709,18 @@ mod tests {
         // The option's own default is the setting's
         let (args, _) = cli(&[]);
         assert_eq!(args.eye_tracking_active, Settings::default().eye_tracking_active);
+    }
+
+    #[test]
+    fn lid_widen_is_one_of_four() {
+        for (text, kind) in [("off", Widen::Off), ("low", Widen::Low), ("normal", Widen::Normal), ("high", Widen::High)] {
+            let (settings, _) = merged(&format!(r#"{{"lid_widen": "{text}"}}"#), &[]).unwrap();
+            assert_eq!(settings.lid_widen, kind);
+        }
+        assert_eq!(merged("{}", &[]).unwrap().0.lid_widen, Widen::Normal);
+        assert!(merged(r#"{"lid_widen": "max"}"#, &[]).is_err());
+        let (settings, locked) = merged(r#"{"lid_widen": "off"}"#, &["--lid-widen", "high"]).unwrap();
+        assert_eq!((settings.lid_widen, locked), (Widen::High, vec!["lid_widen"]));
     }
 
     #[test]

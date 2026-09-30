@@ -474,7 +474,7 @@ void testFullSession() {
     double now = 100.0;
     long long id = 0;
     s.start(Mode::Full, Values(), now);
-    CHECK(s.active() && s.view().phase == Phase::Waiting && s.view().count == 7);
+    CHECK(s.active() && s.view().phase == Phase::Waiting && s.view().count == 6);
     // Nothing is shown while the dashboard is open
     Actions a = s.tick(now + 0.1, true, runningWith(0, false, {}));
     CHECK(!a.showTarget && s.view().phase == Phase::Waiting);
@@ -537,136 +537,13 @@ void testFullSession() {
     a = s.tick(now, false, runningWith(id, true, points[5], false));
     CHECK(s.view().phase == Phase::Reopen && a.style == TargetStyle::OpenEyes && !a.writeValues);
     now += kReopenSec;
-    // The eyes-wide step: "open your eyes wide" 3, 2, 1, then "keep them wide" for 2 s
     a = s.tick(now, false, runningWith(0, false, {}));
-    CHECK(s.view().point == Point::Wide && s.view().phase == Phase::Settling && s.view().index == 6);
-    CHECK(a.style == TargetStyle::WideEyes && a.seconds == 3 && near(a.progress, 1.0) && !a.writeValues);
-    a = s.tick(now + 1.5, false, runningWith(0, false, {}));
-    CHECK(a.seconds == 2 && near(a.progress, 0.5));
-    now += kWideSettleSec;
-    a = s.tick(now, false, runningWith(0, false, {}));
-    CHECK(a.writeCapture && std::string(a.target) == "wide" && a.style == TargetStyle::KeepWide);
-    CHECK(near(a.captureSec, 2.0) && near(a.skipSec, 0.5));
-    s.captureSent(++id, now);
-    now += kWideSec + 0.2;
-    // The left eye opened only 0.06 wider than straight ahead (too little to use), the right 0.18
-    Measured wide = points[0];
-    wide.openness[0] = 0.98;
-    wide.openness[1] = 0.99;
-    a = s.tick(now, false, runningWith(id, true, wide));
     CHECK(a.writeValues && !a.showTarget && s.view().phase == Phase::Done && !s.active());
     CHECK(near(a.values.gainX, 0.93) && a.values.hasLids && near(a.values.lidClosed[1], 0.26));
-    CHECK(a.values.hasWide && std::isnan(a.values.lidWide[0]) && near(a.values.lidWide[1], 0.99));
-    CHECK(a.log.find("wide: L none (widens with the other eye), R 0.990") != std::string::npos);
-    CHECK(id == 8);
-    // A whole fit takes about 25 s: five dots, 3 s to close the eyes and 3 shut, 1.5 to open, 3 to widen and 2 wide
-    CHECK(near(5 * kPointSec + kCloseSettleSec + kClosedSec + kReopenSec + kWideSettleSec + kWideSec, 25.0));
+    CHECK(id == 7);
     // Done stays done
     a = s.tick(now + 1, false, runningWith(id, true, points[5], false));
     CHECK(!a.writeValues && !a.writeCapture);
-}
-
-/**
- * Take a full session up to the eyes-wide step (its countdown showing).
- * @param s the session
- * @param now the time (advanced)
- * @param id the capture id (advanced)
- */
-void toWideStep(Session& s, double& now, long long& id) {
-    Measured points[kPointCount];
-    fivePoints(points);
-    s.start(Mode::Full, Values(), now);
-    for (int i = 0; i < 5; ++i) runStep(s, now, id, points[i]);
-    runStep(s, now, id, points[5], kCloseSettleSec, false);
-    now += kReopenSec;
-    s.tick(now, false, runningWith(0, false, {}));
-    CHECK(s.view().point == Point::Wide && s.view().phase == Phase::Settling);
-}
-
-/** Each eye's wide reading: used with room above straight ahead, left out when saturated or too close. */
-void testWideFit() {
-    Measured points[kPointCount];
-    fivePoints(points);
-    // One user's eyes: the left reads 0.952 straight ahead and 1.000 wide (saturated, 0.048 of room), the right 0.812
-    // and 0.99
-    points[static_cast<int>(Point::Center)].openness[0] = 0.952;
-    points[static_cast<int>(Point::Center)].openness[1] = 0.812;
-    Measured& wide = points[static_cast<int>(Point::Wide)];
-    wide = shut(1.0, 0.99);
-    Values v;
-    fitWide(points, v);
-    CHECK(v.hasWide && std::isnan(v.lidWide[0]) && near(v.lidWide[1], 0.99));
-    // Exactly kMinWideRange above counts; a little less does not
-    wide = shut(0.952 + kMinWideRange, 0.812 + kMinWideRange - 0.002);
-    fitWide(points, v);
-    CHECK(near(v.lidWide[0], 1.032) && std::isnan(v.lidWide[1]));
-    // Not measured at all: both null, but the step ran (so the old readings are cleared)
-    wide = Measured();
-    fitWide(points, v);
-    CHECK(v.hasWide && std::isnan(v.lidWide[0]) && std::isnan(v.lidWide[1]));
-    CHECK(usableWide(shut(1.0, 0.99)) && !usableWide(Measured()));
-    Measured brief = shut(1.0, 0.99);
-    brief.samples = 5;
-    CHECK(!usableWide(brief));
-    // The log line for a try
-    points[static_cast<int>(Point::Center)].openness[0] = 0.92;
-    points[static_cast<int>(Point::Center)].openness[1] = 0.81;
-    CHECK(tryText(Point::Wide, 1, shut(0.98, 0.99), points[0], "ok") ==
-          "wide try 1: 130 samples (min 45), openness L 0.980 R 0.990 (ahead 0.920 / 0.810, room from +0.08) -> ok");
-}
-
-/** The eyes-wide step never costs the rest of the fit. */
-void testWideNeverFails() {
-    {
-        // Three short captures: done, without wide readings
-        Session s;
-        double now = 0.0;
-        long long id = 0;
-        toWideStep(s, now, id);
-        Actions a;
-        for (int i = 0; i < kMaxAttempts; ++i) {
-            Measured brief = shut(1.0, 0.99);
-            brief.samples = 5;
-            s.tick(now, false, runningWith(0, false, {}));
-            now += kWideSettleSec + 0.01;
-            a = s.tick(now, false, runningWith(0, false, {}));
-            CHECK(a.writeCapture && std::string(a.target) == "wide");
-            s.captureSent(++id, now);
-            now += kWideSec + 0.2;
-            a = s.tick(now, false, runningWith(id, true, brief));
-            if (i + 1 < kMaxAttempts) CHECK(s.view().attempt == i + 2 && s.view().phase == Phase::Settling);
-        }
-        CHECK(a.writeValues && s.view().phase == Phase::Done && a.values.hasLids && a.values.hasWide);
-        CHECK(std::isnan(a.values.lidWide[0]) && std::isnan(a.values.lidWide[1]));
-        CHECK(a.log.find("wide: not measured; the rest of the fit is kept") != std::string::npos);
-    }
-    {
-        // The dashboard opened during the countdown: done, hidden
-        Session s;
-        double now = 0.0;
-        long long id = 0;
-        toWideStep(s, now, id);
-        const Actions a = s.tick(now + 1.0, true, runningWith(0, false, {}));
-        CHECK(a.writeValues && !a.showTarget && s.view().phase == Phase::Done && a.values.hasLids);
-        CHECK(std::isnan(a.values.lidWide[1]));
-    }
-    {
-        // No answer: done without it
-        Session s;
-        double now = 0.0;
-        long long id = 0;
-        toWideStep(s, now, id);
-        now += kWideSettleSec + 0.01;
-        s.tick(now, false, runningWith(0, false, {}));
-        s.captureSent(++id, now);
-        const Actions a = s.tick(now + kResultTimeoutSec + 0.1, false, runningWith(0, false, {}));
-        CHECK(a.writeValues && s.view().phase == Phase::Done && s.view().failure == Failure::None);
-    }
-    {
-        // The re-wear fits have no eyes-wide step
-        CHECK(pointCount(Mode::Center) == 1 && pointCount(Mode::Tilt) == 3 && pointCount(Mode::Full) == 7);
-        CHECK(pointAt(Mode::Full, 6) == Point::Wide && std::string(target(Point::Wide).name) == "wide");
-    }
 }
 
 void testCenterSession() {
@@ -742,16 +619,9 @@ void testTiltSession() {
     for (int i = 0; i < 5; ++i) runStep(full, now, id, first[i]);
     runStep(full, now, id, shut(), kCloseSettleSec, false);
     now += kReopenSec;
-    full.tick(now, false, runningWith(0, false, {}));
-    now += kWideSettleSec + 0.01;
     a = full.tick(now, false, runningWith(0, false, {}));
-    CHECK(a.writeCapture);
-    full.captureSent(++id, now);
-    now += kWideSec + 0.2;
-    a = full.tick(now, false, runningWith(id, true, shut(1.0, 0.99)));
     CHECK(a.writeValues && near(a.values.rollDeg, 6.7));
-    // After the eyes-wide try's line: the tilt, then the wide readings
-    CHECK(a.log.find("\ntilt +6.7° from up/down, +6.7° from the sides\nwide: ") != std::string::npos);
+    CHECK(a.log == "tilt +6.7° from up/down, +6.7° from the sides");
 }
 
 void testFailures() {
@@ -890,8 +760,6 @@ int main() {
     testRewearTilt();
     testCenterAndUsable();
     testFullSession();
-    testWideFit();
-    testWideNeverFails();
     testCenterSession();
     testTiltSession();
     testFailures();

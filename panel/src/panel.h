@@ -53,7 +53,8 @@ enum class PanelAction {
     FitReset,          ///< the fit back to the defaults (fitResetKeys: the gaze fit, lid_fit_*, lid_scale_*)
     FitDetails,        ///< open / close "Fine-tune" (handled inside the panel)
     FitDetailsPage,    ///< show arg (0 gaze, 1 eyelids) under "Fine-tune" (handled inside the panel)
-    LidMarks,          ///< open / close the lid marks on the Eyelids tab when both eyes are fitted (inside the panel)
+    LidMarks,          ///< open / close the lid marks on the Eyelids tab for fitted eyes (handled inside the panel)
+    SetLidWiden,       ///< lid_widen = kLidWidenModes[arg]
     HostEnter,         ///< open the keypad for the target PC (the caller fills in the host now)
     HostKey,           ///< a keypad key: arg = '0'-'9', '.' or host_entry::kBackspace (handled inside the panel)
     HostOk,            ///< use the typed host (the caller checks and writes it)
@@ -165,7 +166,7 @@ public:
     void setFitDetails(bool open) { fitDetails_ = open; }
 
     /**
-     * Show the lid marks on the Eyelids tab even when both eyes are fitted (they are folded away then).
+     * Show the lid marks on the Eyelids tab although the eyes are fitted (they are folded away then).
      * @param open whether they show
      */
     void setLidMarks(bool open) { lidMarksOpen_ = open; }
@@ -246,7 +247,7 @@ private:
     PanelTab tab_ = PanelTab::Basic;
     bool fitDetails_ = false;  ///< "Fine-tune" is open on the Eye fit tab
     int fitDetailsPage_ = 0;   ///< what "Fine-tune" shows: 0 = gaze, 1 = eyelids
-    bool lidMarksOpen_ = false;  ///< the lid marks show on the Eyelids tab although both eyes are fitted
+    bool lidMarksOpen_ = false;  ///< the lid marks show on the Eyelids tab although the eyes are fitted
     bool quitArmed_ = false;
     double quitArmedUntil_ = 0.0;
     bool resetArmed_ = false;

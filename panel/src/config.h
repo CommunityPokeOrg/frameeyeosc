@@ -85,6 +85,8 @@ constexpr const char* kFitSounds = "fit_sounds";
 /** The panel's own: the fit run by itself when the headset is put on, "center" (the default), "tilt" or "off"
  *  (see kAutoRecenterModes; frameeyeosc ignores it). */
 constexpr const char* kAutoRecenter = "auto_recenter";
+/** How easily an eye with an eye fit widens: see kLidWidenModes. */
+constexpr const char* kLidWiden = "lid_widen";
 constexpr const char* kLidFitClosedLeft = "lid_fit_closed_left";
 constexpr const char* kLidFitClosedRight = "lid_fit_closed_right";
 constexpr const char* kLidFitUpLeft = "lid_fit_up_left";
@@ -93,9 +95,6 @@ constexpr const char* kLidFitOpenLeft = "lid_fit_open_left";
 constexpr const char* kLidFitOpenRight = "lid_fit_open_right";
 constexpr const char* kLidFitDownLeft = "lid_fit_down_left";
 constexpr const char* kLidFitDownRight = "lid_fit_down_right";
-/** Each eye opened wide (the eye fit's last step); null when not measured or saturated (widens with the other eye). */
-constexpr const char* kLidFitWideLeft = "lid_fit_wide_left";
-constexpr const char* kLidFitWideRight = "lid_fit_wide_right";
 /** A request, not a setting: {"id": N, "target": "center"} asks frameeyeosc to average the gaze (eye fit). */
 constexpr const char* kGazeCapture = "gaze_capture";
 constexpr const char* kCalibrationReset = "calibration_reset";
@@ -111,6 +110,8 @@ constexpr const char* kOutputLivelink = "livelink";  ///< Live Link Face packets
 constexpr const char* kActiveTypes[3] = {"bool", "float", "off"};
 /** auto_recenter values, in the order its button steps through them: nothing, one dot, the dot and the side dots */
 constexpr const char* kAutoRecenterModes[3] = {"off", "center", "tilt"};
+/** lid_widen values, in the order the Eyelids tab shows them: never, less, normal (the default), more */
+constexpr const char* kLidWidenModes[4] = {"off", "low", "normal", "high"};
 /** Default ports of the output types (used while "port" is null). */
 constexpr int kPortVrchat = 9000;
 constexpr int kPortEtvr = 8889;

@@ -10,21 +10,20 @@
 
 namespace gaze_fit {
 
-/** The whole fit (five gaze points, the eyes-shut step and the eyes-wide step); re-centering the gaze only (one dot);
- *  or re-centering and measuring the headset's tilt again (straight ahead, up and down), for putting the headset back
- *  on. */
+/** The whole fit (five gaze points and the eyes-shut step); re-centering the gaze only (one dot); or re-centering and
+ *  measuring the headset's tilt again (straight ahead, up and down), for putting the headset back on. */
 enum class Mode { Full, Center, Tilt };
 
 /** The steps, in the order the full fit shows them. */
-enum class Point { Center, Up, Down, Left, Right, Closed, Wide };
+enum class Point { Center, Up, Down, Left, Right, Closed };
 
 /** How many steps there are at most. */
-constexpr int kPointCount = 7;
+constexpr int kPointCount = 6;
 
 /** A step's target as seen from the head. */
 struct Target {
     Point point;
-    const char* name;  ///< sent with the capture request and logged by frameeyeosc ("closed" = eyes shut, "wide")
+    const char* name;  ///< sent with the capture request and logged by frameeyeosc ("closed" = eyes shut)
     double yawDeg;     ///< degrees to the right
     double pitchDeg;   ///< degrees up
 };
@@ -74,20 +73,8 @@ constexpr double kCloseSettleSec = 3.0;
 constexpr double kClosedSec = 3.0;
 /** ...skipping its first half second while the eyes close. */
 constexpr double kClosedSkipSec = 0.5;
-/** After it, "open your eyes" shows this long before the eyes-wide step (or the result, without it). */
+/** After it, "open your eyes" shows this long before the result is written. */
 constexpr double kReopenSec = 1.5;
-/** The eyes-wide step: "open your eyes wide" counts down 3, 2, 1 this long, then the capture is asked for... */
-constexpr double kWideSettleSec = 3.0;
-/** ...which lasts this long (holding the eyes wide open is tiring, so shorter than the eyes-shut step)... */
-constexpr double kWideSec = 2.0;
-/** ...skipping its first half second while the eyes open up. */
-constexpr double kWideSkipSec = 0.5;
-/** An eye's wide reading counts when it is at least this far above its straight-ahead open reading (frameeyeosc
- *  checks the same, LID_FIT_WIDE_MIN_RANGE). A relaxed eye wanders about 0.03-0.08 above that reading, so anything
- *  closer can't be told from a relaxed eye; and since the Frame's openness stops at 1.000, an eye reading above 0.92
- *  straight ahead is saturated: it has no room to show widening (one user's left eye read 0.952). Such an eye gets no
- *  wide reading and widens with the other eye. */
-constexpr double kMinWideRange = 0.08;
 /** Seconds to wait for a capture's result: frameeyeosc checks config.json every 0.1 s and gives up 3 s after the
  *  capture should have ended. */
 constexpr double kResultTimeoutSec = 8.0;
@@ -201,8 +188,6 @@ struct Values {
     double lidUp[2] = {0.0, 0.0};
     double lidOpen[2] = {0.0, 0.0};
     double lidDown[2] = {0.0, 0.0};
-    bool hasWide = false;  ///< the eyes-wide step ran (the full fit): lidWide is written, NaN as null
-    double lidWide[2] = {NAN, NAN};  ///< each eye opened wide; NaN = not measured or no room (widens with the other)
 };
 
 /**
@@ -307,21 +292,6 @@ bool fitTilt(const Measured points[kPointCount], const Values& current, double i
              FailureDetail* detail = nullptr);
 
 /**
- * Whether the eyes-wide capture is long enough to use (whether each eye had room to widen is fitWide's call).
- * @param wide the eyes-wide capture
- * @return true if usable
- */
-bool usableWide(const Measured& wide);
-
-/**
- * Each eye's wide reading: the eyes-wide capture's openness, when it is at least kMinWideRange above that eye's
- * straight-ahead open reading; NaN otherwise, and for both eyes when the step was not measured. Never fails.
- * @param points the captures, indexed by Point (Center and Wide used; Wide without openness = not measured)
- * @param out where the readings go (hasWide set)
- */
-void fitWide(const Measured points[kPointCount], Values& out);
-
-/**
  * Each eye's lid fit: the eyes-shut reading, and the open readings looking up, straight ahead and down.
  * @param points the captures, indexed by Point (Closed included)
  * @param out where the lid readings go (hasLids set)
@@ -336,7 +306,7 @@ enum class Phase {
     Waiting,    ///< waiting for the dashboard to close
     Settling,   ///< a target is shown; its capture is asked for after the settle time
     Capturing,  ///< waiting for frameeyeosc's result
-    Reopen,     ///< "open your eyes" after the eyes-shut step (then the eyes-wide step)
+    Reopen,     ///< "open your eyes" after the eyes-shut step
     Done,       ///< the new settings were written
     Failed,     ///< stopped; see Failure
 };
@@ -361,8 +331,6 @@ enum class TargetStyle {
     CloseEyes,    ///< "close your eyes" with a countdown
     KeepClosed,   ///< "keep them closed"
     OpenEyes,     ///< "open your eyes"
-    WideEyes,     ///< "open your eyes wide" with a countdown
-    KeepWide,     ///< "keep them wide"
 };
 
 /** What the panel shows about a session. */
@@ -390,8 +358,7 @@ struct Actions {
     TargetStyle style = TargetStyle::Dot;
     double yawDeg = 0.0;        ///< where, gliding between targets
     double pitchDeg = 0.0;
-    int seconds = 0;            ///< the countdown on the target (0 = none): the seconds measured, or the eyes-shut /
-                                ///< eyes-wide 3, 2, 1
+    int seconds = 0;            ///< the countdown on the target (0 = none): the seconds measured, or the eyes-shut 3, 2, 1
     double progress = 0.0;      ///< the ring on the target, 1 -> 0 over one step
     bool arrived = false;       ///< the target has finished gliding to this step (or didn't have to move)
     std::string log;            ///< a try's numbers to log (tryText), and at the end the tilt; lines split by '\n'
@@ -477,16 +444,6 @@ private:
      */
     void finish(Actions& actions);
 
-    /**
-     * The eyes-wide step could not be measured (the dashboard opened, no answer, or tries used up): finish without
-     * it, keeping the rest of the fit.
-     * @param actions where to ask for the write
-     */
-    void finishWithoutWide(Actions& actions);
-
-    /** @return true while showing the eyes-wide step */
-    bool wideStep() const { return point() == Point::Wide && (phase_ == Phase::Settling || phase_ == Phase::Capturing); }
-
     /** @return the step shown now */
     Point point() const { return pointAt(mode_, index_); }
 
@@ -497,19 +454,10 @@ private:
     void failMovement(Point point);
 
     /** @return how long the current step settles */
-    double settleSec() const {
-        return point() == Point::Closed ? kCloseSettleSec : (point() == Point::Wide ? kWideSettleSec : kSettleSec);
-    }
+    double settleSec() const { return point() == Point::Closed ? kCloseSettleSec : kSettleSec; }
 
     /** @return how long the current step's capture lasts */
-    double captureSec() const {
-        return point() == Point::Closed ? kClosedSec : (point() == Point::Wide ? kWideSec : kCaptureSec);
-    }
-
-    /** @return how much of the current step's capture frameeyeosc skips */
-    double skipSec() const {
-        return point() == Point::Closed ? kClosedSkipSec : (point() == Point::Wide ? kWideSkipSec : kCaptureSkipSec);
-    }
+    double captureSec() const { return point() == Point::Closed ? kClosedSec : kCaptureSec; }
 };
 
 }  // namespace gaze_fit

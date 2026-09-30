@@ -123,8 +123,6 @@ const char* const kLidFitKeys[2][4] = {
     {key::kLidFitClosedRight, key::kLidFitUpRight, key::kLidFitOpenRight, key::kLidFitDownRight},
 };
 
-const char* const kLidFitWideKeys[2] = {key::kLidFitWideLeft, key::kLidFitWideRight};
-
 bool fitKeysLocked(const SettingsView& view) {
     for (const char* name : {key::kGazeOffsetX, key::kGazeOffsetY, key::kGazeGainX, key::kGazeGainUp, key::kGazeGainDown,
                              key::kGazeRollDeg, key::kGazeOffsetXLeft, key::kGazeOffsetXRight, key::kGazeGainXLeft,
@@ -136,10 +134,26 @@ bool fitKeysLocked(const SettingsView& view) {
             if (view.locked(name)) return true;
         }
     }
-    for (const char* name : kLidFitWideKeys) {
-        if (view.locked(name)) return true;
-    }
     return false;
+}
+
+WidenState widenState(const SettingsView& view) {
+    // frameeyeosc's WIDEN_LOW / WIDEN_NORMAL / WIDEN_HIGH starts and WIDEN_ROOM_LIMIT
+    constexpr double kWidenStart[4] = {NAN, 0.10, 0.07, 0.04};
+    constexpr double kWidenRoomLimit = 0.97;
+    WidenState state;
+    const std::string mode = view.text(key::kLidWiden);
+    for (int i = 0; i < 4; ++i) {
+        if (mode == kLidWidenModes[i]) state.mode = i;
+    }
+    const FitInConfig fit = fitInConfig(view);
+    for (int eye = 0; eye < 2; ++eye) {
+        state.fitted[eye] = fit.lidsFitted[eye];
+        const double open = view.number(kLidFitKeys[eye][2]);
+        state.room[eye] =
+            state.fitted[eye] && state.mode > 0 && open + kWidenStart[state.mode] <= kWidenRoomLimit + 1e-9;
+    }
+    return state;
 }
 
 AutoRecenter autoRecenter(const ConfigFile& config) {
@@ -182,10 +196,6 @@ void applyFitValues(JsonValue& root, const gaze_fit::Values& values, gaze_fit::M
     for (int eye = 0; eye < 2; ++eye) {
         const double readings[4] = {values.lidClosed[eye], values.lidUp[eye], values.lidOpen[eye], values.lidDown[eye]};
         for (int i = 0; i < 4; ++i) root.set(kLidFitKeys[eye][i], JsonValue::makeNumber(readings[i]));
-        // The wide reading, or null (not measured, or no room: that eye widens with the other)
-        const double wide = values.lidWide[eye];
-        root.set(kLidFitWideKeys[eye], values.hasWide && std::isfinite(wide) ? JsonValue::makeNumber(wide)
-                                                                              : JsonValue::makeNull());
     }
     // A fitted eye's scale fine-tunes the fit, so a tweak of the old fit starts over at 1.0
     root.set(key::kLidScaleLeft, JsonValue::makeNull());
@@ -198,7 +208,6 @@ std::vector<std::string> fitResetKeys() {
                                       key::kGazeOffsetXLeft, key::kGazeOffsetXRight, key::kGazeGainXLeft,
                                       key::kGazeGainXRight,  key::kLidScaleLeft,     key::kLidScaleRight};
     for (const auto& eye : kLidFitKeys) names.insert(names.end(), std::begin(eye), std::end(eye));
-    names.insert(names.end(), std::begin(kLidFitWideKeys), std::end(kLidFitWideKeys));
     return names;
 }
 
@@ -226,10 +235,8 @@ FitInConfig fitInConfig(const SettingsView& view) {
         v.lidUp[eye] = readings[1];
         v.lidOpen[eye] = readings[2];
         v.lidDown[eye] = readings[3];
-        v.lidWide[eye] = view.number(kLidFitWideKeys[eye]);
     }
     v.hasLids = fit.lidsFitted[0] && fit.lidsFitted[1];
-    v.hasWide = v.hasLids && (std::isfinite(v.lidWide[0]) || std::isfinite(v.lidWide[1]));
     const double eyeX[4] = {view.number(key::kGazeOffsetXLeft), view.number(key::kGazeOffsetXRight),
                             view.number(key::kGazeGainXLeft), view.number(key::kGazeGainXRight)};
     fit.eyeXFitted = std::all_of(std::begin(eyeX), std::end(eyeX), [](double value) { return std::isfinite(value); });

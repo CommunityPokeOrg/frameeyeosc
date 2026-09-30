@@ -204,13 +204,6 @@ struct UiText {
     const char* pointClosed;
     const char* targetClose;         ///< on the target: "Close your eyes\nfor 3 s" (two lines)
     const char* targetKeepClosed;
-    const char* targetWide;          ///< "open your eyes wide" on the target, with the 3, 2, 1
-    const char* targetKeepWide;
-    const char* pointWide;           ///< the eyes-wide step in "Measuring: %s"
-    const char* fitWideFormat;       ///< the result's widening line: "Wide: L %s · R %s"
-    const char* fitWideFollowsFormat;  ///< an eye without a wide reading: "couldn't measure (follows %s)"
-    const char* fitWideNone;         ///< neither eye has one
-    const char* lidMarksFitted;      ///< Eyelids tab, both eyes fitted: the fit sets closing, opening and widening
     const char* targetOpen;
     const char* fitReset;
     const char* fitDetails;          ///< the fold with the values by hand
@@ -250,6 +243,14 @@ struct UiText {
     const char* capClosed;
     const char* capAhead;
     const char* lidFitInUse;         ///< Eyelids tab, instead of the learned values
+    const char* rowWiden;            ///< how easily a fitted eye widens (lid_widen)...
+    const char* hintWiden;
+    const char* widenModes[4];       ///< ...off, less, normal, more
+    const char* widenFollowsLeft;    ///< the left eye has no room and widens with the right
+    const char* widenFollowsRight;
+    const char* widenNoRoom;         ///< neither eye has room
+    const char* lidMarksFitted;      ///< above the bars for fitted eyes (the marks folded away)
+    const char* lidMarksUnused;      ///< the same, the marks open: 3 and 4 are only for eyes without a fit
 
     // Lids tab
     const char* rowCalibration;

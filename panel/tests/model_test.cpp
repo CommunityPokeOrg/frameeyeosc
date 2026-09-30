@@ -35,7 +35,6 @@ JsonValue tweakedRoot() {
     root.type = JsonValue::Type::Object;
     root.set(key::kLidScaleLeft, JsonValue::makeNumber(1.1));
     root.set(key::kLidScaleRight, JsonValue::makeNumber(0.69));
-    root.set(key::kLidFitWideLeft, JsonValue::makeNumber(1.0));
     for (const auto& eye : kLidFitKeys) {
         for (const char* name : eye) root.set(name, JsonValue::makeNumber(0.5));
     }
@@ -70,10 +69,6 @@ gaze_fit::Values measured(bool lids) {
         values.lidOpen[eye] = 0.85;
         values.lidDown[eye] = 0.7;
     }
-    // The left eye had no room to widen; the right read 0.99
-    values.hasWide = lids;
-    values.lidWide[0] = NAN;
-    values.lidWide[1] = 0.99;
     return values;
 }
 
@@ -84,9 +79,6 @@ void testFitResetsScales() {
     CHECK(full.get(key::kLidScaleLeft) != nullptr && full.get(key::kLidScaleLeft)->isNull());
     CHECK(full.get(key::kLidScaleRight) != nullptr && full.get(key::kLidScaleRight)->isNull());
     CHECK(std::fabs(numberIn(full, key::kLidFitOpenLeft) - 0.85) < 1e-9);
-    // The wide readings: null for the eye without one (an old one is replaced), the number for the other
-    CHECK(full.get(key::kLidFitWideLeft) != nullptr && full.get(key::kLidFitWideLeft)->isNull());
-    CHECK(std::fabs(numberIn(full, key::kLidFitWideRight) - 0.99) < 1e-9);
 
     // Without eyelid readings the old lid fit stays, and so do its tweaks
     JsonValue gazeOnly = tweakedRoot();
@@ -100,7 +92,6 @@ void testFitResetsScales() {
         CHECK(std::fabs(numberIn(rewear, key::kLidScaleLeft) - 1.1) < 1e-9);
         CHECK(std::fabs(numberIn(rewear, key::kLidScaleRight) - 0.69) < 1e-9);
         CHECK(std::fabs(numberIn(rewear, key::kLidFitOpenLeft) - 0.5) < 1e-9);
-        CHECK(std::fabs(numberIn(rewear, key::kLidFitWideLeft) - 1.0) < 1e-9);
         CHECK(std::fabs(numberIn(rewear, key::kGazeOffsetX) - 0.01) < 1e-9);
         // Only the re-wear fit with the side dots sets the tilt
         CHECK(std::isnan(numberIn(rewear, key::kGazeRollDeg)) == (mode == gaze_fit::Mode::Center));
@@ -112,7 +103,6 @@ void testResetClearsScales() {
     const std::vector<std::string> keys = fitResetKeys();
     const auto has = [&](const char* name) { return std::find(keys.begin(), keys.end(), name) != keys.end(); };
     CHECK(has(key::kLidScaleLeft) && has(key::kLidScaleRight));
-    CHECK(has(key::kLidFitWideLeft) && has(key::kLidFitWideRight));
     CHECK(has(key::kGazeOffsetX) && has(key::kGazeRollDeg) && has(key::kGazeGainXRight));
     for (const auto& eye : kLidFitKeys) {
         for (const char* name : eye) CHECK(has(name));
@@ -148,6 +138,51 @@ void testRecenterDefault() {
     CHECK(spec != nullptr && std::string(spec->defaultText) == "center");
 }
 
+/**
+ * widenState for a made-up model: both eyes fitted with these straight-ahead readings.
+ * @param left the left eye's open reading
+ * @param right the right eye's
+ * @param mode lid_widen
+ * @return the state
+ */
+WidenState widenOf(double left, double right, const char* mode) {
+    PanelModel model;
+    model.config.exists = true;
+    model.config.root.type = JsonValue::Type::Object;
+    const double open[2] = {left, right};
+    for (int eye = 0; eye < 2; ++eye) {
+        const double readings[4] = {0.2, open[eye] + 0.01, open[eye], open[eye] - 0.1};
+        for (int i = 0; i < 4; ++i) model.config.root.set(kLidFitKeys[eye][i], JsonValue::makeNumber(readings[i]));
+    }
+    if (mode != nullptr) model.config.root.set(key::kLidWiden, JsonValue::makeString(mode));
+    return widenState(SettingsView(model));
+}
+
+/** Which eye can widen by itself, as frameeyeosc decides it. */
+void testWidenState() {
+    // One user's eyes: the left reads 0.945 straight ahead (no room), the right 0.835; "normal" by default
+    WidenState s = widenOf(0.945, 0.835, nullptr);
+    CHECK(s.mode == 2 && s.fitted[0] && s.fitted[1] && !s.room[0] && s.room[1]);
+    // 0.90 + 0.07 is just within 0.97, 0.91 is not; "low" needs 0.87 or less, "high" 0.93
+    s = widenOf(0.90, 0.91, "normal");
+    CHECK(s.room[0] && !s.room[1]);
+    s = widenOf(0.87, 0.88, "low");
+    CHECK(s.mode == 1 && s.room[0] && !s.room[1]);
+    s = widenOf(0.93, 0.94, "high");
+    CHECK(s.mode == 3 && s.room[0] && !s.room[1]);
+    // Off: nobody widens
+    s = widenOf(0.8, 0.8, "off");
+    CHECK(s.mode == 0 && !s.room[0] && !s.room[1]);
+    // Not fitted: the setting doesn't apply
+    PanelModel plain;
+    plain.config.exists = true;
+    plain.config.root.type = JsonValue::Type::Object;
+    s = widenState(SettingsView(plain));
+    CHECK(!s.fitted[0] && !s.fitted[1] && !s.room[0] && !s.room[1]);
+    const SettingSpec* spec = findSetting(key::kLidWiden);
+    CHECK(spec != nullptr && std::string(spec->defaultText) == "normal");
+}
+
 /** The destination cards' button arguments stand for the output types both ways. */
 void testOutputArgs() {
     for (int arg = 0; arg < 3; ++arg) CHECK(argOfOutput(outputOfArg(arg)) == arg);
@@ -166,6 +201,7 @@ int main() {
     testResetClearsScales();
     testRecenterDefault();
     testOutputArgs();
+    testWidenState();
     if (gFailures == 0) std::printf("model-test: all passed\n");
     return gFailures == 0 ? 0 : 1;
 }

@@ -195,14 +195,12 @@ std::vector<Cue> FitCues::update(const gaze_fit::View& view, const gaze_fit::Act
         popped_ = false;
         lastTick_ = 0;
     }
-    // The eyes-shut and eyes-wide steps have words instead of a dot: ticks for their 3, 2, 1 instead of a pop
-    const bool counted = view.point == Point::Closed || view.point == Point::Wide;
-    if (running && !counted && actions.arrived && !popped_ && view.attempt == 1) {
+    if (running && view.point != Point::Closed && actions.arrived && !popped_ && view.attempt == 1) {
         // The dot has arrived where to look
         cues.push_back(Cue::Pop);
         popped_ = true;
     }
-    if (running && counted && view.phase == Phase::Settling && actions.arrived &&
+    if (running && view.point == Point::Closed && view.phase == Phase::Settling && actions.arrived &&
         actions.seconds > 0 && actions.seconds != lastTick_) {
         cues.push_back(Cue::Tick);
         lastTick_ = actions.seconds;

@@ -193,11 +193,6 @@ void testFullFitCues() {
     shut.openness[0] = 0.15;
     shut.openness[1] = 0.26;
     run.step(shut, true);
-    // Then the eyes-wide step: its own 3, 2, 1, then the capture
-    Measured wide = steady(0, 0);
-    wide.openness[0] = 1.0;
-    wide.openness[1] = 0.99;
-    run.step(wide, true);
     for (int i = 0; i < 90 * 2; ++i) run.frame(idle());
     CHECK(run.session.view().phase == gaze_fit::Phase::Done);
 
@@ -205,22 +200,25 @@ void testFullFitCues() {
     CHECK(run.count(Cue::Pop) == 5);
     CHECK(run.count(Cue::Pip) == 5);
     CHECK(run.count(Cue::Buzz) == 1);
-    // "Close your eyes" 3, 2, 1, the chime to open them, "open them wide" 3, 2, 1, then done; nothing failed
-    CHECK(run.count(Cue::Tick) == 6);
+    // "Close your eyes" 3, 2, 1, then the chime to open them, then done; nothing failed
+    CHECK(run.count(Cue::Tick) == 3);
     CHECK(run.count(Cue::Open) == 1 && run.count(Cue::Done) == 1 && run.count(Cue::Fail) == 0);
-    // In order: three ticks, the open chime, three more ticks, done at the end of the wide capture
-    std::vector<double> ticks;
+    // In order: the ticks come before the open chime, which comes kReopenSec before done
+    double tick = -1;
     double open = -1;
     double done = -1;
     for (const auto& h : run.heard) {
-        if (h.second == Cue::Tick) ticks.push_back(h.first);
+        if (h.second == Cue::Tick) tick = h.first;
         if (h.second == Cue::Open) open = h.first;
         if (h.second == Cue::Done) done = h.first;
     }
-    CHECK(ticks.size() == 6 && ticks[2] < open && open < ticks[3] && ticks[5] < done);
-    // The wide countdown starts kReopenSec after the open chime; ticks are about a second apart
-    CHECK(std::fabs(ticks[3] - open - gaze_fit::kReopenSec) < 0.05);
-    CHECK(std::fabs(ticks[2] - ticks[1] - 1.0) < 0.05 && std::fabs(ticks[5] - ticks[4] - 1.0) < 0.05);
+    CHECK(tick < open && open < done && std::fabs(done - open - gaze_fit::kReopenSec) < 0.05);
+    // Ticks are about a second apart, as the countdown on the target
+    std::vector<double> ticks;
+    for (const auto& h : run.heard) {
+        if (h.second == Cue::Tick) ticks.push_back(h.first);
+    }
+    CHECK(ticks.size() == 3 && std::fabs(ticks[2] - ticks[1] - 1.0) < 0.05);
     // The first dot pops as soon as it shows; later ones when they arrive after gliding
     CHECK(run.heard.front().second == Cue::Pop);
 }

@@ -102,6 +102,7 @@ struct Options {
     std::string fakeUpdate;       ///< a made-up update state (see printUsage)
     std::string fakeFit;          ///< a made-up eye fit state (see printUsage)
     std::string fakeRecord;       ///< a made-up eye log state: "recording" or "failed"
+    std::string fakeWiden;        ///< lid_widen in the made-up config ("" = the default)
     bool updateLive = false;      ///< --dump-png: run the real update checker (and wait for it after clicks)
     std::vector<std::pair<double, double>> clicks;  ///< --click X,Y: presses carried out before the PNG is drawn
     Autostart fakeAutostart = Autostart::Disabled;
@@ -183,7 +184,7 @@ void printUsage() {
         "  --dot-png PATH        Draw a debug gaze dot to a PNG\n"
         "      --dot-kind both|left|right  Which one (default both)\n"
         "  --target-png PATH     Draw the eye fit's target (the head-locked dot) to a PNG\n"
-        "      --target-style dot|close|keep|open|wide|keepwide  The dot, or the eyes-shut / eyes-wide step's words\n"
+        "      --target-style dot|close|keep|open  The dot, or the eyes-shut step (words from --language)\n"
         "      --target-seconds N  The countdown on it (default 3; 0 = none)\n"
         "      --target-progress F  How much of its ring is left, 0..1 (default 0.7)\n"
         "      --target-bench N  Also draw it N times and print how long one takes, then one gaze point\n"
@@ -191,7 +192,7 @@ void printUsage() {
         "      --language ja|en  Draw in this language instead of the config's\n"
         "      --tab basic|output|gaze|eyefit|lids|advanced  Draw this tab\n"
         "      --fit-details [gaze|lids]  Open \"Fine-tune\" on the Eye fit tab (default: its gaze page)\n"
-        "      --lid-marks       Show the lid marks on the Eyelids tab although both eyes are fitted\n"
+        "      --lid-marks       Show the lid marks on the Eyelids tab although the eyes are fitted\n"
         "      --preview-quit    Show \"press again to quit\"\n"
         "      --preview-reset   Show \"press again to reset\"\n"
         "      --preview-update-prompt  Show the \"update to ...?\" question (with --fake-update available)\n"
@@ -210,11 +211,12 @@ void printUsage() {
         "      --fake-autostart on|off|missing|unknown\n"
         "      --fake-update checking|uptodate|available|manual|installing|installed|checkfailed|installfailed\n"
         "                        A made-up update state (the version row on the Advanced tab)\n"
-        "      --fake-fit waiting|waiting-center|waiting-tilt|running|running-closed|running-wide|done|done-center|\n"
-        "                 done-tilt|fitted|fitted-gaze|fitted-nowide|\n"
+        "      --fake-fit waiting|waiting-center|waiting-tilt|running|running-closed|done|done-center|done-tilt|\n"
+        "                 fitted|fitted-gaze|\n"
         "                 failed-unsteady|failed-notclosed|failed-movement|failed-lidrange|failed-cancelled|\n"
         "                 failed-noresult  A made-up eye fit (Eye fit tab)\n"
         "      --fake-record recording|failed  A made-up eye log (Advanced tab, and the left column)\n"
+        "      --fake-widen off|low|normal|high  lid_widen in the made-up settings\n"
         "      --update-live     Run the real update checker: check first, and after each --click wait for the\n"
         "                        check or install it started (installs really happen; for testing with a fake GitHub)\n"
         "      --click X,Y       Press the panel at X,Y first (repeatable; writes --config; not with --fake)\n"
@@ -267,9 +269,9 @@ bool parseOptions(int argc, char** argv, Options& options) {
             }
         } else if (arg == "--target-style" && hasNext) {
             options.targetStyle = argv[++i];
-            static const char* const kStyles[] = {"dot", "close", "keep", "open", "wide", "keepwide"};
-            if (std::find(std::begin(kStyles), std::end(kStyles), options.targetStyle) == std::end(kStyles)) {
-                std::fprintf(stderr, "--target-style must be dot, close, keep, open, wide or keepwide: %s\n", options.targetStyle.c_str());
+            if (options.targetStyle != "dot" && options.targetStyle != "close" && options.targetStyle != "keep" &&
+                options.targetStyle != "open") {
+                std::fprintf(stderr, "--target-style must be dot, close, keep or open: %s\n", options.targetStyle.c_str());
                 return false;
             }
         } else if (arg == "--target-bench" && hasNext) {
@@ -379,6 +381,14 @@ bool parseOptions(int argc, char** argv, Options& options) {
                 return false;
             }
             options.fake = true;
+        } else if (arg == "--fake-widen" && hasNext) {
+            options.fakeWiden = argv[++i];
+            if (std::find(std::begin(kLidWidenModes), std::end(kLidWidenModes), options.fakeWiden) ==
+                std::end(kLidWidenModes)) {
+                std::fprintf(stderr, "--fake-widen must be off, low, normal or high: %s\n", options.fakeWiden.c_str());
+                return false;
+            }
+            options.fake = true;
         } else if (arg == "--fake-record" && hasNext) {
             options.fakeRecord = argv[++i];
             if (options.fakeRecord != "recording" && options.fakeRecord != "failed") {
@@ -392,7 +402,7 @@ bool parseOptions(int argc, char** argv, Options& options) {
                 "waiting",         "waiting-center",   "waiting-tilt",    "running",         "running-closed",
                 "done",            "done-center",      "done-tilt",       "fitted",          "fitted-gaze",
                 "failed-unsteady", "failed-notclosed", "failed-movement", "failed-lidrange", "failed-cancelled",
-                "failed-noresult", "running-wide",     "fitted-nowide"};
+                "failed-noresult"};
             if (std::find(std::begin(kFitStates), std::end(kFitStates), options.fakeFit) == std::end(kFitStates)) {
                 std::fprintf(stderr, "--fake-fit: unknown state %s\n", options.fakeFit.c_str());
                 return false;
@@ -529,6 +539,7 @@ PanelModel fakeModel(const Options& options) {
     if (options.fakeEtvr) root.set(key::kOutput, JsonValue::makeString(kOutputEtvr));
     if (options.fakeLivelink) root.set(key::kOutput, JsonValue::makeString(kOutputLivelink));
     if (options.fakeFixed) root.set(key::kHost, JsonValue::makeString("192.168.0.60"));
+    if (!options.fakeWiden.empty()) root.set(key::kLidWiden, JsonValue::makeString(options.fakeWiden));
     if (options.fakePaused) root.set(key::kSending, JsonValue::makeBool(false));
     if (options.fakeCustom) {
         root.set(key::kGazeMinCutoff, JsonValue::makeNumber(0.3));
@@ -578,11 +589,6 @@ PanelModel fakeModel(const Options& options) {
             for (int eye = 0; eye < 2; ++eye) {
                 for (int i = 0; i < 4; ++i) root.set(kLidFitKeys[eye][i], JsonValue::makeNumber(readings[eye][i]));
             }
-            // Widening: the left eye had no room (it follows the right), the right read 0.99 (fitted-nowide: a fit from before the eyes-wide step)
-            if (state != "fitted-nowide") {
-                root.set(key::kLidFitWideLeft, JsonValue::makeNull());
-                root.set(key::kLidFitWideRight, JsonValue::makeNumber(0.99));
-            }
         }
         if (state.rfind("waiting", 0) == 0) {
             fit.phase = Phase::Waiting;
@@ -595,10 +601,6 @@ PanelModel fakeModel(const Options& options) {
             fit.phase = Phase::Settling;
             fit.index = 5;
             fit.point = Point::Closed;
-        } else if (state == "running-wide") {
-            fit.phase = Phase::Settling;
-            fit.index = 6;
-            fit.point = Point::Wide;
         } else if (state.rfind("done", 0) == 0) {
             fit.phase = Phase::Done;
         } else if (saved) {
@@ -817,12 +819,10 @@ int runDumpPng(const Options& options) {
         const UiText& t = uiText(language);
         using gaze_fit::TargetStyle;
         const std::string& name = options.targetStyle;
-        const TargetStyle style = name == "close"      ? TargetStyle::CloseEyes
-                                  : name == "keep"     ? TargetStyle::KeepClosed
-                                  : name == "open"     ? TargetStyle::OpenEyes
-                                  : name == "wide"     ? TargetStyle::WideEyes
-                                  : name == "keepwide" ? TargetStyle::KeepWide
-                                                       : TargetStyle::Dot;
+        const TargetStyle style = name == "close"  ? TargetStyle::CloseEyes
+                                  : name == "keep" ? TargetStyle::KeepClosed
+                                  : name == "open" ? TargetStyle::OpenEyes
+                                                   : TargetStyle::Dot;
         const std::string label = targetLabel(t, style);
         std::vector<uint8_t> rgba;
         renderTarget(fonts, style, label, options.targetSeconds, options.targetProgress, rgba, options.targetPngPath);
@@ -1037,8 +1037,6 @@ std::string targetLabel(const UiText& t, gaze_fit::TargetStyle style) {
         case gaze_fit::TargetStyle::CloseEyes: return t.targetClose;
         case gaze_fit::TargetStyle::KeepClosed: return t.targetKeepClosed;
         case gaze_fit::TargetStyle::OpenEyes: return t.targetOpen;
-        case gaze_fit::TargetStyle::WideEyes: return t.targetWide;
-        case gaze_fit::TargetStyle::KeepWide: return t.targetKeepWide;
     }
     return "";
 }
@@ -1166,6 +1164,12 @@ void applyHit(const PanelHit& hit, PanelModel& model, EyePanel& panel, Autostart
             }
             model.recording = eyeLog->view(nowSeconds());
             return;
+        case PanelAction::SetLidWiden: {
+            if (hit.arg < 0 || hit.arg > 3) return;
+            const std::string mode = kLidWidenModes[hit.arg];
+            change = [mode](JsonValue& root) { root.set(key::kLidWiden, JsonValue::makeString(mode)); };
+            break;
+        }
         case PanelAction::SetAutoRecenter: {
             if (hit.arg < 0 || hit.arg > 2) return;
             const std::string mode = kAutoRecenterModes[hit.arg];

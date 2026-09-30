@@ -101,9 +101,6 @@ struct FitInConfig {
 /** The lid fit keys, [eye][closed, up, open, down]. */
 extern const char* const kLidFitKeys[2][4];
 
-/** The wide readings' keys, [eye]. */
-extern const char* const kLidFitWideKeys[2];
-
 /**
  * The eye fit in the settings.
  * @param view the settings
@@ -117,6 +114,22 @@ FitInConfig fitInConfig(const SettingsView& view);
  * @return true if any is locked
  */
 bool fitKeysLocked(const SettingsView& view);
+
+/** Whether each eye can widen by itself (lid_widen, for eyes with an eye fit). */
+struct WidenState {
+    int mode = 2;                        ///< index into kLidWidenModes (0 = off)
+    bool fitted[2] = {false, false};     ///< the eye has a lid fit (the setting applies to it)
+    bool room[2] = {false, false};       ///< ...and its straight-ahead reading leaves room below 1.000 to widen
+};
+
+/**
+ * How lid_widen works out for each eye, the way frameeyeosc decides it (widen_room): a fitted eye has room when its
+ * straight-ahead open reading plus the mode's widening start is at most 0.97 (the openness stops at 1.000). An eye
+ * without room widens with the other eye; neither with room: no widening.
+ * @param view the settings
+ * @return the state
+ */
+WidenState widenState(const SettingsView& view);
 
 /** The fit run by itself when the headset is put on (auto_recenter). */
 enum class AutoRecenter { Off, Center, Tilt };
@@ -141,8 +154,8 @@ gaze_fit::Mode rewearMode(AutoRecenter kind);
 /**
  * Write an eye fit's result into config.json: the gaze zero point; with the side dots (the whole fit, and the
  * re-wear fit with the tilt) also the tilt; each eye's sideways values when measured; for the whole fit also the
- * gains, each eye's lid readings with its wide reading (null when that eye has none), and lid_scale_left/right
- * back to null when it measured the eyelids (an old tweak must not sit on a new fit).
+ * gains, each eye's lid readings, and lid_scale_left/right back to null when it measured the eyelids (an old
+ * tweak must not sit on a new fit).
  * @param root the config's root object
  * @param values the result
  * @param mode the mode

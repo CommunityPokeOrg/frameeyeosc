@@ -1668,18 +1668,12 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
                                           drop);
                             paragraphs.push_back(text);
                         }
-                        // How each eye widens: its wide reading, or following the other eye
-                        if (r.hasWide) {
-                            std::string wide[2];
-                            for (int eye = 0; eye < 2; ++eye) {
-                                wide[eye] = std::isfinite(r.lidWide[eye])
-                                                ? twoDecimals(r.lidWide[eye])
-                                                : formatText(t.fitWideFollowsFormat, eye == 0 ? t.right : t.left);
-                            }
-                            std::snprintf(text, sizeof(text), t.fitWideFormat, wide[0].c_str(), wide[1].c_str());
-                            paragraphs.push_back(text);
-                        } else {
-                            paragraphs.push_back(t.fitWideNone);
+                        // An eye that can't widen by itself follows the other one (lid_widen)
+                        const WidenState widen = widenState(v);
+                        if (widen.mode > 0 && widen.room[0] != widen.room[1]) {
+                            paragraphs.push_back(widen.room[1] ? t.widenFollowsLeft : t.widenFollowsRight);
+                        } else if (widen.mode > 0 && !widen.room[0] && !widen.room[1]) {
+                            paragraphs.push_back(t.widenNoRoom);
                         }
                     } else {
                         paragraphs.push_back(t.fitLidsNone);
@@ -1906,9 +1900,21 @@ void EyePanel::drawLids(const Pen& pen, const UiText& t, const PanelModel& m, co
     cairo_t* cr = pen.cr;
     double y = kRowTop;
     const double cy = (kRowH - kControlH) / 2;
+    // Eyes with an eye fit: closing and opening come from the fit, widening from lid_widen. The learned calibration
+    // and the lid marks only matter for eyes without one, so the Widen row takes the calibration's place and the
+    // marks fold away behind "Fine-tune"
+    const WidenState widen = widenState(v);
+    const bool anyFitted = widen.fitted[0] || widen.fitted[1];
 
+    if (anyFitted) {
+        const bool locked = v.locked(key::kLidWiden);
+        drawRowLabel(pen, t, y, kRowH, t.rowWiden, t.hintWiden, locked);
+        std::vector<Option> options;
+        for (int i = 0; i < 4; ++i) options.push_back({t.widenModes[i], {PanelAction::SetLidWiden, key::kLidWiden, i}});
+        drawSegmented(pen, kControlX, y + cy, kControlW, kControlH, options, widen.mode, 19, locked);
+    }
     // Auto calibration: on / off, what it learned, reset
-    {
+    else {
         const bool locked = v.locked(key::kLidCalibration);
         const bool on = v.flag(key::kLidCalibration);
         std::string learned;
@@ -1977,24 +1983,29 @@ void EyePanel::drawLids(const Pen& pen, const UiText& t, const PanelModel& m, co
         }
     }
     y += kRowH + kRowGap;
-    // Both eyes fitted: the fit sets closing, opening and widening for each eye, so the four marks (the raw mapping
-    // from before the fit) fold away behind "Fine-tune"; the live bars stay
-    const FitInConfig marksFit = fitInConfig(v);
-    const bool bothFitted = marksFit.lidsFitted[0] && marksFit.lidsFitted[1];
-    const bool showMarks = !bothFitted || lidMarksOpen_;
-    const double marksShift = bothFitted ? 8 : 0;
-    if (bothFitted) {
+    // Fitted: a line saying what decides the eyelids (or that an eye follows the other one), and "Fine-tune" to open
+    // the marks
+    const bool showMarks = !anyFitted || lidMarksOpen_;
+    const double marksShift = anyFitted ? 8 : 0;
+    if (anyFitted) {
         const double bw = 150;
-        const double bh = 28;
         const std::string label = std::string(t.fitDetails) + (lidMarksOpen_ ? "  ▲" : "  ▼");
-        drawButton(pen, kInnerRight - bw, y, bw, bh, label, {PanelAction::LidMarks, nullptr, 0}, true, false);
-        pen.text(kInnerX, y + 16, t.lidMarksFitted,
-                 fitSize(pen, t.lidMarksFitted, 15, 11, kInnerRight - bw - 12 - kInnerX, false), kTextMuted);
+        drawButton(pen, kInnerRight - bw, y, bw, 28, label, {PanelAction::LidMarks, nullptr, 0}, true, false);
+        const char* note = lidMarksOpen_ ? t.lidMarksUnused : t.lidMarksFitted;
+        bool notice = false;
+        if (widen.mode > 0 && widen.fitted[0] && widen.fitted[1]) {
+            notice = widen.room[0] != widen.room[1] || !widen.room[0];
+            if (!widen.room[0] && widen.room[1]) note = t.widenFollowsLeft;
+            if (widen.room[0] && !widen.room[1]) note = t.widenFollowsRight;
+            if (!widen.room[0] && !widen.room[1]) note = t.widenNoRoom;
+        }
+        pen.text(kInnerX, y + 18, note, fitSize(pen, note, 15, 11, kInnerRight - bw - 12 - kInnerX, notice),
+                 notice ? kText : kTextMuted, notice);
     }
     // The raw openness of each eye with the four marks laid over it
     {
         const double top = y + marksShift;
-        if (!bothFitted) {
+        if (!anyFitted) {
             pen.text(kInnerX, top + 16, t.marksTitle,
                      fitSize(pen, t.marksTitle, 15, 11, kInnerRight - kInnerX, false), kTextMuted);
         }
@@ -2035,7 +2046,7 @@ void EyePanel::drawLids(const Pen& pen, const UiText& t, const PanelModel& m, co
         }
     }
     y += 110 + marksShift;
-    // The four marks
+    // The four marks (3 and 4 greyed for fitted eyes, which widen by lid_widen)
     if (showMarks) {
         const char* marks[4] = {key::kLidClosed, key::kLidOpen, key::kLidWidenStart, key::kLidWide};
         const char* captions[4] = {t.markClosed, t.markOpen, t.markWidenStart, t.markWide};
@@ -2048,7 +2059,8 @@ void EyePanel::drawLids(const Pen& pen, const UiText& t, const PanelModel& m, co
             double high = 0;
             lidMarkBounds(marks[i], v, low, high);
             const double value = v.number(marks[i]);
-            drawStepper(pen, x, y + 28, w, kControlH, marks[i], value, formatSetting(marks[i], value), true,
+            const bool usable = !(anyFitted && i >= 2);
+            drawStepper(pen, x, y + 28, w, kControlH, marks[i], value, formatSetting(marks[i], value), usable,
                         v.locked(marks[i]), low, high);
         }
         y += kCaptionRowH + kRowGap;
