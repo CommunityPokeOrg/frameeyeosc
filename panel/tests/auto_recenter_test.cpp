@@ -263,13 +263,21 @@ void testSuspendCountsAsOff() {
     cached.in.tracking = true;
     cached.wait(4);
     CHECK(cached.starts == 2 && cached.logged("put on (tracking was off 63.") == 1);
-    // Slept while worn (tracking on before and after): nothing to do
-    Run worn;
-    worn.wait(5);
-    worn.finishFit();
-    worn.now += 600;
-    worn.wait(10);
-    CHECK(worn.starts == 1 && worn.logged("put on") == 0);
+    // The last status before sleeping still said "tracking" (read just before the headset came off and the Frame
+    // slept), and tracking again after waking: the suspend counts as off, so it arms
+    Run stale2;
+    stale2.wait(5);
+    stale2.finishFit();
+    stale2.now += 600;
+    stale2.wait(4);
+    CHECK(stale2.starts == 2 && stale2.logged("put on (tracking was off 600.") == 1);
+    // A gap under 10 s is not sleep: nothing
+    Run shortGap;
+    shortGap.wait(5);
+    shortGap.finishFit();
+    shortGap.now += 8;
+    shortGap.wait(10);
+    CHECK(shortGap.starts == 1 && shortGap.logged("put on") == 0);
 }
 
 void testDisabledDisarms() {

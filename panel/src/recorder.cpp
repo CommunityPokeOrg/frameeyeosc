@@ -1,10 +1,12 @@
 // The eye log: starting, stopping and reaping `frameeyeosc --record`.
 #include "recorder.h"
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -123,6 +125,60 @@ std::string findFrameeyeosc() {
     return "";
 }
 
+std::string uniqueBase(const std::string& dir, const std::string& stamp) {
+    const std::string first = dir + "/eyes_" + stamp;
+    for (int n = 1;; ++n) {
+        const std::string base = n == 1 ? first : first + "_" + std::to_string(n);
+        bool taken = false;
+        for (const char* extension : {".csv", ".log", ".config.json"}) {
+            taken |= ::access((base + extension).c_str(), F_OK) == 0;
+        }
+        if (!taken) return base;
+    }
+}
+
+namespace {
+
+#ifndef CLOSE_RANGE_CLOEXEC
+#define CLOSE_RANGE_CLOEXEC (1U << 2)
+#endif
+
+/**
+ * In the child between fork and exec: mark every descriptor from 3 up close-on-exec, however high, so nothing of the
+ * panel's (its lock file, sockets, the GPU) reaches the recorder. Marked rather than closed, so the pipe that reports
+ * a failed exec stays open until the exec. close_range (Linux 5.11+); otherwise the descriptors listed in
+ * /proc/self/fd, read with getdents64 (only async-signal-safe calls here).
+ */
+void cloexecFrom3() {
+#ifdef SYS_close_range
+    if (::syscall(SYS_close_range, 3U, ~0U, CLOSE_RANGE_CLOEXEC) == 0) return;
+#endif
+    const int dir = ::open("/proc/self/fd", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (dir < 0) {
+        for (int fd = 3; fd < 65536; ++fd) ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+        return;
+    }
+    alignas(8) char buffer[4096];
+    for (;;) {
+        const long n = ::syscall(SYS_getdents64, dir, buffer, sizeof(buffer));
+        if (n <= 0) break;
+        for (long at = 0; at < n;) {
+            const auto* entry = reinterpret_cast<const struct dirent64*>(buffer + at);
+            int fd = 0;
+            bool number = entry->d_name[0] != '\0';
+            for (const char* c = entry->d_name; *c != '\0'; ++c) {
+                number &= *c >= '0' && *c <= '9';
+                fd = fd * 10 + (*c - '0');
+            }
+            if (number && fd >= 3 && fd != dir) ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+            at += entry->d_reclen;
+        }
+    }
+    ::close(dir);
+}
+
+}  // namespace
+
 Recorder::~Recorder() {
     shutdown();
 }
@@ -140,7 +196,7 @@ bool Recorder::start(const std::string& program, const std::string& dir, const s
         std::fprintf(stderr, "[record] can't start: %s\n", error_.c_str());
         return false;
     }
-    const std::string base = dir + "/eyes_" + fileStamp(std::time(nullptr));
+    const std::string base = uniqueBase(dir, fileStamp(std::time(nullptr)));
     csv_ = base + ".csv";
     log_ = base + ".log";
     // The settings in use, to know later what the recording was made with
@@ -180,7 +236,7 @@ bool Recorder::start(const std::string& program, const std::string& dir, const s
         ::dup2(nullFd, 1);
         ::dup2(logFd, 2);
         // Nothing else of the panel's (its lock file, sockets, the GPU) goes to the recorder
-        for (int fd = 3; fd < 1024; ++fd) ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+        cloexecFrom3();
         ::execv(argv[0], argv.data());
         const int error = errno;
         ssize_t ignored = ::write(pipeFds[1], &error, sizeof(error));
@@ -297,6 +353,7 @@ View Recorder::view(double now) const {
     view.elapsedSec = view.recording ? now - startedAt_ : 0.0;
     view.path = csv_;
     view.error = error_;
+    view.autoStopped = !busy() && autoStopped_;
     return view;
 }
 

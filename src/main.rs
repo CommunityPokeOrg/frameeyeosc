@@ -660,10 +660,16 @@ fn expected_open(fit: &LidFit, vertical: f32) -> f32 {
 /// straight-ahead one, so far down, where the expected reading nears the closed one, a small wobble
 /// does not flip the lid between open and shut.
 fn fitted_openness(openness: f32, vertical: f32, fit: &LidFit, settings: &Settings) -> f32 {
-    let range = (expected_open(fit, vertical) - fit.closed).max(0.5 * (fit.open - fit.closed));
+    let range = open_reading(fit, vertical) - fit.closed;
     let fraction = (openness - fit.closed) / range;
     let fraction = (fraction - LID_FIT_CLOSED_MARGIN) / (1.0 - LID_FIT_CLOSED_MARGIN);
     settings.lid_closed + fraction * (settings.lid_open - settings.lid_closed)
+}
+
+/// The reading fitted_openness maps to --lid-open: the expected open reading, or further up far down, where the
+/// range keeps its minimum (half the straight-ahead one). Relaxed open is this reading, and widening counts from it.
+fn open_reading(fit: &LidFit, vertical: f32) -> f32 {
+    fit.closed + (expected_open(fit, vertical) - fit.closed).max(0.5 * (fit.open - fit.closed))
 }
 
 /// Where widening starts and is full above a fitted eye's expected open reading, for --lid-widen (None: off).
@@ -683,16 +689,17 @@ fn widen_room(fit: &LidFit, widen: Widen) -> bool {
     widen_offsets(widen).is_some_and(|(start, _)| fit.open + start <= WIDEN_ROOM_LIMIT)
 }
 
-/// A fitted eye's openness on the --lid-* scale. Up to its expected open reading for where the eyes look: as
+/// A fitted eye's openness on the --lid-* scale. Up to its open reading for where the eyes look (open_reading): as
 /// fitted_openness (closed..open -> --lid-closed..--lid-open, VRCFT 0..0.75). Above it, with room to widen: up to
 /// `start` above it onto --lid-open..--lid-widen-start (VRCFT stays 0.75), then up to `full` above it (or 1.000,
 /// where the openness stops, if that comes first) onto --lid-widen-start..--lid-wide, so lid_to_vrcft gives 0.75
 /// rising to 1 whatever marks 3 and 4 are, and carries on past it (clamped at 1). Without room, or with widening off,
-/// it stays at --lid-open above the expected reading (VRCFT 0.75; lid_inputs may lend it the other eye's widening).
-/// (Far down, where fitted_openness keeps a minimum range, the expected reading maps a little below --lid-open, so
-/// crossing it steps up to relaxed open.)
+/// it stays at --lid-open above the open reading (VRCFT 0.75; lid_inputs may lend it the other eye's widening).
+/// Continuous and never falling: widening starts where the base mapping reaches --lid-open, which far down (where
+/// fitted_openness keeps a minimum range) is above the expected reading. Starting there from the expected reading
+/// instead made a step: 45° down with an expected 0.43, 0.430 sent VRCFT 0.31 and 0.431 sent 0.75.
 fn fitted_lid(openness: f32, vertical: f32, fit: &LidFit, settings: &Settings) -> f32 {
-    let expected = expected_open(fit, vertical);
+    let expected = open_reading(fit, vertical);
     if openness <= expected {
         return fitted_openness(openness, vertical, fit, settings);
     }
@@ -724,7 +731,7 @@ fn fitted_lid(openness: f32, vertical: f32, fit: &LidFit, settings: &Settings) -
 /// 60%). 1.0 changes nothing.
 ///
 /// A fitted eye without room to widen (see widen_room), while the other fitted eye has room, takes the other eye's
-/// value whenever it reads at or above its own expected open reading (widening is almost always both eyes), but
+/// value whenever it reads at or above its own open reading (open_reading, where its own lid reaches relaxed open) (widening is almost always both eyes), but
 /// never less than relaxed open (the other eye blinking or winking does not close it); below its open reading it
 /// follows its own lid. Its own scale then applies. Neither with room: no widening.
 ///
@@ -742,7 +749,7 @@ fn lid_inputs(openness: [f32; 2], vertical: f32, scales: [f32; 2], settings: &Se
             (Some(other_fit), Some(other_value))
                 if !widen_room(fit, settings.lid_widen)
                     && widen_room(other_fit, settings.lid_widen)
-                    && openness[eye] >= expected_open(fit, vertical) =>
+                    && openness[eye] >= open_reading(fit, vertical) =>
             {
                 Some(other_value.max(settings.lid_open))
             }
@@ -1334,7 +1341,14 @@ fn lid_scales(settings: &Settings, calibration: &LidCalibration) -> [f32; 2] {
     };
     let fits = settings.lid_fit();
     let fixed = [settings.lid_scale_left, settings.lid_scale_right];
-    [0, 1].map(|eye| fixed[eye].unwrap_or(if fits[eye].is_some() { 1.0 } else { learned[eye] }))
+    [0, 1].map(|eye| match (&fits[eye], fixed[eye]) {
+        // A settings file from 0.5.x or earlier (no lid_widen in it): those versions ignored the scale of a fitted
+        // eye, so an old value there (1.15, say) would suddenly make that eye 15% more open. The panel clears such
+        // scales when it first reads the file and writes lid_widen, which ends this
+        (Some(_), Some(_)) if settings.scales_predate_fit => 1.0,
+        (Some(_), fixed) => fixed.unwrap_or(1.0),
+        (None, fixed) => fixed.unwrap_or(learned[eye]),
+    })
 }
 
 /// Let the eyelid calibration learn from a sample once `settled`, then work the sample through.
@@ -2371,6 +2385,76 @@ mod tests {
             // Nor does a fitted eye without room borrow from an unfitted one
             assert!((sent_lids(&settings, [1.0, 1.0], [1.0; 2])[0] - 0.75).abs() < 1e-5);
         }
+    }
+
+    #[test]
+    fn scales_written_before_lid_widen_do_not_act_on_fitted_eyes() {
+        let calibration = LidCalibration::load(None, 0.8);
+        // A 0.5.x file: a scale next to a fitted left eye (ignored then) and an unfitted right eye's scale
+        let old = Settings {
+            lid_scale_left: Some(1.15),
+            lid_scale_right: Some(0.9),
+            lid_fit_closed_right: None,
+            lid_fit_up_right: None,
+            lid_fit_open_right: None,
+            lid_fit_down_right: None,
+            scales_predate_fit: true,
+            ..user_fit(Widen::Normal)
+        };
+        assert_eq!(lid_scales(&old, &calibration), [1.0, 0.9]);
+        // Once the file says lid_widen, the scale is the fine-tune after the fit
+        assert_eq!(lid_scales(&Settings { scales_predate_fit: false, ..old }, &calibration), [1.15, 0.9]);
+    }
+
+    #[test]
+    fn fitted_eyelids_are_continuous_and_never_fall() {
+        let generic = Settings {
+            lid_widen: Widen::Normal,
+            lid_fit_open_right: Some(0.8),
+            lid_fit_up_right: Some(0.82),
+            ..fitted()
+        };
+        let settings_list = [user_fit(Widen::Normal), user_fit(Widen::High), user_fit(Widen::Off), generic];
+        for settings in &settings_list {
+            let fits = settings.lid_fit();
+            for vertical in [-1.0, -0.8, -0.6, -0.45, -0.3, -0.15, 0.0, 0.2, 0.5] {
+                for eye in 0..2 {
+                    let fit = fits[eye].unwrap();
+                    let mut last_value = f32::NAN;
+                    let mut last_sent = f32::NAN;
+                    // Up to 1.000, where the Frame's openness stops
+                    for step in 0..=1000 {
+                        let raw = step as f32 * 0.001;
+                        let value = fitted_lid(raw, vertical, &fit, settings);
+                        let sent = lid_to_vrcft(value, settings);
+                        if step > 0 {
+                            // Never falls, and no step: 0.001 of raw openness moves it at most 0.01
+                            assert!(value >= last_value - 1e-6, "{vertical} eye {eye} at {raw}: {last_value} -> {value}");
+                            assert!(value - last_value <= 0.01, "{vertical} eye {eye} at {raw}: {last_value} -> {value}");
+                            assert!(sent - last_sent <= 0.02 && sent >= last_sent - 1e-6, "{vertical} {raw}: {last_sent} -> {sent}");
+                        }
+                        last_value = value;
+                        last_sent = sent;
+                    }
+                }
+                // Following the other eye: while the other one is relaxed, crossing its own open reading changes nothing
+                let left = fits[0].unwrap();
+                if settings.lid_widen != Widen::Off && !widen_room(&left, settings.lid_widen) {
+                    let open_at = open_reading(&left, vertical);
+                    let relaxed_right = open_reading(&fits[1].unwrap(), vertical);
+                    let below = lid_inputs([open_at - 0.0005, relaxed_right], vertical, [1.0; 2], settings)[0];
+                    let above = lid_inputs([open_at + 0.0005, relaxed_right], vertical, [1.0; 2], settings)[0];
+                    assert!((lid_to_vrcft(below, settings) - lid_to_vrcft(above, settings)).abs() < 0.01, "{vertical}");
+                }
+            }
+        }
+        // The case that stepped before: 45° down, where the expected reading is far below the open one
+        let settings = user_fit(Widen::Normal);
+        let right = settings.lid_fit()[1].unwrap();
+        let expected = expected_open(&right, -1.0);
+        let at = lid_to_vrcft(fitted_lid(expected, -1.0, &right, &settings), &settings);
+        let past = lid_to_vrcft(fitted_lid(expected + 0.001, -1.0, &right, &settings), &settings);
+        assert!(at < 0.75 && past - at < 0.01, "{expected}: {at} -> {past}");
     }
 
     #[test]

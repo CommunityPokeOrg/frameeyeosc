@@ -131,6 +131,17 @@ struct WidenState {
  */
 WidenState widenState(const SettingsView& view);
 
+/**
+ * Bring a settings file from 0.5.x or earlier (no lid_widen in it) up to date, once: those versions ignored
+ * lid_scale_left/right for an eye with a lid fit, so a value left there (1.15, say) would suddenly move that eye now
+ * that the scale fine-tunes the fit. Such scales go back to null, and lid_widen is written ("normal", the default),
+ * which marks the file as done (a scale set afterwards is kept).
+ * @param root the config's root object (changed in place)
+ * @param log what was changed, for the log (empty if only lid_widen was added)
+ * @return true if root changed (lid_widen was missing)
+ */
+bool migrateLidScales(JsonValue& root, std::string& log);
+
 /** The fit run by itself when the headset is put on (auto_recenter). */
 enum class AutoRecenter { Off, Center, Tilt };
 

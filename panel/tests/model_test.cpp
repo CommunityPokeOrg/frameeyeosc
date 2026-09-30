@@ -183,6 +183,30 @@ void testWidenState() {
     CHECK(spec != nullptr && std::string(spec->defaultText) == "normal");
 }
 
+/** A 0.5.x config: scales next to a lid fit go, once. */
+void testMigrateLidScales() {
+    JsonValue root;
+    root.type = JsonValue::Type::Object;
+    for (const char* name : kLidFitKeys[0]) root.set(name, JsonValue::makeNumber(0.5));
+    root.set(key::kLidScaleLeft, JsonValue::makeNumber(1.15));
+    root.set(key::kLidScaleRight, JsonValue::makeNumber(0.9));  // the right eye is not fitted: kept
+    std::string log;
+    CHECK(migrateLidScales(root, log));
+    CHECK(root.get(key::kLidScaleLeft) != nullptr && root.get(key::kLidScaleLeft)->isNull());
+    CHECK(std::fabs(numberIn(root, key::kLidScaleRight) - 0.9) < 1e-9);
+    CHECK(root.get(key::kLidWiden) != nullptr && root.get(key::kLidWiden)->text == "normal");
+    CHECK(log.find("lid_scale_left 1.15 -> null") != std::string::npos);
+    // Once only: a scale set afterwards stays
+    root.set(key::kLidScaleLeft, JsonValue::makeNumber(0.95));
+    CHECK(!migrateLidScales(root, log) && std::fabs(numberIn(root, key::kLidScaleLeft) - 0.95) < 1e-9);
+    // Nothing to clear: only lid_widen is added (so later scales are not touched either)
+    JsonValue plain;
+    plain.type = JsonValue::Type::Object;
+    plain.set(key::kLidScaleLeft, JsonValue::makeNumber(1.1));
+    CHECK(migrateLidScales(plain, log) && log.empty() && std::fabs(numberIn(plain, key::kLidScaleLeft) - 1.1) < 1e-9);
+    CHECK(plain.get(key::kLidWiden) != nullptr);
+}
+
 /** The destination cards' button arguments stand for the output types both ways. */
 void testOutputArgs() {
     for (int arg = 0; arg < 3; ++arg) CHECK(argOfOutput(outputOfArg(arg)) == arg);
@@ -202,6 +226,7 @@ int main() {
     testRecenterDefault();
     testOutputArgs();
     testWidenState();
+    testMigrateLidScales();
     if (gFailures == 0) std::printf("model-test: all passed\n");
     return gFailures == 0 ? 0 : 1;
 }

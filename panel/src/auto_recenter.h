@@ -14,6 +14,8 @@ namespace auto_recenter {
 /** Tracking has to have been off this long (while frameeyeosc ran) for its return to count as putting the headset
  *  on. Taking it off was seen as gaps of 19-344 s; the tracker's own hiccups last 1.2-2.2 s. */
 constexpr double kOffSec = 5.0;
+/** No update for longer than this is the Frame sleeping: it counts as off (see Watcher::update). */
+constexpr double kSleepGapSec = 10.0;
 /** Tracking has to have been on this long without a break before the dot shows (the headset is still being
  *  adjusted). */
 constexpr double kSettleSec = 3.0;

@@ -1567,7 +1567,7 @@ void EyePanel::drawEyeFit(const Pen& pen, const UiText& t, const PanelModel& m, 
     const AutoRecenter rewear = autoRecenter(m.config);
 
     // The one button to press: fit (again); and the re-wear fit, the kind auto_recenter runs by itself when the
-    // headset is put on (see auto_recenter.h), re-centering and the tilt when that is off
+    // headset is put on (see auto_recenter.h), re-centering only when that is off
     {
         drawRowLabel(pen, t, y, kRowH, t.rowFit, t.hintFit, false);
         const double gap = 12;
@@ -2182,7 +2182,11 @@ void EyePanel::drawAdvanced(const Pen& pen, const UiText& t, const PanelModel& m
             bold = true;
         } else {
             const std::string where = formatText(t.eyeLogWhereFormat, recorder::shortPath(recorder::defaultDir()));
-            lines = {ellipsize(pen, where, 14, false, textW, true), t.eyeLogLimit};
+            // After the 60-minute limit stopped it: say so instead of the limit
+            lines = {ellipsize(pen, where, 14, false, textW, true), r.autoStopped ? t.eyeLogAutoStopped : t.eyeLogLimit};
+            if (r.autoStopped) {
+                color = kText;
+            }
         }
         double baseline = y + h / 2 - (lines.size() - 1) * 9 + 5;
         for (const std::string& line : lines) {

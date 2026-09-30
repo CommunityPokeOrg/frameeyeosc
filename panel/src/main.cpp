@@ -101,7 +101,7 @@ struct Options {
     std::string fakePrompt;       ///< vrchat / etvr / livelink
     std::string fakeUpdate;       ///< a made-up update state (see printUsage)
     std::string fakeFit;          ///< a made-up eye fit state (see printUsage)
-    std::string fakeRecord;       ///< a made-up eye log state: "recording" or "failed"
+    std::string fakeRecord;       ///< a made-up eye log state: "recording", "failed" or "autostopped"
     std::string fakeWiden;        ///< lid_widen in the made-up config ("" = the default)
     bool updateLive = false;      ///< --dump-png: run the real update checker (and wait for it after clicks)
     std::vector<std::pair<double, double>> clicks;  ///< --click X,Y: presses carried out before the PNG is drawn
@@ -215,7 +215,7 @@ void printUsage() {
         "                 fitted|fitted-gaze|\n"
         "                 failed-unsteady|failed-notclosed|failed-movement|failed-lidrange|failed-cancelled|\n"
         "                 failed-noresult  A made-up eye fit (Eye fit tab)\n"
-        "      --fake-record recording|failed  A made-up eye log (Advanced tab, and the left column)\n"
+        "      --fake-record recording|failed|autostopped  A made-up eye log (Advanced tab, and the left column)\n"
         "      --fake-widen off|low|normal|high  lid_widen in the made-up settings\n"
         "      --update-live     Run the real update checker: check first, and after each --click wait for the\n"
         "                        check or install it started (installs really happen; for testing with a fake GitHub)\n"
@@ -391,8 +391,10 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.fake = true;
         } else if (arg == "--fake-record" && hasNext) {
             options.fakeRecord = argv[++i];
-            if (options.fakeRecord != "recording" && options.fakeRecord != "failed") {
-                std::fprintf(stderr, "--fake-record must be recording or failed: %s\n", options.fakeRecord.c_str());
+            if (options.fakeRecord != "recording" && options.fakeRecord != "failed" &&
+                options.fakeRecord != "autostopped") {
+                std::fprintf(stderr, "--fake-record must be recording, failed or autostopped: %s\n",
+                             options.fakeRecord.c_str());
                 return false;
             }
             options.fake = true;
@@ -558,6 +560,8 @@ PanelModel fakeModel(const Options& options) {
         m.recording.elapsedSec = 83.4;
     } else if (options.fakeRecord == "failed") {
         m.recording.error = "can't open /dev/shm/eye-server.mmap: No such file or directory (os error 2)";
+    } else if (options.fakeRecord == "autostopped") {
+        m.recording.autoStopped = true;
     }
     if (!options.fakeFit.empty()) {
         using gaze_fit::Failure;
@@ -997,6 +1001,24 @@ long long writeCaptureRequest(PanelModel& model, const char* target, double seco
     lastId = id;
     std::fprintf(stderr, "[fit] asked for gaze capture %lld (%s, %.1f s)\n", id, target, seconds);
     return id;
+}
+
+/**
+ * Bring a config.json from 0.5.x or earlier up to date, once (see migrateLidScales), and read it again.
+ * @param model the model (its config is re-read after a write)
+ */
+void migrateConfig(PanelModel& model) {
+    if (!model.config.exists || !model.config.error.empty() || model.config.root.get(key::kLidWiden) != nullptr) return;
+    std::string log;
+    std::string error;
+    const bool ok = updateConfigFile(model.configPath, [&log](JsonValue& root) { migrateLidScales(root, log); }, error);
+    if (!ok) {
+        std::fprintf(stderr, "[config] could not add lid_widen: %s\n", error.c_str());
+        return;
+    }
+    std::fprintf(stderr, "[config] from before 0.6.0: lid_widen = \"normal\"%s%s\n", log.empty() ? "" : "; ",
+                 log.c_str());
+    model.config = readConfigFile(model.configPath);
 }
 
 /**
@@ -1498,6 +1520,7 @@ int runOverlay(const Options& options) {
     model.language = configLanguage(model.config);
     std::fprintf(stderr, "[start] config %s, status %s\n", model.configPath.c_str(), model.statusPath.c_str());
     if (!model.config.error.empty()) std::fprintf(stderr, "[config] broken: %s\n", model.config.error.c_str());
+    migrateConfig(model);
     FontSet fonts;
     fonts.load(kFontPath, kBoldFontPath);
     EyePanel panel(fonts);
@@ -1632,8 +1655,10 @@ int runOverlay(const Options& options) {
             }
             const std::string stamp = configStamp(model.configPath);
             if (stamp != lastStamp) {
-                lastStamp = stamp;
                 model.config = readConfigFile(model.configPath);
+                // An old file put back (a backup, say) is brought up to date the same way
+                migrateConfig(model);
+                lastStamp = configStamp(model.configPath);
                 model.language = configLanguage(model.config);
                 dirty = true;
             }

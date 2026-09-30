@@ -98,6 +98,10 @@ pub struct Settings {
     pub eye_tracking_active: ActiveType,
     /// How easily a fitted eye widens.
     pub lid_widen: Widen,
+    /// The settings file has no `lid_widen` (written by 0.5.x or earlier, whose lid_scale_* did nothing for fitted
+    /// eyes): a fitted eye's scale is then ignored (see main.rs, lid_scales). Not a setting of its own.
+    #[serde(skip)]
+    pub scales_predate_fit: bool,
     pub raw: bool,
     pub gaze_min_cutoff: f32,
     pub gaze_beta: f32,
@@ -171,6 +175,7 @@ impl Default for Settings {
             prefix: "/FT".into(),
             eye_tracking_active: ActiveType::Bool,
             lid_widen: Widen::Normal,
+            scales_predate_fit: false,
             raw: false,
             gaze_min_cutoff: 0.4,
             gaze_beta: 0.8,
@@ -426,7 +431,12 @@ struct Asked {
 
 /// Parse config.json: missing keys keep their defaults and unknown keys are ignored.
 fn parse(text: &str) -> Result<(Settings, Asked), String> {
-    let settings: Settings = serde_json::from_str(text).map_err(|error| error.to_string())?;
+    let mut settings: Settings = serde_json::from_str(text).map_err(|error| error.to_string())?;
+    let written: serde_json::Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
+    let scaled = ["lid_scale_left", "lid_scale_right"]
+        .iter()
+        .any(|name| written.get(name).is_some_and(|value| !value.is_null()));
+    settings.scales_predate_fit = scaled && written.get("lid_widen").is_none();
     let requests: Requests = serde_json::from_str(text).map_err(|error| error.to_string())?;
     let (capture_id, capture) = requests.gaze_capture();
     let asked = Asked {
@@ -469,6 +479,10 @@ pub fn apply_args(settings: &mut Settings, args: &Args, given: &HashSet<String>)
         )*};
     }
     pin!(output, eye_tracking_active, lid_widen);
+    // Given on the command line: this is 0.6.0 or later, whatever the file says
+    if given.contains("lid_widen") {
+        settings.scales_predate_fit = false;
+    }
     if given.contains("target") {
         locked.push("host");
         // main() has already rejected anything that is neither "auto" nor HOST:PORT.
@@ -709,6 +723,18 @@ mod tests {
         // The option's own default is the setting's
         let (args, _) = cli(&[]);
         assert_eq!(args.eye_tracking_active, Settings::default().eye_tracking_active);
+    }
+
+    #[test]
+    fn scales_from_before_lid_widen_are_marked() {
+        let old = r#"{"lid_scale_left": 1.15, "lid_fit_closed_left": 0.2, "lid_fit_up_left": 0.9,
+            "lid_fit_open_left": 0.85, "lid_fit_down_left": 0.7}"#;
+        assert!(merged(old, &[]).unwrap().0.scales_predate_fit);
+        // Written by 0.6.0 (lid_widen in it), or no scale at all, or --lid-widen given: not
+        let new = old.replacen('{', r#"{"lid_widen": "normal", "#, 1);
+        assert!(!merged(&new, &[]).unwrap().0.scales_predate_fit);
+        assert!(!merged(r#"{"lid_scale_left": null}"#, &[]).unwrap().0.scales_predate_fit);
+        assert!(!merged(old, &["--lid-widen", "low"]).unwrap().0.scales_predate_fit);
     }
 
     #[test]

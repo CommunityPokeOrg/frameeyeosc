@@ -6,6 +6,7 @@
 #include "recorder.h"
 
 #include <signal.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -108,6 +109,19 @@ void testNames() {
     CHECK(recorder::defaultDir() == "/data/frameeyeosc/recordings");
 }
 
+void testUniqueNames(const std::string& dir) {
+    // A stop and a start within the same second: never over an earlier recording's files
+    const std::string names = dir + "/names";
+    ::mkdir(names.c_str(), 0755);
+    const std::string stamp = "2026-10-01_12-00-00";
+    CHECK(recorder::uniqueBase(names, stamp) == names + "/eyes_" + stamp);
+    std::ofstream(names + "/eyes_" + stamp + ".csv") << "x";
+    CHECK(recorder::uniqueBase(names, stamp) == names + "/eyes_" + stamp + "_2");
+    // Any of the three files counts
+    std::ofstream(names + "/eyes_" + stamp + "_2.config.json") << "{}";
+    CHECK(recorder::uniqueBase(names, stamp) == names + "/eyes_" + stamp + "_3");
+}
+
 void testChild(const std::string& dir) {
     const std::string config = dir + "/config.json";
     std::ofstream(config) << "{\"gaze_roll_deg\": 2.0}\n";
@@ -168,11 +182,55 @@ void testChild(const std::string& dir) {
         Recorder r;
         const double start = now();
         CHECK(r.start(stubborn, dir + "/out4", config, start));
-        CHECK(r.poll(start + recorder::kMaxSec) && !r.recording() && r.busy());
+        CHECK(r.poll(start + recorder::kMaxSec + 0.01) && !r.recording() && r.busy());
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         CHECK(r.busy());
         CHECK(waitReaped(r, recorder::kMaxSec + recorder::kStopWaitSec + 1));
         CHECK(r.view(now()).error.empty());
+        // The row then says it stopped at the limit, until the next start
+        CHECK(r.view(now()).autoStopped);
+        CHECK(r.start(good, dir + "/out4", config, now()) && !r.view(now()).autoStopped);
+        r.stop(now());
+        CHECK(waitReaped(r) && !r.view(now()).autoStopped);
+    }
+    {
+        // Two recordings started within the same second keep their own files
+        Recorder r;
+        CHECK(r.start(good, dir + "/out6", config, now()));
+        const std::string first = r.view(now()).path;
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        r.stop(now());
+        CHECK(waitReaped(r));
+        CHECK(r.start(good, dir + "/out6", config, now()));
+        const std::string second = r.view(now()).path;
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        r.stop(now());
+        CHECK(waitReaped(r));
+        CHECK(first != second && read(first) == "sample_time\n" && read(second) == "sample_time\n");
+    }
+    {
+        // A descriptor of the panel's above 1024 does not reach the recorder
+        const std::string leak = dir + "/leak";
+        const std::string peek = dir + "/peek.sh";
+        script(peek, "if [ -e /proc/$$/fd/2000 ]; then echo leaked > " + leak + "; else echo closed > " + leak +
+                         "; fi\ntrap 'exit 0' INT\nwhile :; do sleep 0.05; done\n");
+        // Past the usual soft limit of 1024 (the hard limit is far higher; SteamVR's libraries may raise it)
+        rlimit limit {};
+        ::getrlimit(RLIMIT_NOFILE, &limit);
+        if (limit.rlim_cur < 4096 && limit.rlim_max >= 4096) {
+            limit.rlim_cur = 4096;
+            ::setrlimit(RLIMIT_NOFILE, &limit);
+        }
+        const int high = ::dup2(1, 2000);
+        CHECK(high == 2000);
+        Recorder r;
+        CHECK(r.start(peek, dir + "/out7", config, now()));
+        for (int i = 0; i < 100 && !exists(leak); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        CHECK(read(leak) == "closed\n");
+        r.stop(now());
+        CHECK(waitReaped(r));
+        ::close(2000);
     }
     {
         // Exiting the panel stops and reaps it: nothing is left running
@@ -245,6 +303,7 @@ int main(int argc, char** argv) {
     char cwd[4096];
     const std::string scratch = std::string(::getcwd(cwd, sizeof(cwd))) + "/" + dir;
     testNames();
+    testUniqueNames(scratch);
     testChild(scratch);
     if (argc > 1) testReal(argv[1], scratch);
     const std::string remove = "rm -rf '" + scratch + "'";

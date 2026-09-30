@@ -233,6 +233,7 @@ UiText makeJapanese() {
     t.eyeLogWhereFormat = "保存先 %s";
     t.eyeLogLimit = "60 分たつと自動で止まります";
     t.eyeLogFailedFormat = "記録できませんでした: %s";
+    t.eyeLogAutoStopped = "60 分たったので止めました";
     t.recordingFormat = "記録中 %s";
     t.hintTilt = "＋ は右が上";
     t.downHoldFormat = "%s° より下";
@@ -590,6 +591,7 @@ UiText makeEnglish() {
     t.eyeLogWhereFormat = "Saved to %s";
     t.eyeLogLimit = "Stops by itself after 60 minutes";
     t.eyeLogFailedFormat = "Couldn't record: %s";
+    t.eyeLogAutoStopped = "Stopped after 60 minutes";
     t.recordingFormat = "Recording %s";
     t.hintTilt = "+ = right up";
     t.downHoldFormat = "Below %s°";

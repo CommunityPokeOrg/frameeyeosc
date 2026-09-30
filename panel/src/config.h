@@ -108,7 +108,8 @@ constexpr const char* kOutputEtvr = "etvr";
 constexpr const char* kOutputLivelink = "livelink";  ///< Live Link Face packets for VRCFaceTracking's LiveLink module
 /** eye_tracking_active values: how EyeTrackingActive is sent in VRChat mode */
 constexpr const char* kActiveTypes[3] = {"bool", "float", "off"};
-/** auto_recenter values, in the order its button steps through them: nothing, one dot, the dot and the side dots */
+/** auto_recenter values, in the order the Eye fit tab's "When put on" row shows them: nothing, one dot (the
+ *  default), the dot and the up / down dots */
 constexpr const char* kAutoRecenterModes[3] = {"off", "center", "tilt"};
 /** lid_widen values, in the order the Eyelids tab shows them: never, less, normal (the default), more */
 constexpr const char* kLidWidenModes[4] = {"off", "low", "normal", "high"};

@@ -234,6 +234,7 @@ struct UiText {
     const char* eyeLogWhereFormat;   ///< where the files go ("Saved to %s")...
     const char* eyeLogLimit;         ///< ...and that it stops by itself after 60 minutes
     const char* eyeLogFailedFormat;  ///< it could not start or ended by itself ("Couldn't record: %s")
+    const char* eyeLogAutoStopped;   ///< the last one was stopped by the 60-minute limit
     const char* recordingFormat;     ///< the mark in the left column while recording ("Recording 1:23")
     const char* rowTilt;             ///< the headset's tilt (gaze_roll_deg), next to the far-down hold
     const char* hintTilt;

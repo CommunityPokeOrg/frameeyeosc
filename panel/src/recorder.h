@@ -38,6 +38,16 @@ std::string shortPath(const std::string& path);
 std::string fileStamp(std::time_t when);
 
 /**
+ * The path of a new recording without its extension: dir/eyes_<stamp>, or with _2, _3... added when any of its three
+ * files (.csv, .log, .config.json) is there already (a stop and a start within the same second), so nothing is
+ * overwritten.
+ * @param dir the folder
+ * @param stamp fileStamp of now
+ * @return the base path
+ */
+std::string uniqueBase(const std::string& dir, const std::string& stamp);
+
+/**
  * How long a recording has run, as shown.
  * @param seconds the time
  * @return "1:23" (minutes and seconds; "60:00" at the limit)
@@ -56,6 +66,7 @@ struct View {
     double elapsedSec = 0.0;  ///< how long it has run
     std::string path;        ///< the CSV file of the current or last recording
     std::string error;       ///< why the last one could not start or ended by itself (English, one line); empty if not
+    bool autoStopped = false;  ///< the last one was stopped by the 60-minute limit (and none runs now)
 };
 
 /** Runs and stops the recording child. */

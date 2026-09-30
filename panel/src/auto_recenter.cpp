@@ -19,10 +19,23 @@ Step Watcher::update(double now, const Inputs& in) {
         dashboardOpen_ = in.dashboardOpen;
         if (!in.dashboardOpen) closedAt_ = now;
     }
-    // The time since the last update counts for what was seen then, if frameeyeosc ran. So the time the Frame slept
-    // after the headset came off counts as off, even when the first status after waking up is still the stale one
-    // from before (read as "not running") or has not been read again yet
-    if (wasRunning_) (tracking_ ? onFor_ : offFor_) += dt;
+    if (dt > kSleepGapSec) {
+        // No update for this long: the Frame slept (the loop runs every 0.25-0.5 s), which it does with the headset
+        // off, and the eye server delivers nothing through a suspend. So it counts as off whatever the last status
+        // said: also when that was read just before sleeping and still said "tracking", which otherwise made the
+        // whole suspend count as worn and missed the wearing
+        if (tracking_) {
+            tracking_ = false;
+            offFor_ = 0.0;
+        }
+        offFor_ += dt;
+        onFor_ = 0.0;
+    } else if (wasRunning_) {
+        // The time since the last update counts for what was seen then, if frameeyeosc ran. So the time the Frame
+        // slept after the headset came off counts as off, even when the first status after waking up is still the
+        // stale one from before (read as "not running") or has not been read again yet
+        (tracking_ ? onFor_ : offFor_) += dt;
+    }
     // Changes only while frameeyeosc runs: its status says nothing about the eyes otherwise, and a restart while the
     // headset is worn must not look like putting it on (the time it was not running counts for nothing)
     if (in.running) {

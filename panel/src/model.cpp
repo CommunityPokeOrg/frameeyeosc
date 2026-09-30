@@ -137,6 +137,28 @@ bool fitKeysLocked(const SettingsView& view) {
     return false;
 }
 
+bool migrateLidScales(JsonValue& root, std::string& log) {
+    log.clear();
+    if (root.type != JsonValue::Type::Object || root.get(key::kLidWiden) != nullptr) return false;
+    const char* scaleKeys[2] = {key::kLidScaleLeft, key::kLidScaleRight};
+    for (int eye = 0; eye < 2; ++eye) {
+        bool fitted = true;
+        for (const char* name : kLidFitKeys[eye]) {
+            const JsonValue* value = root.get(name);
+            fitted &= value != nullptr && value->isNumber();
+        }
+        const JsonValue* scale = root.get(scaleKeys[eye]);
+        if (!fitted || scale == nullptr || !scale->isNumber()) continue;
+        char text[96];
+        std::snprintf(text, sizeof(text), "%s%s %.2f -> null (it did nothing next to the eye fit before 0.6.0)",
+                      log.empty() ? "" : ", ", scaleKeys[eye], scale->number);
+        log += text;
+        root.set(scaleKeys[eye], JsonValue::makeNull());
+    }
+    root.set(key::kLidWiden, JsonValue::makeString(kLidWidenModes[2]));
+    return true;
+}
+
 WidenState widenState(const SettingsView& view) {
     // frameeyeosc's WIDEN_LOW / WIDEN_NORMAL / WIDEN_HIGH starts and WIDEN_ROOM_LIMIT
     constexpr double kWidenStart[4] = {NAN, 0.10, 0.07, 0.04};
