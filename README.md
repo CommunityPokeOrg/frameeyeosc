@@ -28,6 +28,24 @@ This is a fork of [konsti219/frameeyeosc](https://github.com/konsti219/frameeyeo
 
 ## Install
 
+### Easiest: install right inside the Frame (recommended)
+
+No PC needed. In Konsole on the Frame (+ on the bar at the bottom → the list of programs → Konsole), type this command, press Enter, and pick **1** (frameeyeosc) from the menu. It asks whether to install the dashboard panel too.
+
+```sh
+curl -fsSL https://frame.sasaken1102s.net | sh
+```
+
+- Do this once first: Steam Settings → System → turn on "Enable Developer Mode" (while it's off, Konsole doesn't show up in the + list).
+- The other apps (frame-jp-keyboard, frame-mic-tuner, frame-perf-overlay) can be installed from the same menu.
+- To update, run the same command and pick the same number again. To uninstall, use `u` in the menu.
+- Step-by-step guide and video: https://frame.sasaken1102s.net
+- To install without any prompts: `curl -fsSL https://frame.sasaken1102s.net | sh -s -- install eye`
+
+What gets installed and the options are the same as in "Install from a PC" below (it runs `install.sh` for you). After installing, don't forget to turn off Steam Link's OSC output as described below.
+
+### Install from a PC
+
 Download the tarball from the releases page and copy it to the headset, for example from your PC:
 
 ```sh
@@ -47,7 +65,7 @@ No sudo is needed. Everything goes into your home directory (`~/.local/bin`, `~/
 
 After that, turn off Steam Link's own OSC output on your PC (SteamVR settings > Steam Link > OSC). Steam Link sends its own unsmoothed eye data to VRChat, and with both running, two sources fight over the avatar's eyes. This is needed in the ETVR mode too, where VRCFaceTracking drives the avatar's eyes.
 
-### Updating from a version before 0.4.0
+#### Updating from a version before 0.4.0
 
 Versions before 0.4.0 have no updater, so update to 0.4.0 once by hand: copy and unpack the new tarball as above and run `./install.sh --with-panel` (or `./install.sh` without the panel). Your `~/.config/frameeyeosc/env` and the learned eyelid calibration are kept, and the service restarts on the new version.
 
@@ -55,7 +73,7 @@ Options in `FRAMEEYEOSC_ARGS` in `env` still work as before. But anything set th
 
 To remove it: `./install.sh --uninstall` (removes the panel too; add `--purge` to also delete settings and calibration).
 
-### Updating from the panel (0.4.0 and later)
+#### Updating from the panel (0.4.0 and later)
 
 From 0.4.0 on, the panel's "Update" button does the update. The panel's Advanced page shows the installed version. At start and then at most once a day, the panel asks GitHub whether a newer release exists. That holds while checks succeed: after a failed check it tries again an hour later. "Check now" asks right away. When a newer release exists, "Update" downloads it, checks it against the release's `SHA256SUMS`, and runs its `install.sh` with the options of your last install (kept in `~/.config/frameeyeosc/install-args`). frameeyeosc and the panel restart on the new version. If anything fails before `install.sh` runs, nothing changes; the log is in `~/.cache/frameeyeosc/update.log`. Turn "Check for updates" off to stop the daily check (the "Check now" button still works). The update itself only runs when you press the button.
 
