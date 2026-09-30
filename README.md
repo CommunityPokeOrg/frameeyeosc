@@ -65,13 +65,13 @@ From 0.4.0 on, the panel's "Update" button does the update. The panel's Advanced
 
 `./install.sh --with-panel` adds an "Eye" panel to the SteamVR dashboard. It starts together with SteamVR from the next SteamVR start; to open it right away, pick "frameeyeosc panel" under Launch program (+) on the dashboard.
 
-| Basic | Gaze |
+| Basic | Output |
 |---|---|
-| ![The Basic tab](docs/images/panel-basic-en_2026-09-28_06-07-01.png) | ![The Gaze tab](docs/images/panel-gaze-en_2026-09-28_06-07-01.png) |
-| **Eye fit** | **Eyelids** |
-| ![The Eye fit tab](docs/images/panel-eyefit-en_2026-09-28_06-07-01.png) | ![The Eyelids tab](docs/images/panel-lids-en_2026-09-28_06-07-01.png) |
-| **Advanced** | |
-| ![The Advanced tab](docs/images/panel-advanced-en_2026-09-28_06-07-01.png) | |
+| ![The Basic tab](docs/images/panel-basic-en_2026-10-01_02-00-00.png) | ![The Output tab](docs/images/panel-output-en_2026-10-01_02-00-00.png) |
+| **Gaze** | **Eye fit** |
+| ![The Gaze tab](docs/images/panel-gaze-en_2026-10-01_02-00-00.png) | ![The Eye fit tab](docs/images/panel-eyefit-en_2026-10-01_02-00-00.png) |
+| **Eyelids** | **Advanced** |
+| ![The Eyelids tab](docs/images/panel-lids-en_2026-10-01_02-00-00.png) | ![The Advanced tab](docs/images/panel-advanced-en_2026-10-01_02-00-00.png) |
 
 - The left column always shows what frameeyeosc is doing: sending or paused, where it sends to, messages per second, how many samples a second the eye tracker delivers (marked "low" below 60), both eyelids and the gaze (raw and sent), and a config error if there is one.
 - Basic: pause sending, where to send (three cards: VRChat directly, VRCFT (LiveLink), marked recommended, and VRCFT (ETVR), each saying whether wide eyes come through, how others see your eyes, and whether VRCFaceTracking is needed), language (Japanese / English), start with SteamVR, reset all, quit.
