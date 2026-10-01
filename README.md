@@ -185,7 +185,15 @@ frameeyeosc can also send Live Link Face packets (the format of Epic's Live Link
 
 1. On the PC, install VRCFaceTracking and add the "LiveLink" module from its module registry. Turn off or remove other eye tracking modules (such as the ETVR Tracking Module), so the eyes come from the LiveLink module. It listens on UDP 11111.
 2. Choose "VRCFT (LiveLink)" under "Send to" on the panel's Basic tab, or set `"output": "livelink"` (or `--output livelink`). The left column then shows "VRCFT (LiveLink) → …", and the Output tab lists these steps. The destination works as usual (the Steam Link PC or a fixed host) on port 11111.
-3. Let UDP 11111 in to VRCFaceTracking in Windows Defender Firewall (allow VRCFaceTracking when Windows asks, or add an inbound rule for UDP port 11111). Without it nothing arrives.
+3. Let UDP 11111 in through Windows Defender Firewall. Without it nothing arrives. Two things trip people up:
+   - The LiveLink module runs inside `VRCFaceTracking.ModuleProcess.exe`, not `VRCFaceTracking.exe`, so allowing only VRCFaceTracking isn't enough.
+   - With Steam Link's wireless adapter, its network usually shows as "Unidentified network", which Windows treats as Public. A rule for the Private profile only doesn't cover it.
+
+   A rule by port covers both (PowerShell as administrator):
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "VRCFT LiveLink (UDP 11111)" -Direction Inbound -Action Allow -Protocol UDP -LocalPort 11111 -RemoteAddress LocalSubnet -Profile Private,Public
+   ```
 
 Notes:
 
@@ -226,9 +234,9 @@ Eyelid calibration is automatic. For the first 20 seconds after you put the head
 - The eye fit fails at the first dot with few samples, or the left column shows "Eye data" as low: the eye tracker delivers fewer samples than usual. Please report the rate it shows, and whether the PC was streaming over Steam Link at the time.
 - The log says `Sending OSC to ...` but the avatar doesn't react: check that OSC is enabled in VRChat, then check Windows Firewall. VRChat's own inbound rule is often allowed for the "Public" profile only, so OSC from a "Private" home network gets dropped. Note the rule must be for `VRChat.exe`, not `launch.exe`. A narrow rule that fixes it (PowerShell as administrator):
   ```powershell
-  New-NetFirewallRule -DisplayName "VRChat OSC (LAN UDP 9000)" -Direction Inbound -Action Allow -Protocol UDP -LocalPort 9000 -RemoteAddress LocalSubnet -Program "C:\Program Files (x86)\Steam\steamapps\common\VRChat\VRChat.exe" -Profile Private
+  New-NetFirewallRule -DisplayName "VRChat OSC (LAN UDP 9000)" -Direction Inbound -Action Allow -Protocol UDP -LocalPort 9000 -RemoteAddress LocalSubnet -Program "C:\Program Files (x86)\Steam\steamapps\common\VRChat\VRChat.exe" -Profile Private,Public
   ```
-  The bundled wireless adapter shows up in Windows as its own network, usually with the "Public" profile.
+  The rule covers both profiles because the bundled wireless adapter shows up in Windows as its own network, usually with the "Public" profile, while a home network is often "Private".
 - `Error: ... No such file or directory` right after the headset boots: harmless. The eye tracker isn't up yet, and the service retries a few seconds later.
 - Nothing moves while the headset is off your face: expected, the Frame only tracks while worn.
 - The panel says "frameeyeosc is not running": check `systemctl --user status frameeyeosc`. Changes made in the panel are still saved and apply once it runs.

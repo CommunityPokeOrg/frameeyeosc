@@ -185,7 +185,15 @@ frameeyeosc は、VRCFaceTracking の LiveLink モジュールに Live Link Face
 
 1. PC に VRCFaceTracking を入れ、モジュールの一覧から「LiveLink」を追加します。目がこのモジュールから来るように、ほかの目のモジュール（ETVR Tracking Module など）は止めるか外してください。UDP 11111 番で受けます
 2. パネルの基本タブの「送り先」で「VRCFT（LiveLink）」を選ぶか、`"output": "livelink"`（または `--output livelink`）にします。左の列に「VRCFT（LiveLink）→ …」と出て、送り方タブにこの手順が出ます。送り先の PC はいつもどおり（Steam Link の相手か固定）、ポートは 11111 です
-3. Windows Defender ファイアウォールで、VRCFaceTracking が UDP 11111 番を受けられるようにします（Windows に聞かれたら VRCFaceTracking を許可するか、UDP 11111 番の受信の規則を足す）。許可がないと何も届きません
+3. Windows Defender ファイアウォールで UDP 11111 番を受けられるようにします。許可がないと何も届きません。つまずきやすいところが 2 つあります:
+   - LiveLink モジュールは `VRCFaceTracking.exe` ではなく `VRCFaceTracking.ModuleProcess.exe` の中で動きます。VRCFaceTracking を許可するだけでは届きません
+   - Steam Link の付属無線アダプタを使うと、そのネットワークは「識別されていないネットワーク」になり、Windows では「パブリック」扱いです。「プライベート」だけの規則では届きません
+
+   ポート番号で規則を作れば両方に効きます（管理者の PowerShell で）:
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "VRCFT LiveLink (UDP 11111)" -Direction Inbound -Action Allow -Protocol UDP -LocalPort 11111 -RemoteAddress LocalSubnet -Profile Private,Public
+   ```
 
 注意:
 
@@ -226,9 +234,9 @@ frameeyeosc は、VRCFaceTracking の LiveLink モジュールに Live Link Face
 - 目を合わせると最初の点でサンプルが足りずに止まる、または左の列の「目のデータ」が少なめ: 目のトラッカーからのデータがふだんより少ない状態です。そのとき出ていた回数と、PC から Steam Link で送っていたかどうかを知らせてください
 - ログに `Sending OSC to ...` と出ているのにアバターが反応しない: VRChat の OSC が有効かを確認したうえで、Windows のファイアウォールを確認してください。VRChat の受信許可は「パブリック」だけになっていることが多く、「プライベート」の家のネットワークから届く OSC は止められます。許可の対象が `launch.exe` ではなく `VRChat.exe` になっているかにも注意してください。範囲をしぼって許可するには（管理者の PowerShell で）:
   ```powershell
-  New-NetFirewallRule -DisplayName "VRChat OSC (LAN UDP 9000)" -Direction Inbound -Action Allow -Protocol UDP -LocalPort 9000 -RemoteAddress LocalSubnet -Program "C:\Program Files (x86)\Steam\steamapps\common\VRChat\VRChat.exe" -Profile Private
+  New-NetFirewallRule -DisplayName "VRChat OSC (LAN UDP 9000)" -Direction Inbound -Action Allow -Protocol UDP -LocalPort 9000 -RemoteAddress LocalSubnet -Program "C:\Program Files (x86)\Steam\steamapps\common\VRChat\VRChat.exe" -Profile Private,Public
   ```
-  付属の無線アダプタは Windows では別のネットワークとして見え、たいてい「パブリック」になっています
+  「プライベート」と「パブリック」の両方にしてあるのは、家のネットワークは「プライベート」のことが多い一方で、付属の無線アダプタは Windows では別のネットワークとして見え、たいてい「パブリック」になっているからです
 - ヘッドセットの起動直後に `Error: ... No such file or directory` と出る: 問題ありません。アイトラッキングがまだ起動していないだけで、数秒後に自動で再試行します
 - ヘッドセットを外していると何も動かない: 正常です。Frame は被っている間しか目を追いません
 - パネルに「本体が動いていません」と出る: `systemctl --user status frameeyeosc` を確認してください。パネルで変えた設定は保存されていて、動き出したら反映されます
