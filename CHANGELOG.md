@@ -5,6 +5,7 @@
 Works again after the SteamOS 0.4.3 update.
 
 - Reads the eye tracker's shared-memory version 5, which came with SteamOS 0.4.3 (build 20260930) and stopped frameeyeosc with "unsupported eye shared-memory version 5; expected 4". Version 5 only inserts 5 bytes in front of the sample record, so the record starts at 0x157 instead of 0x152 and the file is 5 bytes longer; the record's own layout is unchanged, and so are the lock, the sequence and the "send me the next sample" flag, and frameeyeosc still writes nothing else. Version 4 is read as before, and `--record` files keep their columns. The error for a version it doesn't know now lists the ones it reads.
+- Thanks to @winning-JP (#7) and @ronaldburns (#8), who found the same layout change on their own Steam Frames and sent fixes for it. The capture in #8, taken while the eyes were being tracked, confirmed that the record reads correctly at 0x157.
 
 ## 0.6.0 (2026-10-01)
 
