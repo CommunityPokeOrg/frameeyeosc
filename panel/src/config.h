@@ -36,6 +36,12 @@ struct SettingSpec {
 constexpr const char* kFontPath = "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc";
 constexpr const char* kBoldFontPath = "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc";
 
+/**
+ * config.json's "version": 2 from the gaze presets that no longer slide after a saccade (see migrateGazePresets); a
+ * file without it, or with 1, is brought up to date once. frameeyeosc does not read it.
+ */
+constexpr int kConfigVersion = 2;
+
 /** Keys the panel writes (the names are shared with frameeyeosc). */
 namespace key {
 constexpr const char* kVersion = "version";

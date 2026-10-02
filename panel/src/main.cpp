@@ -1013,20 +1013,35 @@ long long writeCaptureRequest(PanelModel& model, const char* target, double seco
 }
 
 /**
- * Bring a config.json from 0.5.x or earlier up to date, once (see migrateLidScales), and read it again.
+ * Bring an older config.json up to date, once (see migrateLidScales and migrateGazePresets), and read it again.
  * @param model the model (its config is re-read after a write)
  */
 void migrateConfig(PanelModel& model) {
-    if (!model.config.exists || !model.config.error.empty() || model.config.root.get(key::kLidWiden) != nullptr) return;
-    std::string log;
+    if (!model.config.exists || !model.config.error.empty() || !configNeedsMigration(model.config.root)) return;
+    std::string lidLog;
+    std::string gazeLog;
+    bool lids = false;
+    bool gaze = false;
     std::string error;
-    const bool ok = updateConfigFile(model.configPath, [&log](JsonValue& root) { migrateLidScales(root, log); }, error);
+    const bool ok = updateConfigFile(
+        model.configPath,
+        [&](JsonValue& root) {
+            lids = migrateLidScales(root, lidLog);
+            gaze = migrateGazePresets(root, gazeLog);
+        },
+        error);
     if (!ok) {
-        std::fprintf(stderr, "[config] could not add lid_widen: %s\n", error.c_str());
+        std::fprintf(stderr, "[config] could not bring config.json up to date: %s\n", error.c_str());
         return;
     }
-    std::fprintf(stderr, "[config] from before 0.6.0: lid_widen = \"normal\"%s%s\n", log.empty() ? "" : "; ",
-                 log.c_str());
+    if (lids) {
+        std::fprintf(stderr, "[config] from before 0.6.0: lid_widen = \"normal\"%s%s\n", lidLog.empty() ? "" : "; ",
+                     lidLog.c_str());
+    }
+    if (gaze) {
+        std::fprintf(stderr, "[config] gaze presets from before version 2: %s\n",
+                     gazeLog.empty() ? "own values, kept" : gazeLog.c_str());
+    }
     model.config = readConfigFile(model.configPath);
 }
 

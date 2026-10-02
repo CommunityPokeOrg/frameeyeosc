@@ -138,7 +138,7 @@ bool readWholeFile(const std::string& path, std::string& text) {
 const std::vector<SettingSpec>& settingSpecs() {
     // key, type, default, default text, min, max, step, decimals[, value "On" sets if the default is off]
     static const std::vector<SettingSpec> specs = {
-        {key::kVersion, SettingType::Integer, 1, "", 1, 1, 1, 0},
+        {key::kVersion, SettingType::Integer, kConfigVersion, "", 1, kConfigVersion, 1, 0},
         {key::kSending, SettingType::Bool, 1, "", 0, 1, 1, 0},
         {key::kOutput, SettingType::String, 0, kOutputVrchat, 0, 0, 0, 0},
         {key::kHost, SettingType::String, 0, "auto", 0, 0, 0, 0},
@@ -146,10 +146,10 @@ const std::vector<SettingSpec>& settingSpecs() {
         {key::kPrefix, SettingType::String, 0, "/FT", 0, 0, 0, 0},
         {key::kEyeTrackingActive, SettingType::String, 0, "bool", 0, 0, 0, 0},
         {key::kRaw, SettingType::Bool, 0, "", 0, 1, 1, 0},
-        {key::kGazeMinCutoff, SettingType::Number, 0.4, "", 0.05, 5.0, 0.05, 2},
-        {key::kGazeBeta, SettingType::Number, 0.8, "", 0.0, 10.0, 0.1, 2},
-        {key::kGazeDCutoff, SettingType::Number, 0.5, "", 0.1, 5.0, 0.1, 2},
-        {key::kGazeDeadzone, SettingType::Number, 0.02, "", 0.0, 0.2, 0.005, 3},
+        {key::kGazeMinCutoff, SettingType::Number, 0.3, "", 0.05, 5.0, 0.05, 2},
+        {key::kGazeBeta, SettingType::Number, 2.5, "", 0.0, 10.0, 0.1, 2},
+        {key::kGazeDCutoff, SettingType::Number, 2.5, "", 0.1, 5.0, 0.1, 2},
+        {key::kGazeDeadzone, SettingType::Number, 0.01, "", 0.0, 0.2, 0.005, 3},
         {key::kGazeHoldBelow, SettingType::Number, 0.5, "", 0.05, 1.0, 0.05, 2},
         {key::kIndependentEyes, SettingType::Bool, 0, "", 0, 1, 1, 0},
         {key::kLidMinCutoff, SettingType::Number, 6.0, "", 0.5, 30.0, 0.5, 1},

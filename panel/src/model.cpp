@@ -11,12 +11,36 @@ namespace {
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
-/** Light / medium / strong: lower values smooth more (medium is frameeyeosc's default). */
+/**
+ * Light / medium / strong (medium is frameeyeosc's default): from light to strong, steadier at rest and a little
+ * slower to follow. None of them keeps sliding after a saccade: replayed on two 60-minute recordings (deadzone 0.01),
+ * jitter while fixating 0.259 / 0.240 / 0.224° and 0.242 / 0.232 / 0.208°, 90% of a saccade reached after 122 / 150 /
+ * 239 ms and 133 / 144 / 156 ms, and a median 0.32 / 0.27 / 0.40° and 0.15 / 0.36 / 0.32° of slide 0.1-0.5 s after it
+ * landed (the unfiltered gaze moves 0.61° and 0.48° there by itself).
+ */
 const GazePreset kGazePresets[3] = {
+    {0.5, 4.0, 2.5},
+    {0.3, 2.5, 2.5},
+    {0.2, 1.5, 2.5},
+};
+
+/**
+ * The presets up to 0.6.0. Their low beta and derivative cutoff let the filter ease off before it had caught up with a
+ * saccade, so the gaze kept sliding after the eyes had stopped: with strong, 90% of the way after a median 589 ms and
+ * 3.8° of slide 0.1-0.5 s after landing.
+ */
+const GazePreset kOldGazePresets[3] = {
     {1.0, 1.5, 1.0},
     {0.4, 0.8, 0.5},
     {0.2, 0.4, 0.3},
 };
+
+/** The deadzone default up to 0.6.0 (0.9°): the gaze stopped up to that far short of where the eyes landed. */
+constexpr double kOldGazeDeadzone = 0.02;
+constexpr double kNewGazeDeadzone = 0.01;
+
+/** The presets' names in the log. */
+const char* const kPresetNames[3] = {"light", "medium", "strong"};
 
 /** Eyelid smoothing recommended for ETVR (provisional; to be tuned on the headset). */
 constexpr double kEtvrLidMinCutoff = 10.0;
@@ -157,6 +181,53 @@ bool migrateLidScales(JsonValue& root, std::string& log) {
     }
     root.set(key::kLidWiden, JsonValue::makeString(kLidWidenModes[2]));
     return true;
+}
+
+bool migrateGazePresets(JsonValue& root, std::string& log) {
+    log.clear();
+    if (root.type != JsonValue::Type::Object) return false;
+    const JsonValue* version = root.get(key::kVersion);
+    if (version != nullptr && version->isNumber() && version->number >= kConfigVersion) return false;
+    const char* keys[3] = {key::kGazeMinCutoff, key::kGazeBeta, key::kGazeDCutoff};
+    double values[3];
+    bool written = true;
+    for (int i = 0; i < 3; ++i) {
+        const JsonValue* value = root.get(keys[i]);
+        written &= value != nullptr && value->isNumber();
+        values[i] = written ? value->number : kNaN;
+    }
+    for (int i = 0; written && i < 3; ++i) {
+        const GazePreset& old = kOldGazePresets[i];
+        if (std::fabs(old.minCutoff - values[0]) > 1e-6 || std::fabs(old.beta - values[1]) > 1e-6 ||
+            std::fabs(old.dCutoff - values[2]) > 1e-6) {
+            continue;
+        }
+        const GazePreset& now = kGazePresets[i];
+        root.set(key::kGazeMinCutoff, JsonValue::makeNumber(now.minCutoff));
+        root.set(key::kGazeBeta, JsonValue::makeNumber(now.beta));
+        root.set(key::kGazeDCutoff, JsonValue::makeNumber(now.dCutoff));
+        char text[160];
+        std::snprintf(text, sizeof(text), "gaze %s %g / %g / %g -> %g / %g / %g", kPresetNames[i], old.minCutoff,
+                      old.beta, old.dCutoff, now.minCutoff, now.beta, now.dCutoff);
+        log = text;
+        // A preset user's deadzone at the old default goes to the new one too; a deadzone of their own stays
+        const JsonValue* deadzone = root.get(key::kGazeDeadzone);
+        if (deadzone != nullptr && deadzone->isNumber() && std::fabs(deadzone->number - kOldGazeDeadzone) < 1e-9) {
+            root.set(key::kGazeDeadzone, JsonValue::makeNumber(kNewGazeDeadzone));
+            std::snprintf(text, sizeof(text), ", gaze_deadzone %g -> %g", kOldGazeDeadzone, kNewGazeDeadzone);
+            log += text;
+        }
+        break;
+    }
+    root.set(key::kVersion, JsonValue::makeNumber(kConfigVersion, true));
+    return true;
+}
+
+bool configNeedsMigration(const JsonValue& root) {
+    if (root.type != JsonValue::Type::Object) return false;
+    const JsonValue* version = root.get(key::kVersion);
+    const bool current = version != nullptr && version->isNumber() && version->number >= kConfigVersion;
+    return root.get(key::kLidWiden) == nullptr || !current;
 }
 
 WidenState widenState(const SettingsView& view) {

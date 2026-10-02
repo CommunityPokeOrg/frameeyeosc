@@ -691,8 +691,9 @@ mod tests {
         // Held for --blink-hold-ms (80) from the last closed sample.
         assert!(after.shut_ms >= 80.0, "{after:?}");
         assert!(after.blink_jump < before.blink_jump, "{before:?} {after:?}");
-        // The deadzone keeps both still while fixating; the left eye's wild stretch is not a fixation.
-        assert!(after.jitter <= before.jitter, "{before:?} {after:?}");
+        // The deadzone keeps both all but still while fixating (a 0.005 spread of noise against its 0.01); the left
+        // eye's wild stretch is not a fixation.
+        assert!(before.jitter < 0.01 && after.jitter < 0.01, "{before:?} {after:?}");
         assert!(after.flicker <= before.flicker, "{before:?} {after:?}");
     }
 

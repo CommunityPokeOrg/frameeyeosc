@@ -247,16 +247,16 @@ struct Args {
     #[arg(long)]
     raw: bool,
     /// One Euro minimum cutoff in Hz for gaze; lower is steadier at rest
-    #[arg(long, default_value_t = 0.4)]
+    #[arg(long, default_value_t = 0.3)]
     gaze_min_cutoff: f32,
     /// One Euro beta for gaze; higher follows fast eye movements with less lag
-    #[arg(long, default_value_t = 0.8)]
+    #[arg(long, default_value_t = 2.5)]
     gaze_beta: f32,
     /// One Euro derivative cutoff in Hz for gaze; lower keeps tracker noise from loosening the filter
-    #[arg(long, default_value_t = 0.5)]
+    #[arg(long, default_value_t = 2.5)]
     gaze_d_cutoff: f32,
     /// Gaze changes smaller than this (1.0 = 45°) are ignored so the eyes stay put while fixating
-    #[arg(long, default_value_t = 0.02)]
+    #[arg(long, default_value_t = 0.01)]
     gaze_deadzone: f32,
     /// Hold the gaze while either eye's Frame openness is below this; 0 disables
     #[arg(long, default_value_t = 0.5)]
