@@ -92,10 +92,12 @@ const WIDEN_RELEASE: f64 = 0.1;
 const WIDEN_RESET_BELOW: f32 = 0.5;
 // SteamOS 0.4.3's eye tracker reads a relaxed open eye as 1.000, where the openness stops, so a widened eye can't read
 // any higher and widening can't come through (one user's left eye, both eyes open: a median 0.754 and 2.0% of samples
-// at 1.000 before, 1.000 and 75-93% after). Told from the readings, not from a version, for the status file and so the
-// panel: over the last SATURATION_WINDOW seconds of samples with both eyes at SATURATION_OPEN or more, more than
-// SATURATION_ON of them with either eye at SATURATED_READING or more turn it on, and fewer than SATURATION_OFF turn it
-// off again; with fewer than SATURATION_MIN_SAMPLES such samples it stays as it was. On two 60-minute recordings
+// at 1.000 before, 1.000 and 75-93% after). An eye without a fit whose relaxed reading lands past mark 3 would even be
+// sent widened all the time, so while it is saturated no eyelid goes out above relaxed open (see process). Told from
+// the readings, not from a version, for that, the status file and the panel: over the last SATURATION_WINDOW seconds
+// of samples with both eyes at SATURATION_OPEN or more, more than SATURATION_ON of them with either eye at
+// SATURATED_READING or more turn it on, and fewer than SATURATION_OFF turn it off again; with fewer than
+// SATURATION_MIN_SAMPLES such samples it stays as it was. On two 60-minute recordings
 // before 0.4.3 that share was 0-30.5% (a median 3.1% and 4.5%), on three after it 50.4-99.5% (on from 6.7 s in).
 const SATURATION_WINDOW: i64 = 60;
 const SATURATION_OPEN: f32 = 0.6;
@@ -488,6 +490,9 @@ struct Smoother {
     // Per eye: since when its eyelid has been above relaxed open (see sustain_widen), and when it last was.
     wide_since: [Option<f64>; 2],
     wide_last: [f64; 2],
+    // Whether the openness is saturated, so nothing above relaxed open is widening. Not reset with the filters: it
+    // belongs to the eye tracker, not to one stretch of tracking.
+    saturation: Saturation,
 }
 
 impl Smoother {
@@ -505,6 +510,7 @@ impl Smoother {
             down_hold_x: None,
             wide_since: [None; 2],
             wide_last: [f64::NEG_INFINITY; 2],
+            saturation: Saturation::default(),
         }
     }
 
@@ -602,6 +608,14 @@ impl Smoother {
         self.down_hold_x = None;
         self.wide_since = [None; 2];
         self.wide_last = [f64::NEG_INFINITY; 2];
+    }
+
+    /// Keep the filtered eyelids, and the eyelid filters themselves, at or below relaxed open.
+    fn cap_lids(&mut self, lids: &mut [f32; 2]) {
+        for (lid, filter) in lids.iter_mut().zip(&mut self.lids) {
+            *lid = lid.min(LID_RELAXED);
+            filter.value = filter.value.map(|value| value.min(LID_RELAXED));
+        }
     }
 
     /// VRCFT eyelids with widening held back until it lasts: an eyelid above relaxed open is sent as relaxed open
@@ -1737,6 +1751,9 @@ fn step(
 }
 
 fn process(settings: &Settings, smoother: &mut Smoother, scales: [f32; 2], data: &EyeData) -> Sample {
+    // Judged in --raw too (for the status file), though raw eyelids are never capped
+    smoother.saturation.add(data);
+    let saturated = smoother.saturation.on;
     let [x, y] = gaze_angles(data.fixation_point);
     let [left, right] = data.gaze.map(gaze_angles);
     let raw_gaze = [left[0], left[1], right[0], right[1], x, y];
@@ -1784,8 +1801,17 @@ fn process(settings: &Settings, smoother: &mut Smoother, scales: [f32; 2], data:
         };
         smoother.lid_vertical = Some(vertical);
         let mapped = lid_inputs(openness, vertical, scales, settings).map(|openness| lid_to_vrcft(openness, settings));
-        let mut lids = smoother.sustain_widen(data.sample_time, mapped);
+        // While the openness is saturated, nothing above relaxed open is widening. Capped before the widen sustain and
+        // the filter, so the filter rests at relaxed open (a closing eye starts closing at once) and a widen starts over
+        // once it isn't saturated any more; and the filter itself right after it, for the sample it turns on while a
+        // widen is still in the filter. The filter and lid_sync only average, so nothing goes above it meanwhile.
+        // Closing, half-closed and blinks are below relaxed open and untouched.
+        let mut lids = if saturated { mapped.map(|lid| lid.min(LID_RELAXED)) } else { mapped };
+        lids = smoother.sustain_widen(data.sample_time, lids);
         smoother.filter(dt, &mut gaze, &mut lids, hold);
+        if saturated {
+            smoother.cap_lids(&mut lids);
+        }
         let mut lids = sync_lids(lids, settings.lid_sync);
         if blink_stages {
             let shut = smoother.hold_shut(data.sample_time, mapped.map(|lid| lid <= 0.0), mapped, settings);
@@ -1942,8 +1968,6 @@ struct Bridge {
     livelink_neutral: Option<Instant>,
     // Keeps the Live Link samples at or below LIVELINK_MAX_HZ.
     livelink_throttle: Throttle,
-    // Whether the openness is saturated, so widening can't come through.
-    saturation: Saturation,
 }
 
 impl Bridge {
@@ -1992,7 +2016,6 @@ impl Bridge {
         }
         let since = *self.active_since.get_or_insert(now);
         let settled = since.elapsed() >= CAL_SETTLE;
-        self.saturation.add(&data);
         let sample = step(&self.settings, &mut self.smoother, &mut self.calibration, &data, settled);
         if self.settings.lid_calibration && settled {
             self.calibration.save_if_due();
@@ -2135,7 +2158,7 @@ impl Bridge {
             config_error: self.config.error.as_deref(),
             source_error,
             dominant_eye: dominant_eye.map(DominantEye::name),
-            openness_saturated: self.saturation.on,
+            openness_saturated: self.smoother.saturation.on,
             locked: &self.config.locked,
             effective: settings,
             gaze_capture: self.capture_result.as_ref(),
@@ -2236,7 +2259,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         dots: dots::DotStream::new(status::status_path().parent().unwrap_or(Path::new("/tmp"))),
         livelink_neutral: None,
         livelink_throttle: Throttle::default(),
-        saturation: Saturation::default(),
     };
     let mut status_file = StatusFile::new(status::status_path());
     // Until the shared memory can be read, frameeyeosc keeps running and trying again, and the status file says why,
@@ -3524,7 +3546,6 @@ mod tests {
             dots: dots::DotStream::new(Path::new("/nonexistent")),
             livelink_neutral: None,
             livelink_throttle: Throttle::default(),
-            saturation: Saturation::default(),
         };
         bridge.output.refresh();
         bridge
@@ -4179,7 +4200,7 @@ mod tests {
         let json = serde_json::to_value(bridge.status(None, None)).unwrap();
         assert!(json["dominant_eye"].is_null());
         assert_eq!(json["openness_saturated"], false);
-        bridge.saturation.on = true;
+        bridge.smoother.saturation.on = true;
         let json = serde_json::to_value(bridge.status(None, Some(DominantEye::Right))).unwrap();
         assert_eq!(json["dominant_eye"], "right");
         assert_eq!(json["openness_saturated"], true);
@@ -4197,6 +4218,90 @@ mod tests {
             };
             saturation.add(&data);
         }
+    }
+
+    /// Eyelids sent for `seconds` of 90 Hz samples from `start` looking straight ahead, with each eye's openness from
+    /// `openness(sample index)`; also whether the openness counted as saturated at each.
+    fn lids_over(
+        settings: &Settings,
+        smoother: &mut Smoother,
+        start: f64,
+        seconds: f64,
+        openness: impl Fn(usize) -> [f32; 2],
+    ) -> Vec<([f32; 2], bool)> {
+        (0..(seconds * 90.0) as usize)
+            .map(|i| {
+                let data = EyeData {
+                    sample_time: start + i as f64 / 90.0,
+                    gaze: [[0.0, 0.0, -1.0]; 2],
+                    fixation_point: [0.0, 0.0, -1.0],
+                    openness: openness(i),
+                    ..EyeData::default()
+                };
+                (process(settings, smoother, [1.0; 2], &data).lids, smoother.saturation.on)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn saturated_openness_sends_no_widening() {
+        // An eye without a fit and no calibration, as on SteamOS 0.4.3: relaxed open reads 1.000, past mark 4
+        let settings = Settings {
+            lid_calibration: false,
+            ..settings()
+        };
+        let mut smoother = Smoother::new(&settings);
+        let relaxed = lids_over(&settings, &mut smoother, 100.0, 10.0, |_| [1.0, 1.0]);
+        // Until the openness is told to be saturated (600 samples) it widens as before, after WIDEN_SUSTAIN
+        assert!(!relaxed[598].1 && relaxed[598].0.iter().all(|lid| *lid > 0.95), "{:?}", relaxed[598]);
+        // From then on not above relaxed open, not even for the one sample the filter still holds a widen
+        let on = relaxed.iter().position(|(_, saturated)| *saturated).unwrap();
+        assert_eq!(on, 599);
+        assert!(relaxed[on..].iter().all(|(lids, _)| lids.iter().all(|lid| *lid <= LID_RELAXED)));
+        assert_eq!(relaxed.last().unwrap().0, [LID_RELAXED; 2]);
+        // A blink still closes (and is held, and reopens) and a half-closed eye still reads half closed, at once
+        let blink = lids_over(&settings, &mut smoother, 110.0, 1.0, |i| match i {
+            0..=4 => [0.1, 0.1],
+            30.. => [0.55, 0.55],
+            _ => [1.0, 1.0],
+        });
+        // (one sample late, through the 3-sample median)
+        assert_eq!(blink[1].0, [0.0; 2]);
+        assert!(blink[5..30].iter().all(|(lids, _)| lids.iter().all(|lid| *lid <= LID_RELAXED)));
+        let half = lid_to_vrcft(0.55, &settings);
+        assert!(blink[31].0.iter().all(|lid| *lid < LID_RELAXED - 0.05), "{:?}", blink[31]);
+        assert!((blink.last().unwrap().0[0] - half).abs() < 0.01, "{:?} {half}", blink.last());
+        assert!(blink.iter().all(|(_, saturated)| *saturated));
+
+        // --raw is left raw
+        let raw = Settings { raw: true, ..settings.clone() };
+        let mut smoother = Smoother::new(&raw);
+        let sent = lids_over(&raw, &mut smoother, 100.0, 8.0, |_| [1.0, 1.0]);
+        assert!(sent.last().unwrap().1 && sent.last().unwrap().0 == [1.0; 2], "{:?}", sent.last());
+    }
+
+    #[test]
+    fn widening_is_capped_only_while_saturated() {
+        let settings = Settings {
+            lid_calibration: false,
+            ..settings()
+        };
+        // Widened at 0.995 (below 0.999): never saturated, and sent widened as before
+        let mut smoother = Smoother::new(&settings);
+        let wide = lids_over(&settings, &mut smoother, 100.0, 8.0, |_| [0.995, 0.995]);
+        assert!(wide.iter().all(|(_, saturated)| !*saturated));
+        assert!(wide.last().unwrap().0.iter().all(|lid| *lid > 0.95), "{:?}", wide.last());
+        // Then reading 1.000: once more than half the minute is, it turns on, and the widen still in the filter is cut
+        // off at once
+        let after = lids_over(&settings, &mut smoother, 108.0, 12.0, |_| [1.0, 1.0]);
+        let on = after.iter().position(|(_, saturated)| *saturated).unwrap();
+        assert!(on > 0 && after[on - 1].0.iter().all(|lid| *lid > 0.95), "{on} {:?}", after[on - 1]);
+        assert!(after[on..].iter().all(|(lids, _)| lids.iter().all(|lid| *lid <= LID_RELAXED)));
+        // Widening is back by itself once the minute reads below 1.000 again, after WIDEN_SUSTAIN
+        let back = lids_over(&settings, &mut smoother, 120.0, 70.0, |_| [0.995, 0.995]);
+        let off = back.iter().position(|(_, saturated)| !*saturated).unwrap();
+        assert!(back[off..off + 20].iter().all(|(lids, _)| lids.iter().all(|lid| *lid <= LID_RELAXED)), "{off} {:?}", &back[off - 2..off + 25]);
+        assert!(back.last().unwrap().0.iter().all(|lid| *lid > 0.95), "{:?}", back.last());
     }
 
     #[test]
