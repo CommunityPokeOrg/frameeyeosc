@@ -26,6 +26,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 const SOURCE: &str = "/dev/shm/eye-server.mmap";
 const TIMEOUT: Duration = Duration::from_secs(1);
+// While the eye server's shared memory can't be read (not there yet, an unsupported version, ...), it is tried again
+// this often.
+const REOPEN_INTERVAL: Duration = Duration::from_secs(1);
 // The eye server is waited on in slices this long, so the status file keeps updating while it is idle.
 const POLL: Duration = Duration::from_millis(100);
 // The status file's send rate counts the samples sent within this window.
@@ -968,7 +971,11 @@ impl EyeSource {
     /// is mapped, so a version this does not know is never written to.
     fn open_at(path: &Path) -> Result<Self, Box<dyn Error>> {
         let shown = path.display();
-        let file = OpenOptions::new().read(true).write(true).open(path)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|error| format!("{shown}: {error}"))?;
         let metadata = file.metadata()?;
         let mut header = [0; 4];
         std::os::unix::fs::FileExt::read_exact_at(&file, &mut header, 0)
@@ -1000,9 +1007,15 @@ impl EyeSource {
         Ok(source)
     }
 
-    /// True when the path now points at a different file (or none) than the one we mapped.
+    /// True when the path now points at a different file (or none) than the one we mapped, or the eye server rewrote
+    /// the same file as another version.
     fn is_stale(&self) -> bool {
-        fs::metadata(&self.path).map_or(true, |metadata| metadata.ino() != self.inode)
+        self.version_changed() || fs::metadata(&self.path).map_or(true, |metadata| metadata.ino() != self.inode)
+    }
+
+    /// True when the file no longer says the version it was opened as.
+    fn version_changed(&self) -> bool {
+        u32::from_le(unsafe { ptr::read_volatile(&raw const (*self.control()).version) }) != self.layout.version
     }
 
     fn control(&self) -> *const ShmControl {
@@ -1031,6 +1044,10 @@ impl EyeSource {
     /// Wait up to `timeout` for the eye server's next sample. The server writes the record and bumps the sequence
     /// while holding metadata_mutex, and the record is copied out under the same mutex, so it is never torn.
     fn next(&mut self, timeout: Duration) -> io::Result<Next> {
+        // Rewritten as another version: nothing is written to it (not even the lock), and is_stale() has it reopened.
+        if self.version_changed() {
+            return Ok(Next::Stopped);
+        }
         let guard = self.lock()?;
         let sequence_ptr = unsafe { &raw const (*self.control()).sequence };
         let sequence = unsafe { ptr::read_volatile(sequence_ptr) };
@@ -1089,6 +1106,63 @@ fn decode(record: EyeDataMmap) -> Next {
         })
     } else {
         Next::Stopped
+    }
+}
+
+/// The eye server's shared memory, kept open while it can be read. While it can't (SteamVR not started yet, an
+/// unsupported version, replaced by the eye server, ...), frameeyeosc keeps running: it is tried again every
+/// REOPEN_INTERVAL, and `error` says why, for the status file and so the panel.
+struct EyeReader {
+    path: PathBuf,
+    source: Option<EyeSource>,
+    // Why the shared memory can't be read; None while it can.
+    error: Option<String>,
+    next_open: Instant,
+}
+
+impl EyeReader {
+    fn new(path: &Path, now: Instant) -> Self {
+        Self {
+            path: path.to_owned(),
+            source: None,
+            error: None,
+            next_open: now,
+        }
+    }
+
+    /// Open the shared memory if it isn't open and a try is due. Returns what to log: the version once it is open, or
+    /// why it can't be, only when that reason is new (not every second).
+    fn open_if_due(&mut self, now: Instant) -> Option<String> {
+        if self.source.is_some() || now < self.next_open {
+            return None;
+        }
+        match EyeSource::open_at(&self.path) {
+            Ok(source) => {
+                let line = format!("Reading {} (version {})", self.path.display(), source.layout.version);
+                self.source = Some(source);
+                self.error = None;
+                Some(line)
+            }
+            Err(error) => {
+                let error = error.to_string();
+                self.next_open = now + REOPEN_INTERVAL;
+                if self.error.as_ref() == Some(&error) {
+                    return None;
+                }
+                let line = format!(
+                    "Can't read eye data ({error}); retrying every {} s",
+                    REOPEN_INTERVAL.as_secs()
+                );
+                self.error = Some(error);
+                Some(line)
+            }
+        }
+    }
+
+    /// Let go of a shared memory that was replaced; the next open_if_due opens the new one.
+    fn close(&mut self, now: Instant) {
+        self.source = None;
+        self.next_open = now;
     }
 }
 
@@ -1820,7 +1894,8 @@ impl Bridge {
         }
     }
 
-    fn status(&self) -> Status<'_> {
+    /// `source_error`: why the eye tracker's shared memory can't be read, if it can't.
+    fn status<'a>(&'a self, source_error: Option<&'a str>) -> Status<'a> {
         let settings = &self.settings;
         let pair = |values: [f32; 6], first: usize| status::round([values[first], values[first + 1]]);
         Status {
@@ -1866,6 +1941,7 @@ impl Bridge {
             config_path: self.config.path.as_deref(),
             calibration_path: self.calibration.path.as_deref(),
             config_error: self.config.error.as_deref(),
+            source_error,
             locked: &self.config.locked,
             effective: settings,
             gaze_capture: self.capture_result.as_ref(),
@@ -1968,40 +2044,39 @@ fn main() -> Result<(), Box<dyn Error>> {
         livelink_throttle: Throttle::default(),
     };
     let mut status_file = StatusFile::new(status::status_path());
-    let mut source = EyeSource::open()?;
-    eprintln!("Reading {SOURCE} (version {})", source.layout.version);
-    // Whether the last attempt to reattach to a replaced shared memory failed, so it is logged once.
-    let mut reopen_failed = false;
+    // Until the shared memory can be read, frameeyeosc keeps running and trying again, and the status file says why,
+    // so the panel shows the reason instead of "not running". Config reloads, the status file and the LiveLink
+    // keepalive go on meanwhile.
+    let mut eye = EyeReader::new(Path::new(SOURCE), Instant::now());
     loop {
         if let Some(reload) = bridge.config.poll() {
             bridge.apply(reload)?;
         }
         bridge.output.refresh();
-        match source.next(POLL)? {
-            Next::Sample(data) if data.is_finite() => bridge.on_sample(data)?,
-            // Short waits are normal; only a whole second without data means tracking stopped.
-            Next::Waiting if bridge.last_data.is_some_and(|last| last.elapsed() < TIMEOUT) => {}
-            next if bridge.active_since.is_some() => bridge.on_lost(&lost_reason(&next))?,
-            // Idle: if the eye server recreated its shared memory, our mapping would go silent forever.
-            // While the new one is missing or not set up yet, keep trying instead of exiting.
-            _ if source.is_stale() => match EyeSource::open() {
-                Ok(reopened) => {
-                    eprintln!("{SOURCE} was replaced; reattached");
-                    source = reopened;
-                    reopen_failed = false;
+        if let Some(line) = eye.open_if_due(Instant::now()) {
+            eprintln!("{line}");
+        }
+        match eye.source.as_mut() {
+            Some(source) => match source.next(POLL)? {
+                Next::Sample(data) if data.is_finite() => bridge.on_sample(data)?,
+                // Short waits are normal; only a whole second without data means tracking stopped.
+                Next::Waiting if bridge.last_data.is_some_and(|last| last.elapsed() < TIMEOUT) => {}
+                next if bridge.active_since.is_some() => bridge.on_lost(&lost_reason(&next))?,
+                // Idle: if the eye server recreated its shared memory (or rewrote it as another version), our mapping
+                // would go silent forever. It is opened again above, retrying while the new one can't be read.
+                _ if source.is_stale() => {
+                    eprintln!("{SOURCE} was replaced; reopening");
+                    eye.close(Instant::now());
                 }
-                Err(error) if !reopen_failed => {
-                    eprintln!("{SOURCE} was replaced and can't be opened yet ({error}); retrying");
-                    reopen_failed = true;
-                }
-                Err(_) => {}
+                _ => {}
             },
-            _ => {}
+            // Nothing to wait on; the status file and the LiveLink keepalive keep their pace.
+            None => std::thread::sleep(POLL),
         }
         bridge.check_capture();
         bridge.keep_livelink_alive();
         if status_file.due() {
-            status_file.write(&bridge.status());
+            status_file.write(&bridge.status(eye.error.as_deref()));
         }
     }
 }
@@ -3616,5 +3691,83 @@ mod tests {
             expected[0x3c] = 1;
             assert_eq!(shm.bytes(), expected, "version {version}");
         }
+    }
+
+    #[test]
+    fn reader_keeps_trying_and_logs_each_reason_once() {
+        let shm = FakeShm::new("reader", 6, 0x4f21f);
+        let unsupported = shm.bytes();
+        fs::remove_file(&shm.path).unwrap();
+        let start = Instant::now();
+        let at = |seconds: u32| start + REOPEN_INTERVAL * seconds;
+        let mut reader = EyeReader::new(&shm.path, start);
+
+        // Missing (SteamVR not started yet): said once, with the path, and tried again each interval.
+        let line = reader.open_if_due(at(0)).unwrap();
+        assert!(line.starts_with("Can't read eye data (") && line.ends_with("; retrying every 1 s"), "{line}");
+        let error = reader.error.clone().unwrap();
+        assert!(error.starts_with(&format!("{}: ", shm.path.display())), "{error}");
+        assert_eq!(reader.open_if_due(at(0)), None);
+        assert_eq!(reader.next_open, at(1));
+        assert_eq!(reader.open_if_due(at(1)), None);
+        assert_eq!(reader.next_open, at(2));
+        assert_eq!(reader.error.as_deref(), Some(error.as_str()));
+
+        // A version this doesn't know: a new reason, so said again, and the file is left untouched.
+        fs::write(&shm.path, &unsupported).unwrap();
+        let line = reader.open_if_due(at(2)).unwrap();
+        assert!(line.contains("unsupported eye shared-memory version 6; supported: 4"), "{line}");
+        assert_eq!(reader.open_if_due(at(3)), None);
+        assert!(reader.source.is_none());
+        assert!(reader.error.as_deref().unwrap().starts_with("unsupported eye shared-memory version 6"));
+        assert_eq!(shm.bytes(), unsupported);
+
+        // Readable: opened at the next try, and the reason is gone.
+        let readable = FakeShm::new("reader", 5, 0x4f21f);
+        assert_eq!(readable.path, shm.path);
+        assert_eq!(reader.open_if_due(at(3) + POLL), None);
+        let line = reader.open_if_due(at(4)).unwrap();
+        assert_eq!(line, format!("Reading {} (version 5)", shm.path.display()));
+        assert!(reader.source.is_some());
+        assert_eq!(reader.error, None);
+        assert_eq!(reader.open_if_due(at(5)), None);
+
+        // Let go of (replaced): opened again right away, and said again.
+        reader.close(at(5));
+        assert!(reader.source.is_none());
+        assert_eq!(reader.open_if_due(at(5)), Some(line));
+    }
+
+    #[test]
+    fn a_replaced_or_rewritten_shared_memory_is_stale_and_left_alone() {
+        let shm = FakeShm::new("stale", 5, 0x4f21f);
+        let mut source = EyeSource::open_at(&shm.path).unwrap();
+        assert!(!source.is_stale());
+
+        // The same file rewritten as a version this doesn't know: stale, and nothing is written to it any more.
+        let file = OpenOptions::new().write(true).open(&shm.path).unwrap();
+        std::os::unix::fs::FileExt::write_all_at(&file, &6u32.to_le_bytes(), 0).unwrap();
+        let before = shm.bytes();
+        assert!(source.is_stale());
+        assert!(matches!(source.next(Duration::from_millis(10)).unwrap(), Next::Stopped));
+        assert_eq!(shm.bytes(), before);
+
+        // Back to version 5, then replaced by a new file at the same path.
+        std::os::unix::fs::FileExt::write_all_at(&file, &5u32.to_le_bytes(), 0).unwrap();
+        assert!(!source.is_stale());
+        fs::remove_file(&shm.path).unwrap();
+        assert!(source.is_stale());
+        let _replacement = FakeShm::new("stale", 5, 0x4f21f);
+        assert!(source.is_stale());
+    }
+
+    #[test]
+    fn status_says_why_eye_data_cant_be_read() {
+        let bridge = test_bridge(settings());
+        let json = serde_json::to_value(bridge.status(None)).unwrap();
+        assert!(json["source_error"].is_null());
+        let error = "unsupported eye shared-memory version 6; supported: 4 (Frame 0.5.0), 5 (SteamOS 0.4.3)";
+        let json = serde_json::to_value(bridge.status(Some(error))).unwrap();
+        assert_eq!(json["source_error"], error);
     }
 }

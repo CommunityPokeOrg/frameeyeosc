@@ -1,6 +1,6 @@
 // Tests for the panel's shared rules (model.cpp): what an eye fit writes and what "Reset" clears, which re-wear fit
-// auto_recenter asks for, and the output types behind the destination cards. Built with the panel as model-test;
-// exits non-zero on failure.
+// auto_recenter asks for, the output types behind the destination cards, and status.json's source_error. Built with
+// the panel as model-test; exits non-zero on failure.
 #include "model.h"
 
 #include <algorithm>
@@ -214,6 +214,17 @@ void testOutputArgs() {
     CHECK(argOfOutput("osc") == -1);
 }
 
+/** status.json says why frameeyeosc can't read the eye tracker in source_error; null or missing means it can. */
+void testSourceError() {
+    const std::string reason = "unsupported eye shared-memory version 6; supported: 4 (Frame 0.5.0), 5 (SteamOS 0.4.3)";
+    EyeStatus status = parseStatus("{\"pid\": 1, \"tracking\": false, \"source_error\": \"" + reason + "\"}", 0, false);
+    CHECK(status.present && !status.tracking && status.sourceError == reason && status.configError.empty());
+    status = parseStatus("{\"pid\": 1, \"tracking\": true, \"source_error\": null}", 0, false);
+    CHECK(status.present && status.tracking && status.sourceError.empty());
+    // From a frameeyeosc older than the field
+    CHECK(parseStatus("{\"pid\": 1}", 0, false).sourceError.empty());
+}
+
 }  // namespace
 
 /**
@@ -227,6 +238,7 @@ int main() {
     testOutputArgs();
     testWidenState();
     testMigrateLidScales();
+    testSourceError();
     if (gFailures == 0) std::printf("model-test: all passed\n");
     return gFailures == 0 ? 0 : 1;
 }
