@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1 (2026-10-02)
+
+Works again after the SteamOS 0.4.3 update.
+
+- Reads the eye tracker's shared-memory version 5, which came with SteamOS 0.4.3 (build 20260930) and stopped frameeyeosc with "unsupported eye shared-memory version 5; expected 4". Version 5 only inserts 5 bytes in front of the sample record, so the record starts at 0x157 instead of 0x152 and the file is 5 bytes longer; the record's own layout is unchanged, and so are the lock, the sequence and the "send me the next sample" flag, and frameeyeosc still writes nothing else. Version 4 is read as before, and `--record` files keep their columns. The error for a version it doesn't know now lists the ones it reads.
+
 ## 0.6.0 (2026-10-01)
 
 Fitting again when you put the headset back on, VRCFaceTracking with wide eyes, and a tidier panel.
