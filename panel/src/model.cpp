@@ -12,22 +12,23 @@ namespace {
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
 /**
- * Light / medium / strong (medium is frameeyeosc's default): from light to strong, steadier at rest and a little
- * slower to follow. None of them keeps sliding after a saccade: replayed on two 60-minute recordings (deadzone 0.01),
- * jitter while fixating 0.259 / 0.240 / 0.224° and 0.242 / 0.232 / 0.208°, 90% of a saccade reached after 122 / 150 /
- * 239 ms and 133 / 144 / 156 ms, and a median 0.32 / 0.27 / 0.40° and 0.15 / 0.36 / 0.32° of slide 0.1-0.5 s after it
- * landed (the unfiltered gaze moves 0.61° and 0.48° there by itself).
+ * Light / medium / strong (medium is frameeyeosc's default): one soft follow, from light to strong steadier at rest and
+ * slower to settle after a saccade. Strong is the one a user picked in VRChat over both the old strong (it kept
+ * sliding) and the quick re-tune of the 0.7.0 test builds (0.2 / 1.5 / 2.5, which snapped to each new place); medium
+ * and light keep its low derivative cutoff and raise the rest step by step. Replayed on two 60-minute recordings
+ * (deadzone 0.005), 90% of a saccade is reached after 167 / 256 / 422 ms and 156 / 289 / 433 ms, the gaze slides on a
+ * median 0.61 / 1.59 / 3.33° and 0.68 / 1.84 / 3.86° between 0.1 and 0.5 s after the eyes landed, and jitter while
+ * fixating is 0.30 / 0.30 / 0.31° and 0.28 / 0.28 / 0.28°: each between the old preset of its name and the quick one.
  */
 const GazePreset kGazePresets[3] = {
-    {0.5, 4.0, 2.5},
-    {0.3, 2.5, 2.5},
-    {0.2, 1.5, 2.5},
+    {0.5, 3.0, 0.8},
+    {0.3, 1.5, 0.5},
+    {0.2, 0.8, 0.3},
 };
 
 /**
- * The presets up to 0.6.0. Their low beta and derivative cutoff let the filter ease off before it had caught up with a
- * saccade, so the gaze kept sliding after the eyes had stopped: with strong, 90% of the way after a median 589 ms and
- * 3.8° of slide 0.1-0.5 s after landing.
+ * The presets up to 0.6.x. Their beta was so low that the filter eased off long before it had caught up with a saccade,
+ * so the gaze kept sliding after the eyes had stopped: with strong, 90% of the way after a median 589 ms.
  */
 const GazePreset kOldGazePresets[3] = {
     {1.0, 1.5, 1.0},
@@ -35,9 +36,13 @@ const GazePreset kOldGazePresets[3] = {
     {0.2, 0.4, 0.3},
 };
 
-/** The deadzone default up to 0.6.0 (0.9°): the gaze stopped up to that far short of where the eyes landed. */
+/**
+ * The deadzone default up to 0.6.x (0.9°) and now (0.225°). A deadzone holds the gaze until the eyes move further than
+ * it, which with the soft presets also holds back the last part of each move: 0.01 would add about 90 ms to strong's
+ * 90% time and 0.2° to where it is 250 ms after landing, for 0.03° less jitter.
+ */
 constexpr double kOldGazeDeadzone = 0.02;
-constexpr double kNewGazeDeadzone = 0.01;
+constexpr double kNewGazeDeadzone = 0.005;
 
 /** The presets' names in the log. */
 const char* const kPresetNames[3] = {"light", "medium", "strong"};

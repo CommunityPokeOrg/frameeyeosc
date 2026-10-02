@@ -37,8 +37,8 @@ constexpr const char* kFontPath = "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular
 constexpr const char* kBoldFontPath = "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc";
 
 /**
- * config.json's "version": 2 from the gaze presets that no longer slide after a saccade (see migrateGazePresets); a
- * file without it, or with 1, is brought up to date once. frameeyeosc does not read it.
+ * config.json's "version": 2 from the 0.7.0 gaze presets (see migrateGazePresets); a file without it, or with 1, is
+ * brought up to date once. frameeyeosc does not read it.
  */
 constexpr int kConfigVersion = 2;
 

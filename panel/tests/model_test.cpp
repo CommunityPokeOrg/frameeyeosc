@@ -247,7 +247,7 @@ void testGazePresets() {
     CHECK(findSetting(key::kGazeMinCutoff)->defaultNumber == presets[1].minCutoff);
     CHECK(findSetting(key::kGazeBeta)->defaultNumber == presets[1].beta);
     CHECK(findSetting(key::kGazeDCutoff)->defaultNumber == presets[1].dCutoff);
-    CHECK(findSetting(key::kGazeDeadzone)->defaultNumber == 0.01);
+    CHECK(findSetting(key::kGazeDeadzone)->defaultNumber == 0.005);
     CHECK(findSetting(key::kVersion)->defaultNumber == kConfigVersion);
     for (int i = 0; i < 2; ++i) {
         CHECK(presets[i].minCutoff > presets[i + 1].minCutoff && presets[i].beta > presets[i + 1].beta);
@@ -264,9 +264,9 @@ void testMigrateGazePresets() {
         CHECK(presetOf(root) == -1 && configNeedsMigration(root));
         CHECK(migrateGazePresets(root, log));
         CHECK(presetOf(root) == i);
-        CHECK(std::fabs(numberIn(root, key::kGazeDeadzone) - 0.01) < 1e-9);
+        CHECK(std::fabs(numberIn(root, key::kGazeDeadzone) - 0.005) < 1e-9);
         CHECK(numberIn(root, key::kVersion) == kConfigVersion && root.get(key::kVersion)->integer);
-        CHECK(log.find(" -> ") != std::string::npos && log.find("gaze_deadzone 0.02 -> 0.01") != std::string::npos);
+        CHECK(log.find(" -> ") != std::string::npos && log.find("gaze_deadzone 0.02 -> 0.005") != std::string::npos);
         CHECK(!configNeedsMigration(root));
         // Once only: the old values written again afterwards (by hand) stay
         root = gazeRoot(old[i][0], old[i][1], old[i][2], 0.02, kConfigVersion);
@@ -281,15 +281,15 @@ void testMigrateGazePresets() {
     CHECK(numberIn(own, key::kGazeDCutoff) == 0.35 && numberIn(own, key::kGazeDeadzone) == 0.02);
     CHECK(numberIn(own, key::kVersion) == kConfigVersion);
     // A preset with a deadzone of one's own: the preset moves, the deadzone stays
-    JsonValue tuned = gazeRoot(0.2, 0.4, 0.3, 0.005, 1);
-    CHECK(migrateGazePresets(tuned, log) && presetOf(tuned) == 2 && numberIn(tuned, key::kGazeDeadzone) == 0.005);
+    JsonValue tuned = gazeRoot(0.2, 0.4, 0.3, 0.015, 1);
+    CHECK(migrateGazePresets(tuned, log) && presetOf(tuned) == 2 && numberIn(tuned, key::kGazeDeadzone) == 0.015);
     CHECK(log.find("deadzone") == std::string::npos);
     // Values not written: frameeyeosc's defaults (the new medium) apply, nothing to match
     JsonValue empty = gazeRoot(-1, -1, -1, -1, 0);
     CHECK(migrateGazePresets(empty, log) && log.empty() && empty.get(key::kGazeMinCutoff) == nullptr);
     // Needed for a version 1 file, and for one without lid_widen (from before 0.6.0) whatever its version
-    CHECK(configNeedsMigration(gazeRoot(0.3, 2.5, 2.5, 0.01, 1)));
-    CHECK(!configNeedsMigration(gazeRoot(0.3, 2.5, 2.5, 0.01, kConfigVersion)));
+    CHECK(configNeedsMigration(gazeRoot(0.3, 1.5, 0.5, 0.005, 1)));
+    CHECK(!configNeedsMigration(gazeRoot(0.3, 1.5, 0.5, 0.005, kConfigVersion)));
     JsonValue noWiden;
     noWiden.type = JsonValue::Type::Object;
     noWiden.set(key::kVersion, JsonValue::makeNumber(kConfigVersion, true));
