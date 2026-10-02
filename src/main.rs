@@ -1,4 +1,4 @@
-//! Steam Frame 0.5.0 eye bridge using the private version-4 shared-memory ABI.
+//! Steam Frame eye bridge using the eye server's private shared-memory ABI (versions 4 and 5).
 
 mod capture;
 mod config;
@@ -24,8 +24,6 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 use std::time::{Duration, Instant, SystemTime};
 
-const SHM_VERSION: u32 = 4;
-const SHM_SIZE: usize = 0x4f21a;
 const SOURCE: &str = "/dev/shm/eye-server.mmap";
 const TIMEOUT: Duration = Duration::from_secs(1);
 // The eye server is waited on in slices this long, so the status file keeps updating while it is idle.
@@ -91,15 +89,46 @@ const CAL_WARMUP_WEIGHT: f32 = 900.0;
 const CAL_SCALE_RANGE: (f32, f32) = (0.75, 1.33);
 const CAL_SAVE_INTERVAL: Duration = Duration::from_secs(60);
 
+// The start of the shared memory, the same in every version read here. frameeyeosc only touches these fields and the
+// sample record: it locks metadata_mutex, waits on and reads sequence, and sets metadata_requested to 1 (the eye
+// server publishes a sample only while it is set, and clears it with each one).
 #[repr(C)]
-struct EyeServerMmap {
+struct ShmControl {
     version: u32,
     initialized: u32,
     // The target glibc mutex slot is 48 bytes; host libc may define a smaller type.
     metadata_mutex: [u8; 0x30],
     sequence: u32,
     metadata_requested: u32,
+}
+
+// Version 4 (Frame 0.5.0).
+#[repr(C)]
+struct EyeServerMmap {
+    control: ShmControl,
     other_control_fields: [u8; 0x112],
+    eye_data: EyeDataMmap,
+}
+
+// Version 5 (SteamOS 0.4.3, build 20260930.6234839; the eye server binary of 2026-10-01). Read off the eye server's
+// own client and server code (CEyeTrackingMmapClient / CEyeTrackingMmapServer) and checked against the file. The only
+// change from version 4 is 5 bytes inserted at 0x152, in front of the sample record, which moves the record (and the
+// camera images after it) 5 bytes on; the file grows from 0x4f21a to 0x4f21f bytes. The fields after the control
+// block, none of which frameeyeosc touches:
+//   0x040  u32       camera images requested (set by a client together with metadata_requested)
+//   0x044  mutex     client-to-server mutex (0x30 bytes)
+//   0x074  u32       client-to-server sequence (futex)
+//   0x078  u32       client-to-server message pending
+//   0x07c  8 x 25 B  client-to-server queue, read index at 0x144, write index at 0x148, full flag (u8) at 0x14c
+//   0x14d  u8 + f32  a flag and value a client sets (90.0)
+//   0x152  u8 + i32  new in version 5: a flag and value a client sets (-1 when the flag is clear)
+//   0x157  the sample record (0xebc bytes, laid out as in version 4)
+//   0x1013 camera images: three u32 (size), then two 400 x 400 8-bit images at 0x101f and 0x2811f
+#[repr(C)]
+struct EyeServerMmapV5 {
+    control: ShmControl,
+    images_requested: u32,
+    client_to_server: [u8; 0x113],
     eye_data: EyeDataMmap,
 }
 
@@ -122,11 +151,42 @@ struct EyeDataMmap {
     reserved: [u8; 0xe1b],
 }
 
+/// What differs between the shared-memory versions: the file size and where the sample record starts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ShmLayout {
+    version: u32,
+    size: usize,
+    eye_data: usize,
+    // The Frame software it was found on, for the error message.
+    found_on: &'static str,
+}
+
+const SHM_LAYOUTS: [ShmLayout; 2] = [
+    ShmLayout {
+        version: 4,
+        size: 0x4f21a,
+        eye_data: offset_of!(EyeServerMmap, eye_data),
+        found_on: "Frame 0.5.0",
+    },
+    ShmLayout {
+        version: 5,
+        size: 0x4f21f,
+        eye_data: offset_of!(EyeServerMmapV5, eye_data),
+        found_on: "SteamOS 0.4.3",
+    },
+];
+
 const _: () = {
-    assert!(offset_of!(EyeServerMmap, metadata_mutex) == 0x08);
-    assert!(offset_of!(EyeServerMmap, sequence) == 0x38);
-    assert!(offset_of!(EyeServerMmap, metadata_requested) == 0x3c);
+    assert!(offset_of!(ShmControl, metadata_mutex) == 0x08);
+    assert!(offset_of!(ShmControl, sequence) == 0x38);
+    assert!(offset_of!(ShmControl, metadata_requested) == 0x3c);
+    assert!(size_of::<ShmControl>() == 0x40);
+    assert!(offset_of!(EyeServerMmap, control) == 0);
     assert!(offset_of!(EyeServerMmap, eye_data) == 0x152);
+    assert!(offset_of!(EyeServerMmapV5, control) == 0);
+    assert!(offset_of!(EyeServerMmapV5, images_requested) == 0x40);
+    assert!(offset_of!(EyeServerMmapV5, client_to_server) == 0x44);
+    assert!(offset_of!(EyeServerMmapV5, eye_data) == 0x157);
     assert!(offset_of!(EyeDataMmap, sample_time) == 0x05);
     assert!(offset_of!(EyeDataMmap, gaze_direction) == 0x0d);
     assert!(offset_of!(EyeDataMmap, gaze_covariance_diag) == 0x25);
@@ -136,10 +196,29 @@ const _: () = {
     assert!(offset_of!(EyeDataMmap, openness) == 0x79);
     assert!(offset_of!(EyeDataMmap, estimate_extra) == 0x81);
     assert!(size_of::<EyeDataMmap>() == 0xebc);
-    assert!(size_of::<EyeServerMmap>() <= SHM_SIZE);
+    assert!(SHM_LAYOUTS[0].version == 4 && SHM_LAYOUTS[0].eye_data == 0x152);
+    assert!(SHM_LAYOUTS[1].version == 5 && SHM_LAYOUTS[1].eye_data == 0x157);
+    // The record ends where the camera images start (0x100e in version 4, 0x1013 in version 5).
+    assert!(size_of::<EyeServerMmap>() <= SHM_LAYOUTS[0].size);
+    assert!(size_of::<EyeServerMmapV5>() <= SHM_LAYOUTS[1].size);
+    assert!(SHM_LAYOUTS[1].size - SHM_LAYOUTS[0].size == SHM_LAYOUTS[1].eye_data - SHM_LAYOUTS[0].eye_data);
     assert!(size_of::<libc::pthread_mutex_t>() <= 0x30);
     assert!(8 % align_of::<libc::pthread_mutex_t>() == 0);
 };
+
+/// The layout of a shared-memory version, or why it can't be read.
+fn shm_layout(version: u32) -> Result<ShmLayout, String> {
+    SHM_LAYOUTS.iter().copied().find(|layout| layout.version == version).ok_or_else(|| {
+        let supported: Vec<String> = SHM_LAYOUTS
+            .iter()
+            .map(|layout| format!("{} ({})", layout.version, layout.found_on))
+            .collect();
+        format!(
+            "unsupported eye shared-memory version {version}; supported: {}",
+            supported.join(", ")
+        )
+    })
+}
 
 #[derive(Parser)]
 #[command(about = "Send Steam Frame eye tracking from shared memory over OSC")]
@@ -836,7 +915,9 @@ fn lid_to_etvr(vrcft: f32) -> f32 {
 
 struct EyeSource {
     map: MmapMut,
+    path: PathBuf,
     inode: u64,
+    layout: ShmLayout,
 }
 
 struct MutexGuard(*mut libc::pthread_mutex_t);
@@ -880,25 +961,40 @@ enum Next {
 
 impl EyeSource {
     fn open() -> Result<Self, Box<dyn Error>> {
-        let file = OpenOptions::new().read(true).write(true).open(SOURCE)?;
+        Self::open_at(Path::new(SOURCE))
+    }
+
+    /// Map the eye server's shared memory at `path`. The version is read (without writing anything) before the file
+    /// is mapped, so a version this does not know is never written to.
+    fn open_at(path: &Path) -> Result<Self, Box<dyn Error>> {
+        let shown = path.display();
+        let file = OpenOptions::new().read(true).write(true).open(path)?;
         let metadata = file.metadata()?;
-        if metadata.len() < SHM_SIZE as u64 {
-            return Err(format!("{SOURCE}: shared memory is too small").into());
+        let mut header = [0; 4];
+        std::os::unix::fs::FileExt::read_exact_at(&file, &mut header, 0)
+            .map_err(|_| format!("{shown}: shared memory is too small"))?;
+        let layout = shm_layout(u32::from_le_bytes(header))?;
+        if metadata.len() < layout.size as u64 {
+            return Err(format!("{shown}: shared memory is too small").into());
         }
-        let map = unsafe { MmapOptions::new().len(SHM_SIZE).map_mut(&file)? };
+        let map = unsafe { MmapOptions::new().len(layout.size).map_mut(&file)? };
         let source = Self {
             map,
+            path: path.to_owned(),
             inode: metadata.ino(),
+            layout,
         };
-        let layout = source.layout();
-        let version = u32::from_le(unsafe { ptr::read_volatile(&raw const (*layout).version) });
-        if version != SHM_VERSION {
-            return Err(format!(
-                "unsupported eye shared-memory version {version}; expected {SHM_VERSION} (Frame 0.5.0)"
+        let control = source.control();
+        let version = u32::from_le(unsafe { ptr::read_volatile(&raw const (*control).version) });
+        if version != layout.version {
+            // Rewritten by a restarting eye server between the read and the mapping.
+            return Err(shm_layout(version).map_or_else(
+                |error| error,
+                |_| format!("{shown}: the shared-memory version changed while opening it"),
             )
             .into());
         }
-        if u32::from_le(unsafe { ptr::read_volatile(&raw const (*layout).initialized) }) != 1 {
+        if u32::from_le(unsafe { ptr::read_volatile(&raw const (*control).initialized) }) != 1 {
             return Err("eye shared memory is not initialized".into());
         }
         Ok(source)
@@ -906,19 +1002,19 @@ impl EyeSource {
 
     /// True when the path now points at a different file (or none) than the one we mapped.
     fn is_stale(&self) -> bool {
-        fs::metadata(SOURCE).map_or(true, |metadata| metadata.ino() != self.inode)
+        fs::metadata(&self.path).map_or(true, |metadata| metadata.ino() != self.inode)
     }
 
-    fn layout(&self) -> *const EyeServerMmap {
+    fn control(&self) -> *const ShmControl {
         self.map.as_ptr().cast()
     }
 
-    fn layout_mut(&mut self) -> *mut EyeServerMmap {
+    fn control_mut(&mut self) -> *mut ShmControl {
         self.map.as_mut_ptr().cast()
     }
 
     fn lock(&mut self) -> io::Result<MutexGuard> {
-        let mutex = unsafe { (&raw mut (*self.layout_mut()).metadata_mutex).cast() };
+        let mutex = unsafe { (&raw mut (*self.control_mut()).metadata_mutex).cast() };
         let code = unsafe { libc::pthread_mutex_lock(mutex) };
         if code == libc::EOWNERDEAD {
             let result = unsafe { libc::pthread_mutex_consistent(mutex) };
@@ -932,11 +1028,13 @@ impl EyeSource {
         Ok(MutexGuard(mutex))
     }
 
+    /// Wait up to `timeout` for the eye server's next sample. The server writes the record and bumps the sequence
+    /// while holding metadata_mutex, and the record is copied out under the same mutex, so it is never torn.
     fn next(&mut self, timeout: Duration) -> io::Result<Next> {
         let guard = self.lock()?;
-        let sequence_ptr = unsafe { &raw const (*self.layout()).sequence };
+        let sequence_ptr = unsafe { &raw const (*self.control()).sequence };
         let sequence = unsafe { ptr::read_volatile(sequence_ptr) };
-        let request_ptr = unsafe { &raw mut (*self.layout_mut()).metadata_requested };
+        let request_ptr = unsafe { &raw mut (*self.control_mut()).metadata_requested };
         unsafe { ptr::write_volatile(request_ptr, 1) };
         drop(guard);
 
@@ -965,27 +1063,32 @@ impl EyeSource {
 
         let guard = self.lock()?;
         let data = if unsafe { ptr::read_volatile(sequence_ptr) } != sequence {
-            let record_ptr = unsafe { &raw const (*self.layout()).eye_data };
-            let record = unsafe { ptr::read_unaligned(record_ptr) };
-            if record.producer_state == 1 {
-                Next::Sample(EyeData {
-                    sample_time: record.sample_time,
-                    gaze: record.gaze_direction,
-                    gaze_covariance: record.gaze_covariance_diag,
-                    fixation_point: record.fixation_point,
-                    pre_fusion_gaze: record.pre_fusion_gaze,
-                    pre_fusion_covariance: record.pre_fusion_cov_diag,
-                    openness: record.openness,
-                    extra: record.estimate_extra,
-                })
-            } else {
-                Next::Stopped
-            }
+            // The layout's record offset lies within the mapping (checked at compile time against its size).
+            let record_ptr = unsafe { self.map.as_ptr().add(self.layout.eye_data) }.cast::<EyeDataMmap>();
+            decode(unsafe { ptr::read_unaligned(record_ptr) })
         } else {
             Next::Waiting
         };
         drop(guard);
         Ok(data)
+    }
+}
+
+/// The sample in a record the eye server published, the same for every version.
+fn decode(record: EyeDataMmap) -> Next {
+    if record.producer_state == 1 {
+        Next::Sample(EyeData {
+            sample_time: record.sample_time,
+            gaze: record.gaze_direction,
+            gaze_covariance: record.gaze_covariance_diag,
+            fixation_point: record.fixation_point,
+            pre_fusion_gaze: record.pre_fusion_gaze,
+            pre_fusion_covariance: record.pre_fusion_cov_diag,
+            openness: record.openness,
+            extra: record.estimate_extra,
+        })
+    } else {
+        Next::Stopped
     }
 }
 
@@ -1792,7 +1895,11 @@ fn record(path: &Path) -> Result<(), Box<dyn Error>> {
     }
     let mut recorder = replay::Recorder::create(path)?;
     let mut source = EyeSource::open()?;
-    eprintln!("Recording {SOURCE} to {}; stop with Ctrl+C", path.display());
+    eprintln!(
+        "Recording {SOURCE} (version {}) to {}; stop with Ctrl+C",
+        source.layout.version,
+        path.display()
+    );
     let mut last_flush = Instant::now();
     let mut reported = 0;
     loop {
@@ -1862,7 +1969,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     let mut status_file = StatusFile::new(status::status_path());
     let mut source = EyeSource::open()?;
-    eprintln!("Reading {SOURCE}");
+    eprintln!("Reading {SOURCE} (version {})", source.layout.version);
     // Whether the last attempt to reattach to a replaced shared memory failed, so it is logged once.
     let mut reopen_failed = false;
     loop {
@@ -3292,5 +3399,222 @@ mod tests {
         assert_eq!(smoother.lids[0].min_cutoff, 10.0);
         assert_eq!(smoother.deadzones[0].width, 0.0);
         assert_eq!(smoother.lids[0].value, Some(0.75));
+    }
+
+    /// A file shaped like the eye server's shared memory of one version: zeroed (a zeroed glibc mutex is an unlocked
+    /// default one), initialized, with nothing published yet. Removed when dropped.
+    struct FakeShm {
+        path: PathBuf,
+    }
+
+    impl FakeShm {
+        fn new(name: &str, version: u32, size: usize) -> Self {
+            let mut bytes = vec![0u8; size];
+            bytes[0..4].copy_from_slice(&version.to_le_bytes());
+            bytes[4..8].copy_from_slice(&1u32.to_le_bytes());
+            Self::with(name, &bytes)
+        }
+
+        fn with(name: &str, bytes: &[u8]) -> Self {
+            let path = std::env::temp_dir().join(format!("frameeyeosc-test-{}-{name}", std::process::id()));
+            fs::write(&path, bytes).unwrap();
+            Self { path }
+        }
+
+        fn bytes(&self) -> Vec<u8> {
+            fs::read(&self.path).unwrap()
+        }
+    }
+
+    impl Drop for FakeShm {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+
+    // A sample record's floats, from the gaze (0x0d) to the last extra value (ending at 0xa1).
+    const RECORD_FLOATS: usize = 37;
+
+    /// Write a record at `base` the way the eye server lays it out (offsets written out, not taken from the struct):
+    /// producer state, sample time, then the floats in order, each `seed` plus its index / 100.
+    fn write_record(bytes: &mut [u8], base: usize, state: u32, seed: f32) {
+        bytes[base..base + 4].copy_from_slice(&state.to_le_bytes());
+        bytes[base + 5..base + 0x0d].copy_from_slice(&(100.0 + f64::from(seed)).to_le_bytes());
+        for i in 0..RECORD_FLOATS {
+            let offset = base + 0x0d + 4 * i;
+            bytes[offset..offset + 4].copy_from_slice(&(seed + i as f32 / 100.0).to_le_bytes());
+        }
+    }
+
+    /// The sample `write_record` writes.
+    fn record_sample(seed: f32) -> EyeData {
+        let value = |i: usize| seed + i as f32 / 100.0;
+        let vector = |i: usize| [value(i), value(i + 1), value(i + 2)];
+        EyeData {
+            sample_time: 100.0 + f64::from(seed),
+            gaze: [vector(0), vector(3)],
+            gaze_covariance: [vector(6), vector(9)],
+            fixation_point: vector(12),
+            pre_fusion_gaze: [vector(15), vector(18)],
+            pre_fusion_covariance: [vector(21), vector(24)],
+            openness: [value(27), value(28)],
+            extra: std::array::from_fn(|i| value(29 + i)),
+        }
+    }
+
+    fn decode_at(bytes: &[u8], offset: usize) -> Next {
+        assert!(offset + size_of::<EyeDataMmap>() <= bytes.len());
+        decode(unsafe { ptr::read_unaligned(bytes.as_ptr().add(offset).cast::<EyeDataMmap>()) })
+    }
+
+    #[test]
+    fn shm_versions_have_their_layouts() {
+        assert_eq!(shm_layout(4).unwrap().eye_data, 0x152);
+        assert_eq!(shm_layout(4).unwrap().size, 0x4f21a);
+        assert_eq!(shm_layout(5).unwrap().eye_data, 0x157);
+        assert_eq!(shm_layout(5).unwrap().size, 0x4f21f);
+        assert_eq!(
+            shm_layout(6).unwrap_err(),
+            "unsupported eye shared-memory version 6; supported: 4 (Frame 0.5.0), 5 (SteamOS 0.4.3)"
+        );
+    }
+
+    #[test]
+    fn records_decode_at_each_versions_offset() {
+        for layout in SHM_LAYOUTS {
+            let mut bytes = vec![0u8; layout.size];
+            write_record(&mut bytes, layout.eye_data, 1, 0.25);
+            match decode_at(&bytes, layout.eye_data) {
+                Next::Sample(data) => assert_eq!(data, record_sample(0.25), "version {}", layout.version),
+                _ => panic!("version {}: no sample", layout.version),
+            }
+            // Read at the other version's offset, it is not the sample: the offsets really differ.
+            let other = SHM_LAYOUTS.iter().find(|other| other.version != layout.version).unwrap();
+            assert!(!matches!(decode_at(&bytes, other.eye_data), Next::Sample(data) if data == record_sample(0.25)));
+            write_record(&mut bytes, layout.eye_data, 0, 0.25);
+            assert!(matches!(decode_at(&bytes, layout.eye_data), Next::Stopped));
+        }
+    }
+
+    /// The start of /dev/shm/eye-server.mmap as the version-5 eye server left it (SteamOS 0.4.3, 2026-10-02, headset
+    /// off); everything after it was zero.
+    const V5_SNAPSHOT: [&str; 11] = [
+        "050000000100000000000000010000000000000000000000900000000000000000000000000000000000000000000000",
+        "000000000000000083030000010000000000000000000000010000000000000000000000900000000000000000000000",
+        "00000000000000000000000000000000000000000d00000000000000009da24e3919ef4a40dc0ed63d8de469beaaa6a9",
+        "bf2d01000000e141537972fe4a40feafc23dcc7b72be3981a9bf2e01000000bef697a0b0084b407900da3d9ede6fbe39",
+        "9fa9bf2d01000000e594ca25df164b40e2e0a43da00d6ebe1439a9bf2e010000002ade1c3c006f4a4082fcc9bdbbfeaf",
+        "be4417a6bf2d01000000c955b56f317e4a404969aebdba5babbe4188a6bf2e010000003ed8e33725a94a4056b62f3c4b",
+        "9fcfbeaf3caabf2d0100000030430c0952b64a4013f2053cf79acdbe842faabf2e010000040000000400000000000000",
+        "b44200ffffffff01000000001e362ef09dfe4c4072396fbda75602bde26e7fbf738279bda35102bd0e657fbf6078f93b",
+        "a31bda3bc135d53b88bdc03ba31bda3b362fa93b84e9bebf85a34bbfd58ac7c18ce706bec046583c9c1d7abf0008b939",
+        "4ae889bd69727cbf6078f93b51b56b3cc135d53b88bdc03b16f44a3c362fa93b9fc0fc3e0000803f34f2e53cbbf41d3d",
+        "068bd43d7eb6a6bd53d9923bec77c73bb84cfe3b957fb13b",
+    ];
+
+    #[test]
+    fn real_version_5_file_decodes() {
+        let mut bytes = vec![0u8; 0x4f21f];
+        let prefix: Vec<u8> = V5_SNAPSHOT
+            .concat()
+            .as_bytes()
+            .chunks(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect();
+        bytes[..prefix.len()].copy_from_slice(&prefix);
+        let shm = FakeShm::with("real-v5", &bytes);
+        let source = EyeSource::open_at(&shm.path).unwrap();
+        assert_eq!(source.layout.version, 5);
+        let Next::Sample(data) = decode_at(&bytes, source.layout.eye_data) else {
+            panic!("no sample");
+        };
+        assert_eq!(data.sample_time, 57.989194891513975);
+        let length = |gaze: &[f32; 3]| gaze.iter().map(|value| value * value).sum::<f32>().sqrt();
+        for gaze in &data.gaze {
+            assert!((length(gaze) - 1.0).abs() < 1e-3, "{gaze:?}");
+            assert!(gaze[2] < -0.9, "looks ahead (-Z): {gaze:?}");
+        }
+        // Before fusion the gaze is only about unit length, in version 4 too (0.99-1.00 in a worn recording).
+        for gaze in &data.pre_fusion_gaze {
+            assert!((0.95..1.001).contains(&length(gaze)), "{gaze:?}");
+            assert!(gaze[2] < -0.9, "looks ahead (-Z): {gaze:?}");
+        }
+        assert_eq!(data.openness, [0.49365708, 1.0]);
+        assert!(data.gaze_covariance.iter().flatten().all(|value| (0.0..0.05).contains(value)));
+        assert!(data.fixation_point[2] < 0.0);
+        // Opening wrote nothing into the file.
+        drop(source);
+        assert_eq!(shm.bytes(), bytes);
+    }
+
+    #[test]
+    fn unknown_or_short_shared_memory_is_refused_untouched() {
+        let unknown = FakeShm::new("v6", 6, 0x4f21f);
+        let before = unknown.bytes();
+        let error = EyeSource::open_at(&unknown.path).err().unwrap().to_string();
+        assert!(error.starts_with("unsupported eye shared-memory version 6; supported: 4"), "{error}");
+        assert_eq!(unknown.bytes(), before);
+
+        // A version-5 file of the version-4 size can't hold the version-5 record and images.
+        let short = FakeShm::new("v5-short", 5, 0x4f21a);
+        let error = EyeSource::open_at(&short.path).err().unwrap().to_string();
+        assert!(error.ends_with("shared memory is too small"), "{error}");
+
+        let uninitialized = FakeShm::new("v5-uninit", 5, 0x4f21f);
+        let mut bytes = uninitialized.bytes();
+        bytes[4] = 0;
+        fs::write(&uninitialized.path, &bytes).unwrap();
+        let error = EyeSource::open_at(&uninitialized.path).err().unwrap().to_string();
+        assert_eq!(error, "eye shared memory is not initialized");
+    }
+
+    #[test]
+    fn reader_follows_the_sequence_and_only_sets_the_request() {
+        for layout in SHM_LAYOUTS {
+            let version = layout.version;
+            let shm = FakeShm::new(&format!("v{version}-protocol"), version, layout.size);
+            let mut expected = shm.bytes();
+            let mut source = EyeSource::open_at(&shm.path).unwrap();
+
+            // Nothing published: the reader waits, and all it changed is metadata_requested (the mutex is unlocked
+            // again).
+            assert!(matches!(source.next(Duration::from_millis(10)).unwrap(), Next::Waiting));
+            expected[0x3c] = 1;
+            assert_eq!(shm.bytes(), expected, "version {version}");
+
+            // A stand-in for the eye server, through its own mapping: once a sample is requested, it writes the
+            // record, bumps the sequence, clears the request and wakes the reader.
+            let file = OpenOptions::new().read(true).write(true).open(&shm.path).unwrap();
+            let mut server = unsafe { MmapOptions::new().len(layout.size).map_mut(&file).unwrap() };
+            server[0x3c] = 0;
+            let eye_data = layout.eye_data;
+            let publisher = std::thread::spawn(move || {
+                while unsafe { ptr::read_volatile(server.as_ptr().add(0x3c).cast::<u32>()) } == 0 {
+                    std::thread::yield_now();
+                }
+                write_record(&mut server, eye_data, 1, 0.5);
+                let base = server.as_mut_ptr();
+                let sequence = unsafe { base.add(0x38).cast::<u32>() };
+                unsafe {
+                    ptr::write_volatile(sequence, ptr::read_volatile(sequence) + 1);
+                    ptr::write_volatile(base.add(0x3c).cast::<u32>(), 0);
+                    libc::syscall(libc::SYS_futex, sequence, libc::FUTEX_WAKE, i32::MAX);
+                }
+                server
+            });
+            let next = source.next(Duration::from_secs(5)).unwrap();
+            drop(publisher.join().unwrap());
+            match next {
+                Next::Sample(data) => assert_eq!(data, record_sample(0.5), "version {version}"),
+                _ => panic!("version {version}: no sample"),
+            }
+
+            // The same sequence again: no new sample, though the record is still there.
+            assert!(matches!(source.next(Duration::from_millis(10)).unwrap(), Next::Waiting));
+            write_record(&mut expected, eye_data, 1, 0.5);
+            expected[0x38] = 1;
+            expected[0x3c] = 1;
+            assert_eq!(shm.bytes(), expected, "version {version}");
+        }
     }
 }
