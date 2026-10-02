@@ -50,6 +50,8 @@ struct UiText {
     const char* noEyeData;          ///< no eye data
     const char* errorPrefix;        ///< before frameeyeosc's config_error
     const char* sourceErrorPrefix;  ///< before frameeyeosc's source_error (the eye tracker can't be read)
+    const char* dominantEyeLeft;    ///< "Track Dominant Eye Only" is on with the left eye (gaze title line)
+    const char* dominantEyeRight;   ///< ...with the right eye
     const char* errWrite;           ///< writing config.json failed
     const char* errConfigBroken;    ///< config.json can't be parsed
     const char* errAutostart;       ///< systemctl enable/disable failed
@@ -137,6 +139,7 @@ struct UiText {
     const char* hintHold;
     const char* rowIndependent;
     const char* hintIndependent;
+    const char* hintIndependentOneEye;  ///< instead, while the Frame tracks one eye alone (both eyes get its gaze)
     const char* rowQuality;
     const char* hintQuality;
     const char* rowDespike;
@@ -251,6 +254,7 @@ struct UiText {
     const char* widenFollowsLeft;    ///< the left eye has no room and widens with the right
     const char* widenFollowsRight;
     const char* widenNoRoom;         ///< neither eye has room
+    const char* opennessSaturated;   ///< a relaxed open eye reads 1.0 (SteamOS 0.4.3), so widening can't come through
     const char* lidMarksFitted;      ///< above the bars for fitted eyes (the marks folded away)
     const char* lidMarksUnused;      ///< the same, the marks open: 3 and 4 are only for eyes without a fit
 

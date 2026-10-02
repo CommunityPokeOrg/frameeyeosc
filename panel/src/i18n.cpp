@@ -42,6 +42,8 @@ UiText makeJapanese() {
     t.noEyeData = "目のデータがありません";
     t.errorPrefix = "設定のエラー: ";
     t.sourceErrorPrefix = "目のデータを読めません: ";
+    t.dominantEyeLeft = "Frame の設定: 左目だけで追っています";
+    t.dominantEyeRight = "Frame の設定: 右目だけで追っています";
     t.errWrite = "設定を書けません: ";
     t.errConfigBroken = "設定ファイルが壊れています。「すべて既定に戻す」で作り直せます";
     t.errAutostart = "自動起動の切り替えに失敗（systemctl）";
@@ -135,6 +137,7 @@ UiText makeJapanese() {
     t.hintHold = "この値より閉じたら止める";
     t.rowIndependent = "左右の目を別々に動かす";
     t.hintIndependent = "目を合わせてから使うと自然";
+    t.hintIndependentOneEye = "片目だけ追跡中は両目が同じ向き";
     t.rowQuality = "不確かな視線を使わない";
     t.hintQuality = "この値より不確かな目は無視";
     t.rowDespike = "一瞬の途切れを消す";
@@ -252,6 +255,7 @@ UiText makeJapanese() {
     t.widenFollowsLeft = "左目は右目に合わせて見開きます（開き具合が上限に近いため）";
     t.widenFollowsRight = "右目は左目に合わせて見開きます（開き具合が上限に近いため）";
     t.widenNoRoom = "両目とも開き具合が上限に近いため、見開きません";
+    t.opennessSaturated = "この SteamOS では開き具合が 1.0 で頭打ちのため、見開きは届きません";
     t.lidMarksFitted = "閉じ・開きは目を合わせた値、見開きは「見開きやすさ」で決まります";
     t.lidMarksUnused = "③④は目を合わせていない目のための目盛りです";
 
@@ -399,6 +403,8 @@ UiText makeEnglish() {
     t.noEyeData = "No eye data";
     t.errorPrefix = "Config error: ";
     t.sourceErrorPrefix = "Can't read eye data: ";
+    t.dominantEyeLeft = "Frame setting: tracking the left eye only";
+    t.dominantEyeRight = "Frame setting: tracking the right eye only";
     t.errWrite = "Can't save settings: ";
     t.errConfigBroken = "config.json is broken. \"Reset all\" makes a new one";
     t.errAutostart = "Autostart change failed (systemctl)";
@@ -492,6 +498,7 @@ UiText makeEnglish() {
     t.hintHold = "Holds below this openness";
     t.rowIndependent = "Move eyes separately";
     t.hintIndependent = "Natural after an Eye fit";
+    t.hintIndependentOneEye = "Both follow the one tracked eye";
     t.rowQuality = "Skip unreliable gaze";
     t.hintQuality = "Ignores an eye less sure than this";
     t.rowDespike = "Remove glitches";
@@ -611,6 +618,7 @@ UiText makeEnglish() {
     t.widenFollowsLeft = "The left eye widens with the right (its openness is near the limit)";
     t.widenFollowsRight = "The right eye widens with the left (its openness is near the limit)";
     t.widenNoRoom = "Neither eye widens: both read near the openness limit";
+    t.opennessSaturated = "This SteamOS caps eye openness at 1.0, so widening can't come through";
     t.lidMarksFitted = "Closing and opening come from the eye fit, widening from Widen";
     t.lidMarksUnused = "Marks 3 and 4 are for eyes without an eye fit";
 

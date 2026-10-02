@@ -1,6 +1,7 @@
 // Tests for the panel's shared rules (model.cpp): what an eye fit writes and what "Reset" clears, which re-wear fit
-// auto_recenter asks for, the output types behind the destination cards, and status.json's source_error. Built with
-// the panel as model-test; exits non-zero on failure.
+// auto_recenter asks for, the output types behind the destination cards, the gaze presets and their migration, and
+// status.json's source_error, dominant_eye and openness_saturated. Built with the panel as model-test; exits non-zero
+// on failure.
 #include "model.h"
 
 #include <algorithm>
@@ -314,6 +315,19 @@ void testSourceError() {
     CHECK(parseStatus("{\"pid\": 1}", 0, false).sourceError.empty());
 }
 
+/** status.json's dominant_eye ("left" / "right", else nothing) and openness_saturated (missing = false). */
+void testDominantEyeAndSaturation() {
+    EyeStatus status = parseStatus("{\"pid\": 1, \"dominant_eye\": \"right\", \"openness_saturated\": true}", 0, false);
+    CHECK(status.dominantEye == "right" && status.opennessSaturated);
+    status = parseStatus("{\"pid\": 1, \"dominant_eye\": \"left\", \"openness_saturated\": false}", 0, false);
+    CHECK(status.dominantEye == "left" && !status.opennessSaturated);
+    status = parseStatus("{\"pid\": 1, \"dominant_eye\": null}", 0, false);
+    CHECK(status.dominantEye.empty() && !status.opennessSaturated);
+    // From frameeyeosc before 0.7.0, or a value this doesn't know
+    CHECK(parseStatus("{\"pid\": 1}", 0, false).dominantEye.empty());
+    CHECK(parseStatus("{\"pid\": 1, \"dominant_eye\": \"both\"}", 0, false).dominantEye.empty());
+}
+
 }  // namespace
 
 /**
@@ -328,6 +342,7 @@ int main() {
     testWidenState();
     testMigrateLidScales();
     testSourceError();
+    testDominantEyeAndSaturation();
     testGazePresets();
     testMigrateGazePresets();
     if (gFailures == 0) std::printf("model-test: all passed\n");

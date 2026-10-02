@@ -35,6 +35,11 @@ pub struct Status<'a> {
     pub config_error: Option<&'a str>,
     /// Why the eye tracker's shared memory can't be read (frameeyeosc keeps trying again); None while it can.
     pub source_error: Option<&'a str>,
+    /// The eye ("left" / "right") the Frame tracks alone while "Track Dominant Eye Only" is on; None while it
+    /// is off, or can't be told (no eye data, or shared-memory version 4).
+    pub dominant_eye: Option<&'static str>,
+    /// Whether a relaxed open eye reads 1.000 (SteamOS 0.4.3), so widening can't come through.
+    pub openness_saturated: bool,
     pub locked: &'a [&'static str],
     pub effective: &'a Settings,
     /// The latest gaze capture the panel asked for.

@@ -99,6 +99,8 @@ struct Options {
     bool fakeWriteError = false;
     bool fakeCustom = false;
     bool fakeIndependent = false; ///< --fake-independent: independent_eyes on, the gaze pad per eye
+    std::string fakeDominantEye;  ///< --fake-dominant-eye: "left" / "right" ("Track Dominant Eye Only")
+    bool fakeOpennessSaturated = false;  ///< --fake-openness-saturated: a relaxed open eye reads 1.0
     std::string fakePrompt;       ///< vrchat / etvr / livelink
     std::string fakeUpdate;       ///< a made-up update state (see printUsage)
     std::string fakeFit;          ///< a made-up eye fit state (see printUsage)
@@ -209,6 +211,8 @@ void printUsage() {
         "      --fake-write-error  The panel failed to write config.json\n"
         "      --fake-custom     Gaze smoothing values that match no preset\n"
         "      --fake-independent  Move eyes separately (the left column shows each eye's gaze)\n"
+        "      --fake-dominant-eye left|right  \"Track Dominant Eye Only\" is on with that eye\n"
+        "      --fake-openness-saturated  A relaxed open eye reads 1.0 (SteamOS 0.4.3), so widening can't come through\n"
         "      --fake-prompt vrchat|etvr|livelink  The recommended-settings question\n"
         "      --fake-autostart on|off|missing|unknown\n"
         "      --fake-update checking|uptodate|available|manual|installing|installed|checkfailed|installfailed\n"
@@ -354,6 +358,16 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.fake = options.fakeCustom = true;
         } else if (arg == "--fake-independent") {
             options.fake = options.fakeIndependent = true;
+        } else if (arg == "--fake-dominant-eye" && hasNext) {
+            options.fakeDominantEye = argv[++i];
+            if (options.fakeDominantEye != "left" && options.fakeDominantEye != "right") {
+                std::fprintf(stderr, "--fake-dominant-eye must be left or right: %s\n",
+                             options.fakeDominantEye.c_str());
+                return false;
+            }
+            options.fake = true;
+        } else if (arg == "--fake-openness-saturated") {
+            options.fake = options.fakeOpennessSaturated = true;
         } else if (arg == "--fake-prompt" && hasNext) {
             options.fakePrompt = argv[++i];
             if (options.fakePrompt != kOutputVrchat && options.fakePrompt != kOutputEtvr &&
@@ -704,6 +718,8 @@ PanelModel fakeModel(const Options& options) {
         if (options.fakeSourceError) {
             s.sourceError = "unsupported eye shared-memory version 6; supported: 4, 5";
         }
+        s.dominantEye = options.fakeDominantEye;
+        s.opennessSaturated = options.fakeOpennessSaturated;
         s.effective = root;
         if (options.fakeLocked) {
             s.locked = {key::kOutput, key::kPort, key::kRaw, key::kLidOpen, key::kIndependentEyes, key::kGazeOffsetY};
@@ -918,6 +934,9 @@ int runPrint(const Options& options) {
                     locked.empty() ? " (none)" : locked.c_str(),
                     status.configError.empty() ? "null" : status.configError.c_str(),
                     status.sourceError.empty() ? "null" : status.sourceError.c_str(), status.configPath.c_str());
+        std::printf("  dominant_eye: %s, openness_saturated: %s\n",
+                    status.dominantEye.empty() ? "null" : status.dominantEye.c_str(),
+                    status.opennessSaturated ? "true" : "false");
     }
     const Autostart autostart = readAutostart();
     std::printf("autostart (%s): %s\n", kServiceName,
@@ -949,7 +968,8 @@ std::string statusSignature(const EyeStatus& s) {
                   s.rawGazeEye[0].v[1], s.rawGazeEye[1].v[0], s.rawGazeEye[1].v[1], s.sentGazeEye[0].v[0],
                   s.sentGazeEye[0].v[1], s.sentGazeEye[1].v[0], s.sentGazeEye[1].v[1]);
     signature += eyes;
-    signature += "|" + s.configError + "|" + s.sourceError + "|" + s.configPath + "|" + s.calibrationPath + "|";
+    signature += "|" + s.configError + "|" + s.sourceError + "|" + s.dominantEye + "|" +
+                 (s.opennessSaturated ? "saturated" : "") + "|" + s.configPath + "|" + s.calibrationPath + "|";
     for (const auto& name : s.locked) signature += name + ",";
     if (s.effective.isObject()) signature += writeJson(s.effective);
     return signature;

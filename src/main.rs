@@ -90,6 +90,19 @@ const WIDEN_SUSTAIN: f64 = 0.25;
 // blink), so a blink's lead-in and its reopening count separately.
 const WIDEN_RELEASE: f64 = 0.1;
 const WIDEN_RESET_BELOW: f32 = 0.5;
+// SteamOS 0.4.3's eye tracker reads a relaxed open eye as 1.000, where the openness stops, so a widened eye can't read
+// any higher and widening can't come through (one user's left eye, both eyes open: a median 0.754 and 2.0% of samples
+// at 1.000 before, 1.000 and 75-93% after). Told from the readings, not from a version, for the status file and so the
+// panel: over the last SATURATION_WINDOW seconds of samples with both eyes at SATURATION_OPEN or more, more than
+// SATURATION_ON of them with either eye at SATURATED_READING or more turn it on, and fewer than SATURATION_OFF turn it
+// off again; with fewer than SATURATION_MIN_SAMPLES such samples it stays as it was. On two 60-minute recordings
+// before 0.4.3 that share was 0-30.5% (a median 3.1% and 4.5%), on three after it 50.4-99.5% (on from 6.7 s in).
+const SATURATION_WINDOW: i64 = 60;
+const SATURATION_OPEN: f32 = 0.6;
+const SATURATED_READING: f32 = 0.999;
+const SATURATION_ON: f64 = 0.5;
+const SATURATION_OFF: f64 = 0.4;
+const SATURATION_MIN_SAMPLES: u32 = 600;
 // How often the Steam Link PC is looked up again, to follow reconnects over another network.
 const RESOLVE_INTERVAL: Duration = Duration::from_secs(5);
 // Eyelid auto calibration keeps a decaying histogram of each eye's open readings (0.005 wide bins).
@@ -139,14 +152,16 @@ struct EyeServerMmap {
 //   0x078  u32       client-to-server message pending
 //   0x07c  8 x 25 B  client-to-server queue, read index at 0x144, write index at 0x148, full flag (u8) at 0x14c
 //   0x14d  u8 + f32  a flag and value a client sets (90.0)
-//   0x152  u8 + i32  new in version 5: a flag and value a client sets (-1 when the flag is clear)
+//   0x152  u8 + i32  new in version 5: "Track Dominant Eye Only" (VR Settings > General, advanced), on (1) or
+//                    off (0), then which eye: 0 left, 1 right, -1 while off. Only read (see dominant_eye)
 //   0x157  the sample record (0xebc bytes, laid out as in version 4)
 //   0x1013 camera images: three u32 (size), then two 400 x 400 8-bit images at 0x101f and 0x2811f
 #[repr(C)]
 struct EyeServerMmapV5 {
     control: ShmControl,
     images_requested: u32,
-    client_to_server: [u8; 0x113],
+    client_to_server: [u8; 0x10e],
+    dominant_eye: [u8; 5],
     eye_data: EyeDataMmap,
 }
 
@@ -169,12 +184,14 @@ struct EyeDataMmap {
     reserved: [u8; 0xe1b],
 }
 
-/// What differs between the shared-memory versions: the file size and where the sample record starts.
+/// What differs between the shared-memory versions: the file size, where the sample record starts, and where the
+/// "Track Dominant Eye Only" setting is (version 5 on).
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ShmLayout {
     version: u32,
     size: usize,
     eye_data: usize,
+    dominant_eye: Option<usize>,
 }
 
 const SHM_LAYOUTS: [ShmLayout; 2] = [
@@ -182,11 +199,13 @@ const SHM_LAYOUTS: [ShmLayout; 2] = [
         version: 4,
         size: 0x4f21a,
         eye_data: offset_of!(EyeServerMmap, eye_data),
+        dominant_eye: None,
     },
     ShmLayout {
         version: 5,
         size: 0x4f21f,
         eye_data: offset_of!(EyeServerMmapV5, eye_data),
+        dominant_eye: Some(offset_of!(EyeServerMmapV5, dominant_eye)),
     },
 ];
 
@@ -200,6 +219,7 @@ const _: () = {
     assert!(offset_of!(EyeServerMmapV5, control) == 0);
     assert!(offset_of!(EyeServerMmapV5, images_requested) == 0x40);
     assert!(offset_of!(EyeServerMmapV5, client_to_server) == 0x44);
+    assert!(offset_of!(EyeServerMmapV5, dominant_eye) == 0x152);
     assert!(offset_of!(EyeServerMmapV5, eye_data) == 0x157);
     assert!(offset_of!(EyeDataMmap, sample_time) == 0x05);
     assert!(offset_of!(EyeDataMmap, gaze_direction) == 0x0d);
@@ -1069,6 +1089,21 @@ impl EyeSource {
         self.map.as_ptr().cast()
     }
 
+    /// The "Track Dominant Eye Only" setting (see parse_dominant_eye; Some(None) in a version without it). Only read,
+    /// without the lock: a client sets it, not the eye server, so a read is only torn while the setting changes, and
+    /// it is read twice and must say the same both times.
+    fn dominant_eye(&self) -> Option<Option<DominantEye>> {
+        let Some(offset) = self.layout.dominant_eye else {
+            return Some(None);
+        };
+        let read = || -> [u8; 5] {
+            // The layout's offset lies within the mapping (checked at compile time against its size).
+            std::array::from_fn(|i| unsafe { ptr::read_volatile(self.map.as_ptr().add(offset + i)) })
+        };
+        let first = read();
+        (read() == first).then(|| parse_dominant_eye(first)).flatten()
+    }
+
     fn control_mut(&mut self) -> *mut ShmControl {
         self.map.as_mut_ptr().cast()
     }
@@ -1138,6 +1173,90 @@ impl EyeSource {
     }
 }
 
+/// Which eye alone the Frame tracks while "Track Dominant Eye Only" is on. Its fused gaze of both eyes is then
+/// that eye's (the other eye's fused gaze is a copy, about 0.15° off), while each eye's gaze before fusion and its
+/// openness are still its own.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DominantEye {
+    Left,
+    Right,
+}
+
+impl DominantEye {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+        }
+    }
+}
+
+/// The setting's 5 bytes (a flag, then the eye as a little-endian i32), as they are in the shared memory: Some(None)
+/// while it is off, Some(Some(eye)) while it is on, None for anything else, such as a read torn by the setting changing
+/// halfway or a meaning that has changed.
+fn parse_dominant_eye(bytes: [u8; 5]) -> Option<Option<DominantEye>> {
+    let eye = i32::from_le_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
+    match (bytes[0], eye) {
+        (0, -1..=1) => Some(None),
+        (1, 0) => Some(Some(DominantEye::Left)),
+        (1, 1) => Some(Some(DominantEye::Right)),
+        _ => None,
+    }
+}
+
+/// Whether the Frame's openness is saturated: a relaxed open eye reading 1.000 (see SATURATION_WINDOW).
+#[derive(Default)]
+struct Saturation {
+    // Whole seconds of sample time, each with its samples with both eyes open and how many of those read saturated.
+    seconds: VecDeque<(i64, u32, u32)>,
+    open: u32,
+    saturated: u32,
+    last_time: Option<f64>,
+    on: bool,
+}
+
+impl Saturation {
+    fn add(&mut self, data: &EyeData) {
+        let time = data.sample_time;
+        // The eye server's clock started over
+        if self.last_time.is_some_and(|last| time < last) {
+            self.seconds.clear();
+            self.open = 0;
+            self.saturated = 0;
+        }
+        self.last_time = Some(time);
+        let second = time.floor() as i64;
+        while let Some(&(start, open, saturated)) = self.seconds.front() {
+            if start > second - SATURATION_WINDOW {
+                break;
+            }
+            self.seconds.pop_front();
+            self.open -= open;
+            self.saturated -= saturated;
+        }
+        if data.openness.iter().all(|openness| *openness >= SATURATION_OPEN) {
+            let saturated = u32::from(data.openness.iter().any(|openness| *openness >= SATURATED_READING));
+            match self.seconds.back_mut() {
+                Some((start, open, count)) if *start == second => {
+                    *open += 1;
+                    *count += saturated;
+                }
+                _ => self.seconds.push_back((second, 1, saturated)),
+            }
+            self.open += 1;
+            self.saturated += saturated;
+        }
+        if self.open >= SATURATION_MIN_SAMPLES {
+            let share = f64::from(self.saturated) / f64::from(self.open);
+            if share > SATURATION_ON {
+                self.on = true;
+            } else if share < SATURATION_OFF {
+                self.on = false;
+            }
+        }
+    }
+}
+
 /// The sample in a record the eye server published, the same for every version.
 fn decode(record: EyeDataMmap) -> Next {
     if record.producer_state == 1 {
@@ -1165,6 +1284,9 @@ struct EyeReader {
     // Why the shared memory can't be read; None while it can.
     error: Option<String>,
     next_open: Instant,
+    // The eye "Track Dominant Eye Only" has the Frame track alone, as last read; None while it is off, or the
+    // shared memory can't be read or has no such setting (version 4).
+    dominant_eye: Option<DominantEye>,
 }
 
 impl EyeReader {
@@ -1174,7 +1296,26 @@ impl EyeReader {
             source: None,
             error: None,
             next_open: now,
+            dominant_eye: None,
         }
+    }
+
+    /// Read the "Track Dominant Eye Only" setting again (a read that can't be trusted keeps the last one). Returns what
+    /// to log when it changed while the shared memory is open.
+    fn refresh_dominant_eye(&mut self) -> Option<String> {
+        let now = match &self.source {
+            Some(source) => source.dominant_eye().unwrap_or(self.dominant_eye),
+            None => None,
+        };
+        if now == self.dominant_eye {
+            return None;
+        }
+        self.dominant_eye = now;
+        self.source.as_ref()?;
+        Some(match now {
+            Some(eye) => format!("Track Dominant Eye Only is on: the Frame tracks the {} eye alone", eye.name()),
+            None => "Track Dominant Eye Only is off".to_owned(),
+        })
     }
 
     /// Open the shared memory if it isn't open and a try is due. Returns what to log: the version once it is open, or
@@ -1801,6 +1942,8 @@ struct Bridge {
     livelink_neutral: Option<Instant>,
     // Keeps the Live Link samples at or below LIVELINK_MAX_HZ.
     livelink_throttle: Throttle,
+    // Whether the openness is saturated, so widening can't come through.
+    saturation: Saturation,
 }
 
 impl Bridge {
@@ -1849,6 +1992,7 @@ impl Bridge {
         }
         let since = *self.active_since.get_or_insert(now);
         let settled = since.elapsed() >= CAL_SETTLE;
+        self.saturation.add(&data);
         let sample = step(&self.settings, &mut self.smoother, &mut self.calibration, &data, settled);
         if self.settings.lid_calibration && settled {
             self.calibration.save_if_due();
@@ -1941,8 +2085,9 @@ impl Bridge {
         }
     }
 
-    /// `source_error`: why the eye tracker's shared memory can't be read, if it can't.
-    fn status<'a>(&'a self, source_error: Option<&'a str>) -> Status<'a> {
+    /// `source_error`: why the eye tracker's shared memory can't be read, if it can't; `dominant_eye`: the eye the
+    /// Frame tracks alone, if "Track Dominant Eye Only" is on.
+    fn status<'a>(&'a self, source_error: Option<&'a str>, dominant_eye: Option<DominantEye>) -> Status<'a> {
         let settings = &self.settings;
         let pair = |values: [f32; 6], first: usize| status::round([values[first], values[first + 1]]);
         Status {
@@ -1989,6 +2134,8 @@ impl Bridge {
             calibration_path: self.calibration.path.as_deref(),
             config_error: self.config.error.as_deref(),
             source_error,
+            dominant_eye: dominant_eye.map(DominantEye::name),
+            openness_saturated: self.saturation.on,
             locked: &self.config.locked,
             effective: settings,
             gaze_capture: self.capture_result.as_ref(),
@@ -2089,6 +2236,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         dots: dots::DotStream::new(status::status_path().parent().unwrap_or(Path::new("/tmp"))),
         livelink_neutral: None,
         livelink_throttle: Throttle::default(),
+        saturation: Saturation::default(),
     };
     let mut status_file = StatusFile::new(status::status_path());
     // Until the shared memory can be read, frameeyeosc keeps running and trying again, and the status file says why,
@@ -2123,7 +2271,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         bridge.check_capture();
         bridge.keep_livelink_alive();
         if status_file.due() {
-            status_file.write(&bridge.status(eye.error.as_deref()));
+            if let Some(line) = eye.refresh_dominant_eye() {
+                eprintln!("{line}");
+            }
+            status_file.write(&bridge.status(eye.error.as_deref(), eye.dominant_eye));
         }
     }
 }
@@ -3373,6 +3524,7 @@ mod tests {
             dots: dots::DotStream::new(Path::new("/nonexistent")),
             livelink_neutral: None,
             livelink_throttle: Throttle::default(),
+            saturation: Saturation::default(),
         };
         bridge.output.refresh();
         bridge
@@ -3930,10 +4082,153 @@ mod tests {
     #[test]
     fn status_says_why_eye_data_cant_be_read() {
         let bridge = test_bridge(settings());
-        let json = serde_json::to_value(bridge.status(None)).unwrap();
+        let json = serde_json::to_value(bridge.status(None, None)).unwrap();
         assert!(json["source_error"].is_null());
         let error = "unsupported eye shared-memory version 6; supported: 4, 5";
-        let json = serde_json::to_value(bridge.status(Some(error))).unwrap();
+        let json = serde_json::to_value(bridge.status(Some(error), None)).unwrap();
         assert_eq!(json["source_error"], error);
+    }
+
+    #[test]
+    fn dominant_eye_is_read_only_from_states_it_knows() {
+        let read = |flag: u8, eye: i32| {
+            let [a, b, c, d] = eye.to_le_bytes();
+            parse_dominant_eye([flag, a, b, c, d])
+        };
+        // As read off the headset: off, on with the left eye, on with the right eye
+        assert_eq!(read(0, -1), Some(None));
+        assert_eq!(read(1, 0), Some(Some(DominantEye::Left)));
+        assert_eq!(read(1, 1), Some(Some(DominantEye::Right)));
+        // Off, whichever eye was picked before
+        assert_eq!(read(0, 0), Some(None));
+        assert_eq!(read(0, 1), Some(None));
+        // Anything else is not trusted: on without an eye, other flags or eyes, halves of two states
+        assert_eq!(read(1, -1), None);
+        assert_eq!(read(2, 1), None);
+        assert_eq!(read(1, 2), None);
+        assert_eq!(parse_dominant_eye([1, 0xff, 0xff, 0, 0]), None);
+        assert_eq!(parse_dominant_eye([1, 1, 0xff, 0xff, 0xff]), None);
+        assert_eq!(parse_dominant_eye([0xff; 5]), None);
+    }
+
+    #[test]
+    fn dominant_eye_is_read_without_writing_and_only_in_version_5() {
+        // The real version-5 file has the setting off
+        let mut bytes = vec![0u8; 0x4f21f];
+        let prefix: Vec<u8> = V5_SNAPSHOT
+            .concat()
+            .as_bytes()
+            .chunks(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect();
+        bytes[..prefix.len()].copy_from_slice(&prefix);
+        assert_eq!(bytes[0x152..0x157], [0x00, 0xff, 0xff, 0xff, 0xff]);
+        let shm = FakeShm::with("dominant-v5", &bytes);
+        let start = Instant::now();
+        let mut reader = EyeReader::new(&shm.path, start);
+        assert!(reader.open_if_due(start).is_some());
+        assert_eq!(reader.source.as_ref().unwrap().dominant_eye(), Some(None));
+        assert_eq!(reader.refresh_dominant_eye(), None);
+        assert_eq!(reader.dominant_eye, None);
+
+        // Turned on in SteamVR with the right eye, then the left one: said once each
+        let file = OpenOptions::new().write(true).open(&shm.path).unwrap();
+        let set = |value: [u8; 5]| std::os::unix::fs::FileExt::write_all_at(&file, &value, 0x152).unwrap();
+        set([1, 1, 0, 0, 0]);
+        let line = reader.refresh_dominant_eye().unwrap();
+        assert_eq!(line, "Track Dominant Eye Only is on: the Frame tracks the right eye alone");
+        assert_eq!(reader.dominant_eye, Some(DominantEye::Right));
+        assert_eq!(reader.refresh_dominant_eye(), None);
+        set([1, 0, 0, 0, 0]);
+        assert!(reader.refresh_dominant_eye().unwrap().contains("left eye"));
+        assert_eq!(reader.dominant_eye, Some(DominantEye::Left));
+        // Caught halfway through a change: the last state stays
+        set([1, 0xff, 0xff, 0xff, 0xff]);
+        assert_eq!(reader.refresh_dominant_eye(), None);
+        assert_eq!(reader.dominant_eye, Some(DominantEye::Left));
+        set([0, 0xff, 0xff, 0xff, 0xff]);
+        assert_eq!(reader.refresh_dominant_eye().unwrap(), "Track Dominant Eye Only is off");
+        assert_eq!(reader.dominant_eye, None);
+        // Nothing but the test's own writes changed the file
+        let mut expected = bytes.clone();
+        expected[0x152..0x157].copy_from_slice(&[0, 0xff, 0xff, 0xff, 0xff]);
+        assert_eq!(shm.bytes(), expected);
+
+        // Lost along with the shared memory, without a line of its own
+        set([1, 1, 0, 0, 0]);
+        reader.refresh_dominant_eye();
+        reader.close(start);
+        assert_eq!(reader.refresh_dominant_eye(), None);
+        assert_eq!(reader.dominant_eye, None);
+
+        // Version 4 has no such setting, whatever its bytes there (the start of its sample record)
+        let mut v4 = vec![0u8; 0x4f21a];
+        v4[0..4].copy_from_slice(&4u32.to_le_bytes());
+        v4[4..8].copy_from_slice(&1u32.to_le_bytes());
+        v4[0x152..0x157].copy_from_slice(&[1, 1, 0, 0, 0]);
+        let shm4 = FakeShm::with("dominant-v4", &v4);
+        let source = EyeSource::open_at(&shm4.path).unwrap();
+        assert_eq!(source.dominant_eye(), Some(None));
+        drop(source);
+        assert_eq!(shm4.bytes(), v4);
+    }
+
+    #[test]
+    fn status_says_which_eye_is_tracked_alone_and_whether_openness_is_saturated() {
+        let mut bridge = test_bridge(settings());
+        let json = serde_json::to_value(bridge.status(None, None)).unwrap();
+        assert!(json["dominant_eye"].is_null());
+        assert_eq!(json["openness_saturated"], false);
+        bridge.saturation.on = true;
+        let json = serde_json::to_value(bridge.status(None, Some(DominantEye::Right))).unwrap();
+        assert_eq!(json["dominant_eye"], "right");
+        assert_eq!(json["openness_saturated"], true);
+        let json = serde_json::to_value(bridge.status(None, Some(DominantEye::Left))).unwrap();
+        assert_eq!(json["dominant_eye"], "left");
+    }
+
+    /// Feed `seconds` of 90 Hz samples from `start`, each eye's openness from `openness(sample index)`.
+    fn feed(saturation: &mut Saturation, start: f64, seconds: f64, openness: impl Fn(usize) -> [f32; 2]) {
+        for i in 0..(seconds * 90.0) as usize {
+            let data = EyeData {
+                sample_time: start + i as f64 / 90.0,
+                openness: openness(i),
+                ..EyeData::default()
+            };
+            saturation.add(&data);
+        }
+    }
+
+    #[test]
+    fn openness_saturation_is_told_from_the_readings() {
+        // Before SteamOS 0.4.3: relaxed open around 0.72, with the 1.000 jump of a blink's lead-in now and then
+        let mut before = Saturation::default();
+        feed(&mut before, 100.0, 300.0, |i| match i % 300 {
+            0..=4 => [1.0, 1.0],
+            5..=20 => [0.1, 0.1],
+            _ => [0.72, 0.74],
+        });
+        assert!(!before.on);
+        // After it: relaxed open reads 1.000; on once 600 open samples are in (6.7 s)
+        let mut after = Saturation::default();
+        feed(&mut after, 100.0, 6.0, |_| [1.0, 0.98]);
+        assert!(!after.on, "too few samples yet");
+        feed(&mut after, 106.0, 1.0, |_| [1.0, 0.98]);
+        assert!(after.on);
+        // Either eye at 1.000 counts; blinks (eyes not both open) don't count either way
+        let mut one_eye = Saturation::default();
+        feed(&mut one_eye, 0.0, 20.0, |i| if i % 10 < 3 { [0.2, 0.2] } else { [0.95, 1.0] });
+        assert!(one_eye.on);
+        // Between the two shares it stays as it was, below the lower one it goes off again, as the old samples leave
+        // the minute
+        feed(&mut one_eye, 20.0, 120.0, |i| if i % 20 < 9 { [1.0, 1.0] } else { [0.8, 0.8] });
+        assert!(one_eye.on, "45% saturated");
+        feed(&mut one_eye, 140.0, 61.0, |i| if i % 10 < 3 { [1.0, 1.0] } else { [0.8, 0.8] });
+        assert!(!one_eye.on, "30% saturated");
+        // With the headset off nothing comes in and it stays; a clock that starts over starts the count over
+        feed(&mut one_eye, 5.0, 5.0, |_| [1.0, 1.0]);
+        assert!(!one_eye.on && one_eye.open == 450, "{}", one_eye.open);
+        feed(&mut one_eye, 10.0, 2.0, |_| [1.0, 1.0]);
+        assert!(one_eye.on);
     }
 }
