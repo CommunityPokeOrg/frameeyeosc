@@ -17,7 +17,7 @@ frameeyeosc の設定を、Steam Frame を被ったまま SteamVR のダッシ�
 - 毎秒の送信回数と、目のデータ（トラッカーから毎秒届いたサンプル、状態ファイルの `tracker_rate`）。目のデータが 60 未満なら赤で「少なめ」を付ける（毎秒 15 のことがあった）
 - まぶた: 左右それぞれ、細い灰色の棒が生の値（倍率を掛けた後）、太い色の棒が送った値
 - 視線: 枠の中に、輪が生の値、塗った点が送った値。「左右の目を別々に動かす」がオンのときは「左目」「右目」の枠を 2 つ並べ、それぞれの目の生の値（輪、どちらも同じ色）と送った値（点、左は水色・右はオレンジ）、その下に送った x / y を出す。自分から見た向きのまま（左目が左、＋ x は右、＋ y は上）。状態ファイルの `raw` / `sent` の `gaze_left` / `gaze_right` を読む
-- いちばん下に赤で 1 行（2 行まで）: パネルが設定を書けなかった、設定ファイルが壊れている、自動起動の切り替えに失敗、本体が報告した設定のエラー（この順で 1 つだけ）
+- いちばん下に赤で 1 行（2 行まで）: パネルが設定を書けなかった、設定ファイルが壊れている、自動起動の切り替えに失敗、本体が目のデータを読めない理由（状態ファイルの `source_error`。「目のデータを読めません: …」と出し、バッジは「目のデータ待ち」のまま）、本体が報告した設定のエラー（この順で 1 つだけ）
 - 赤の行が無いときは、新しい版があるあいだ・更新中・入れ終わったあと、いちばん下にお知らせ（「v0.4.1 があります」など）。押すと詳細タブへ
 
 右はタブ:
@@ -130,7 +130,7 @@ ssh steamos@<Frame の IP> 'cd ~/frameeyeosc-panel && cmake -G Ninja -S . -B bui
 ```
 
 - `--dump-png` は今の設定ファイルと状態ファイルで描く。`--config PATH`・`--status PATH` で別のファイルを読める
-- `--fake` か `--fake-*` を付けると、ファイルを読まずに作り物の状態で描く: `--fake-not-running`・`--fake-paused`・`--fake-no-tracking`・`--fake-etvr`・`--fake-livelink`・`--fake-fixed`・`--fake-target-null`・`--fake-locked`・`--fake-config-error`・`--fake-broken`・`--fake-write-error`・`--fake-custom`・`--fake-prompt vrchat|etvr|livelink`・`--fake-autostart on|off|missing|unknown`。`--preview-quit`・`--preview-reset` で「もう一度押すと〜」の見た目
+- `--fake` か `--fake-*` を付けると、ファイルを読まずに作り物の状態で描く: `--fake-not-running`・`--fake-paused`・`--fake-no-tracking`・`--fake-etvr`・`--fake-livelink`・`--fake-fixed`・`--fake-target-null`・`--fake-locked`・`--fake-config-error`・`--fake-source-error`・`--fake-broken`・`--fake-write-error`・`--fake-custom`・`--fake-prompt vrchat|etvr|livelink`・`--fake-autostart on|off|missing|unknown`。`--preview-quit`・`--preview-reset` で「もう一度押すと〜」の見た目
 - 更新の見た目は `--fake-update checking|uptodate|available|manual|installing|installed|checkfailed|installfailed`。`--preview-update-prompt`（`--fake-update available` と一緒に）で更新の確認
 - `--update-live` を付けると本物の更新の仕組みを動かす: 最初に確認し、`--click` のあとは始まった確認や更新が終わるまで待ってから描く。更新は本当に行われるので、偽の GitHub（`FRAME_UPDATE_API_URL`・`FRAME_UPDATE_ALLOW_INSECURE=1`）と別の `HOME` で試す
 - `--click X,Y`（何回でも）は、描く前にその座標を押したことにする。当たり判定と設定ファイルの書き込みをヘッドセットなしで確かめる用（`--fake` とは一緒に使えない。`--config` の設定ファイルを本当に書き換えるので、試すときは別の場所を指定する）

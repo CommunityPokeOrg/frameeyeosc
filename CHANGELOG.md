@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- frameeyeosc keeps running when it can't read the eye tracker's shared memory, and the panel says why. Before, it exited whenever opening it failed at startup (SteamVR not started yet, a shared-memory version it doesn't know, a file too small or not set up yet); systemd started it again every 5 seconds, and the panel only said "frameeyeosc is not running". Now it tries again every second, logs each new reason once instead of every try, and writes the reason to the status file as `source_error` (null while the eye data can be read). Config reloads, the status file and the LiveLink keepalive go on meanwhile. The panel shows it in red at the bottom, "Can't read eye data: …", while the badge stays "Waiting for eye data". When the eye tracker replaces its shared memory, the same retry opens the new one, and a file rewritten in place as another version now counts as replaced too: frameeyeosc stops writing to it and reads its version again. Thanks to @ronaldburns (#8), whose pull request this comes from.
+
 ## 0.6.1 (2026-10-02)
 
 Works again after the SteamOS 0.4.3 update.

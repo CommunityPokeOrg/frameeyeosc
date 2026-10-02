@@ -162,7 +162,7 @@ Whatever is set there can't be changed from the file, and the panel shows it as 
 
 ## Status file
 
-frameeyeosc writes what it is doing to `$XDG_RUNTIME_DIR/frameeyeosc/status.json` (usually `/run/user/1000/frameeyeosc/status.json`) ten times a second: whether it is sending, the destination, messages per second, the eye tracker's samples per second (`tracker_rate`), the latest raw and sent values, the calibration, the settings in effect, which of them are locked by the command line, any config error, and the latest eye fit measurement. The panel reads it. The folder is readable only by you, lives in memory, and is gone after a reboot. Only the latest values are kept.
+frameeyeosc writes what it is doing to `$XDG_RUNTIME_DIR/frameeyeosc/status.json` (usually `/run/user/1000/frameeyeosc/status.json`) ten times a second: whether it is sending, the destination, messages per second, the eye tracker's samples per second (`tracker_rate`), the latest raw and sent values, the calibration, the settings in effect, which of them are locked by the command line, any config error, why the eye data can't be read if it can't (`source_error`), and the latest eye fit measurement. The panel reads it. The folder is readable only by you, lives in memory, and is gone after a reboot. Only the latest values are kept.
 
 ## VRCFaceTracking (ETVR) mode
 
@@ -237,7 +237,7 @@ Eyelid calibration is automatic. For the first 20 seconds after you put the head
   New-NetFirewallRule -DisplayName "VRChat OSC (LAN UDP 9000)" -Direction Inbound -Action Allow -Protocol UDP -LocalPort 9000 -RemoteAddress LocalSubnet -Program "C:\Program Files (x86)\Steam\steamapps\common\VRChat\VRChat.exe" -Profile Private,Public
   ```
   The rule covers both profiles because the bundled wireless adapter shows up in Windows as its own network, usually with the "Public" profile, while a home network is often "Private".
-- `Error: ... No such file or directory` right after the headset boots: harmless. The eye tracker isn't up yet, and the service retries a few seconds later.
+- The panel says "Can't read eye data: …": frameeyeosc is running but can't read the eye tracker, and tries again every second (the reason is also logged once, in `journalctl --user -u frameeyeosc`). Right after the headset boots (`… No such file or directory`) this is harmless: the eye tracker isn't up yet. "unsupported eye shared-memory version" means a SteamOS update changed what frameeyeosc reads; see the [Disclaimer](#disclaimer).
 - Nothing moves while the headset is off your face: expected, the Frame only tracks while worn.
 - The panel says "frameeyeosc is not running": check `systemctl --user status frameeyeosc`. Changes made in the panel are still saved and apply once it runs.
 
@@ -263,7 +263,7 @@ Eyelid calibration is automatic. For the first 20 seconds after you put the head
 ## Disclaimer
 
 - Use at your own risk. The changes in this fork were made with Claude Opus 5.5, an AI model. I've tested them with unit tests and on my own Steam Frame, but I can't take responsibility for what happens on yours, so please read the code and check it yourself before you run it. The software comes with no warranty (see [LICENSE](LICENSE)).
-- It reads the eye tracker's private, undocumented shared-memory layout (versions 4 and 5; 5 came with SteamOS 0.4.3). A SteamOS update can change that layout. If it does, the program stops with an "unsupported eye shared-memory version" error until frameeyeosc is updated.
+- It reads the eye tracker's private, undocumented shared-memory layout (versions 4 and 5; 5 came with SteamOS 0.4.3). A SteamOS update can change that layout. If it does, frameeyeosc can't send eye data until it is updated. It keeps running meanwhile and tries again every second, and the panel shows "Can't read eye data: unsupported eye shared-memory version …".
 - It needs no root and doesn't change any SteamOS files or settings. The only thing it writes is a "send me the next sample" flag in the eye tracker's shared memory, and it takes the lock there the same way the tracker's own clients do. The panel only writes frameeyeosc's settings file.
 - Reading Valve's undocumented internal data may conflict with the Steam Subscriber Agreement, which restricts reverse engineering. Decide for yourself whether you're comfortable with that before using it.
 - This is an unofficial project with no affiliation with or endorsement from Valve Corporation, VRChat Inc., the VRCFaceTracking project or the EyeTrackVR project. Steam, Steam Frame, SteamVR and Steam Link are trademarks of Valve Corporation, and VRChat is a trademark of VRChat Inc. The names are used here only to say what this works with.

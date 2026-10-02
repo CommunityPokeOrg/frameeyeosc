@@ -162,7 +162,7 @@ FRAMEEYEOSC_ARGS="--gaze-min-cutoff 0.3 --lid-sync 0.6"
 
 ## 状態ファイル
 
-frameeyeosc は 1 秒に 10 回、今の様子を `$XDG_RUNTIME_DIR/frameeyeosc/status.json`（ふつうは `/run/user/1000/frameeyeosc/status.json`）に書きます。中身は、送信中か、送り先、毎秒の送信回数、目のトラッカーから毎秒届くサンプルの数（`tracker_rate`）、最新の生の値と送った値、キャリブレーション、今効いている設定、コマンドで固定中の項目、設定のエラー、最後の目合わせの測定です。パネルはこれを読んで表示します。フォルダは本人しか読めず、メモリの上にあって再起動すると消えます。残るのは最新の値だけです。
+frameeyeosc は 1 秒に 10 回、今の様子を `$XDG_RUNTIME_DIR/frameeyeosc/status.json`（ふつうは `/run/user/1000/frameeyeosc/status.json`）に書きます。中身は、送信中か、送り先、毎秒の送信回数、目のトラッカーから毎秒届くサンプルの数（`tracker_rate`）、最新の生の値と送った値、キャリブレーション、今効いている設定、コマンドで固定中の項目、設定のエラー、目のデータを読めないときはその理由（`source_error`）、最後の目合わせの測定です。パネルはこれを読んで表示します。フォルダは本人しか読めず、メモリの上にあって再起動すると消えます。残るのは最新の値だけです。
 
 ## VRCFaceTracking（ETVR）モード
 
@@ -237,7 +237,7 @@ frameeyeosc は、VRCFaceTracking の LiveLink モジュールに Live Link Face
   New-NetFirewallRule -DisplayName "VRChat OSC (LAN UDP 9000)" -Direction Inbound -Action Allow -Protocol UDP -LocalPort 9000 -RemoteAddress LocalSubnet -Program "C:\Program Files (x86)\Steam\steamapps\common\VRChat\VRChat.exe" -Profile Private,Public
   ```
   「プライベート」と「パブリック」の両方にしてあるのは、家のネットワークは「プライベート」のことが多い一方で、付属の無線アダプタは Windows では別のネットワークとして見え、たいてい「パブリック」になっているからです
-- ヘッドセットの起動直後に `Error: ... No such file or directory` と出る: 問題ありません。アイトラッキングがまだ起動していないだけで、数秒後に自動で再試行します
+- パネルに「目のデータを読めません: …」と出る: frameeyeosc は動いていますが、アイトラッキングのデータを読めていません。1 秒ごとに読み直します（理由は `journalctl --user -u frameeyeosc` にも 1 回だけ出ます）。ヘッドセットの起動直後（`… No such file or directory`）なら問題ありません。アイトラッキングがまだ起動していないだけです。「unsupported eye shared-memory version」なら、SteamOS の更新で frameeyeosc が読む形式が変わっています（[免責事項](#免責事項) を参照）
 - ヘッドセットを外していると何も動かない: 正常です。Frame は被っている間しか目を追いません
 - パネルに「本体が動いていません」と出る: `systemctl --user status frameeyeosc` を確認してください。パネルで変えた設定は保存されていて、動き出したら反映されます
 
@@ -263,7 +263,7 @@ frameeyeosc は、VRCFaceTracking の LiveLink モジュールに Live Link Face
 ## 免責事項
 
 - 自己責任でお使いください。このフォークでの変更は AI（Claude Opus 5.5）を使って作りました。ユニットテストと自分の Steam Frame で動作は確かめていますが、あなたの環境で何か起きても責任は取れません。使う前にコードを自分の目で確認してください。本ソフトウェアは無保証です（[LICENSE](LICENSE) を参照）
-- ヘッドセットのアイトラッキングが使っている、公開されていない共有メモリの形式（バージョン4と、SteamOS 0.4.3 からのバージョン5）を読んでいます。SteamOS の更新でこの形式が変わると、「unsupported eye shared-memory version」というエラーで起動しなくなり、frameeyeosc が対応するまで使えません
+- ヘッドセットのアイトラッキングが使っている、公開されていない共有メモリの形式（バージョン4と、SteamOS 0.4.3 からのバージョン5）を読んでいます。SteamOS の更新でこの形式が変わると、frameeyeosc が対応するまで目のデータを送れません。そのあいだも frameeyeosc は動き続けて 1 秒ごとに読み直し、パネルには「目のデータを読めません: unsupported eye shared-memory version …」と出ます
 - root 権限は使わず、SteamOS のファイルや設定は変更しません。書き込むのは、アイトラッキングの共有メモリにある「次のサンプルをください」という合図だけです。共有メモリのロックも、アイトラッキングの本来の利用側と同じ手順で取ります。パネルが書くのは frameeyeosc の設定ファイルだけです
 - Valve の非公開の内部データを読むことは、リバースエンジニアリングを制限している Steam 利用規約に触れる可能性があります。使うかどうかはご自身で判断してください
 - 非公式のプロジェクトで、Valve Corporation、VRChat Inc.、VRCFaceTracking プロジェクト、EyeTrackVR プロジェクトとは関係なく、承認も受けていません。Steam、Steam Frame、SteamVR、Steam Link は Valve Corporation の商標、VRChat は VRChat Inc. の商標です。対応製品を示す目的でのみ名前を使っています
