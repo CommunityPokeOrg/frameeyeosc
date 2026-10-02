@@ -306,7 +306,7 @@ void testOutputArgs() {
 
 /** status.json says why frameeyeosc can't read the eye tracker in source_error; null or missing means it can. */
 void testSourceError() {
-    const std::string reason = "unsupported eye shared-memory version 6; supported: 4 (Frame 0.5.0), 5 (SteamOS 0.4.3)";
+    const std::string reason = "unsupported eye shared-memory version 6; supported: 4, 5";
     EyeStatus status = parseStatus("{\"pid\": 1, \"tracking\": false, \"source_error\": \"" + reason + "\"}", 0, false);
     CHECK(status.present && !status.tracking && status.sourceError == reason && status.configError.empty());
     status = parseStatus("{\"pid\": 1, \"tracking\": true, \"source_error\": null}", 0, false);

@@ -1231,12 +1231,18 @@ struct Saturation {
 
 impl Saturation {
     fn add(&mut self, data: &EyeData) {
-        let time = data.sample_time;
-        // The eye server's clock started over
-        if self.last_time.is_some_and(|last| time < last) {
-            self.seconds.clear();
-            self.open = 0;
-            self.saturated = 0;
+        let mut time = data.sample_time;
+        if let Some(last) = self.last_time {
+            if time < last - 1.0 {
+                // The eye server's clock started over
+                self.seconds.clear();
+                self.open = 0;
+                self.saturated = 0;
+            } else if time < last {
+                // A sample a few ms out of order (Smoother::advance allows for it too): count it as the newest
+                // second, so the window keeps its history instead of starting the warm-up over
+                time = last;
+            }
         }
         self.last_time = Some(time);
         let second = time.floor() as i64;
@@ -4335,5 +4341,21 @@ mod tests {
         assert!(!one_eye.on && one_eye.open == 450, "{}", one_eye.open);
         feed(&mut one_eye, 10.0, 2.0, |_| [1.0, 1.0]);
         assert!(one_eye.on);
+    }
+
+    #[test]
+    fn openness_saturation_keeps_its_history_through_samples_slightly_out_of_order() {
+        // Every tenth sample 5 ms earlier than the one before: the warm-up still finishes after 600 open samples
+        let mut saturation = Saturation::default();
+        for i in 0..700 {
+            let jitter = if i % 10 == 9 { -0.016 } else { 0.0 };
+            saturation.add(&EyeData {
+                sample_time: 100.0 + i as f64 / 90.0 + jitter,
+                openness: [1.0, 1.0],
+                ..EyeData::default()
+            });
+        }
+        assert!(saturation.on, "{} open samples", saturation.open);
+        assert_eq!(saturation.open, 700);
     }
 }
