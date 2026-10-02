@@ -702,7 +702,7 @@ PanelModel fakeModel(const Options& options) {
         s.calibrationPath = "/home/steamos/.config/frameeyeosc/calibration";
         if (options.fakeConfigError) s.configError = "lid_closed must be below lid_open";
         if (options.fakeSourceError) {
-            s.sourceError = "unsupported eye shared-memory version 6; supported: 4 (Frame 0.5.0), 5 (SteamOS 0.4.3)";
+            s.sourceError = "unsupported eye shared-memory version 6; supported: 4, 5";
         }
         s.effective = root;
         if (options.fakeLocked) {

@@ -160,8 +160,6 @@ struct ShmLayout {
     version: u32,
     size: usize,
     eye_data: usize,
-    // The Frame software it was found on, for the error message.
-    found_on: &'static str,
 }
 
 const SHM_LAYOUTS: [ShmLayout; 2] = [
@@ -169,13 +167,11 @@ const SHM_LAYOUTS: [ShmLayout; 2] = [
         version: 4,
         size: 0x4f21a,
         eye_data: offset_of!(EyeServerMmap, eye_data),
-        found_on: "Frame 0.5.0",
     },
     ShmLayout {
         version: 5,
         size: 0x4f21f,
         eye_data: offset_of!(EyeServerMmapV5, eye_data),
-        found_on: "SteamOS 0.4.3",
     },
 ];
 
@@ -214,7 +210,7 @@ fn shm_layout(version: u32) -> Result<ShmLayout, String> {
     SHM_LAYOUTS.iter().copied().find(|layout| layout.version == version).ok_or_else(|| {
         let supported: Vec<String> = SHM_LAYOUTS
             .iter()
-            .map(|layout| format!("{} ({})", layout.version, layout.found_on))
+            .map(|layout| layout.version.to_string())
             .collect();
         format!(
             "unsupported eye shared-memory version {version}; supported: {}",
@@ -3550,7 +3546,7 @@ mod tests {
         assert_eq!(shm_layout(5).unwrap().size, 0x4f21f);
         assert_eq!(
             shm_layout(6).unwrap_err(),
-            "unsupported eye shared-memory version 6; supported: 4 (Frame 0.5.0), 5 (SteamOS 0.4.3)"
+            "unsupported eye shared-memory version 6; supported: 4, 5"
         );
     }
 
@@ -3766,7 +3762,7 @@ mod tests {
         let bridge = test_bridge(settings());
         let json = serde_json::to_value(bridge.status(None)).unwrap();
         assert!(json["source_error"].is_null());
-        let error = "unsupported eye shared-memory version 6; supported: 4 (Frame 0.5.0), 5 (SteamOS 0.4.3)";
+        let error = "unsupported eye shared-memory version 6; supported: 4, 5";
         let json = serde_json::to_value(bridge.status(Some(error))).unwrap();
         assert_eq!(json["source_error"], error);
     }
