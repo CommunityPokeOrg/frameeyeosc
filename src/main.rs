@@ -75,6 +75,21 @@ const WIDEN_HIGH: (f32, f32) = (0.04, 0.10);
 const WIDEN_ROOM_LIMIT: f32 = 0.97;
 // Full widening needs at most this reading (where the openness stops).
 const OPENNESS_CAP: f32 = 1.0;
+// A relaxed open eyelid in VRCFT units; above it the eye is widened.
+const LID_RELAXED: f32 = 0.75;
+// Widening shows only once an eyelid has been above relaxed open for this long (see Smoother::sustain_widen). Right
+// before a blink the Frame's openness often jumps up, to 1.000 at times (72% of the samples pinned at 1.000 in a
+// 60-minute recording were within 0.3 s of a blink), which "high" sends as wide eyes for a moment. Over the
+// 2026-09-30..10-01 recordings an eye was visibly widened (VRCFT 0.85 or more) right before 16% of blinks; 448 of
+// those 606 stretches lasted under 250 ms (median 178 ms), 3 lasted 250-300 ms and the rest over 300 ms (an eye held
+// wide). Replayed with "high", blinks led in by a visible widen fell from 281 to 8 of 1113 (2026-10-01 01:09) and
+// from 29 to 3 of 236 (00:21), while widens held for a second or more showed a median 0.16-0.23 s later.
+const WIDEN_SUSTAIN: f64 = 0.25;
+// The time above relaxed open counts on through dips back to relaxed of up to this long, so a widen that wobbles
+// does not start over, and starts over once the eyelid falls below WIDEN_RESET_BELOW (a third closed, as in a
+// blink), so a blink's lead-in and its reopening count separately.
+const WIDEN_RELEASE: f64 = 0.1;
+const WIDEN_RESET_BELOW: f32 = 0.5;
 // How often the Steam Link PC is looked up again, to follow reconnects over another network.
 const RESOLVE_INTERVAL: Duration = Duration::from_secs(5);
 // Eyelid auto calibration keeps a decaying histogram of each eye's open readings (0.005 wide bins).
@@ -450,6 +465,9 @@ struct Smoother {
     lid_vertical: Option<f32>,
     // Left, right and combined raw x from the last sample above --gaze-down-hold-x-deg.
     down_hold_x: Option<[f32; 3]>,
+    // Per eye: since when its eyelid has been above relaxed open (see sustain_widen), and when it last was.
+    wide_since: [Option<f64>; 2],
+    wide_last: [f64; 2],
 }
 
 impl Smoother {
@@ -465,6 +483,8 @@ impl Smoother {
             last_gaze: [None; 3],
             lid_vertical: None,
             down_hold_x: None,
+            wide_since: [None; 2],
+            wide_last: [f64::NEG_INFINITY; 2],
         }
     }
 
@@ -560,6 +580,28 @@ impl Smoother {
         self.last_gaze = [None; 3];
         self.lid_vertical = None;
         self.down_hold_x = None;
+        self.wide_since = [None; 2];
+        self.wide_last = [f64::NEG_INFINITY; 2];
+    }
+
+    /// VRCFT eyelids with widening held back until it lasts: an eyelid above relaxed open is sent as relaxed open
+    /// until it has been above it for WIDEN_SUSTAIN, counting through short dips (WIDEN_RELEASE) and starting over
+    /// once it closes a third (WIDEN_RESET_BELOW). The Frame's brief jumps in openness around blinks then never show
+    /// as wide eyes, and a widen that is held shows WIDEN_SUSTAIN late. Below relaxed open nothing changes.
+    fn sustain_widen(&mut self, time: f64, lids: [f32; 2]) -> [f32; 2] {
+        std::array::from_fn(|eye| {
+            let lid = lids[eye];
+            if lid > LID_RELAXED {
+                self.wide_since[eye].get_or_insert(time);
+                self.wide_last[eye] = time;
+            } else if lid < WIDEN_RESET_BELOW || time - self.wide_last[eye] > WIDEN_RELEASE {
+                self.wide_since[eye] = None;
+            }
+            match self.wide_since[eye] {
+                Some(since) if time - since >= WIDEN_SUSTAIN => lid,
+                _ => lid.min(LID_RELAXED),
+            }
+        })
     }
 
     /// Below --gaze-down-hold-x-deg the Frame's sideways gaze jumps (by ~19° to the right when looking
@@ -1601,7 +1643,7 @@ fn process(settings: &Settings, smoother: &mut Smoother, scales: [f32; 2], data:
         };
         smoother.lid_vertical = Some(vertical);
         let mapped = lid_inputs(openness, vertical, scales, settings).map(|openness| lid_to_vrcft(openness, settings));
-        let mut lids = mapped;
+        let mut lids = smoother.sustain_widen(data.sample_time, mapped);
         smoother.filter(dt, &mut gaze, &mut lids, hold);
         let mut lids = sync_lids(lids, settings.lid_sync);
         if blink_stages {
@@ -2910,6 +2952,43 @@ mod tests {
         }
     }
 
+    /// Sent eyelids of unfitted eyes against the default lid marks (0.8 relaxed, 1.0 fully wide), open except for
+    /// the listed changes.
+    fn sent_lid_track(raw: bool, length: usize, changes: &[(usize, [f32; 2])]) -> Vec<[f32; 2]> {
+        let settings = Settings { raw, ..settings() };
+        run(&settings, &openness_track(length, changes)).iter().map(|sample| sample.lids).collect()
+    }
+
+    #[test]
+    fn a_widen_shows_only_once_it_lasts() {
+        let sustain = (WIDEN_SUSTAIN / f64::from(NOMINAL_DT)).round() as usize;
+        let wide = |from: usize, to: usize| (from..to).map(|i| (i, [1.0; 2])).collect::<Vec<_>>();
+        let relaxed = |lids: &[f32; 2]| lids.iter().all(|lid| *lid <= LID_RELAXED + 1e-6);
+        // A 200 ms jump to 1.000 right before a blink, and a 170 ms one right after it: never above relaxed open
+        let mut blink = wide(40, 58);
+        blink.extend((58..70).map(|i| (i, [0.1; 2])));
+        blink.extend(wide(70, 85));
+        let sent = sent_lid_track(false, 120, &blink);
+        assert!(sent.iter().all(relaxed), "{sent:?}");
+        // Held wide: relaxed open until it has lasted WIDEN_SUSTAIN (a sample later for the despike), then wide...
+        let mut held = wide(40, 140);
+        // ...on through a 45 ms dip back to relaxed open...
+        held.retain(|(i, _)| !(100..104).contains(i));
+        let sent = sent_lid_track(false, 160, &held);
+        assert!(sent[..40 + sustain].iter().all(relaxed), "{:?}", &sent[..40 + sustain]);
+        assert!(sent[40 + sustain + 12].iter().all(|lid| *lid > 0.95), "{:?}", sent[40 + sustain + 12]);
+        assert!(sent[110..140].iter().all(|lids| lids.iter().all(|lid| *lid > 0.9)), "{:?}", &sent[100..140]);
+        // ...and starting over after a blink
+        let mut again = wide(40, 100);
+        again.extend((100..110).map(|i| (i, [0.1; 2])));
+        again.extend(wide(110, 130));
+        let sent = sent_lid_track(false, 150, &again);
+        assert!(sent[90].iter().all(|lid| *lid > 0.95), "{:?}", sent[90]);
+        assert!(sent[110..].iter().all(relaxed), "{:?}", &sent[110..]);
+        // Unsmoothed output has no timed stages: wide at once
+        assert_eq!(sent_lid_track(true, 20, &wide(5, 6))[5], [1.0; 2]);
+    }
+
     #[test]
     fn a_send_error_is_logged_once_and_never_stops_the_process() {
         let addr: SocketAddr = "192.0.2.1:9000".parse().unwrap();
@@ -3331,9 +3410,11 @@ mod tests {
         assert!(neutral(receive(&listener).unwrap()));
         bridge.keep_livelink_alive();
         assert!(receive(&listener).is_none());
-        // Looking right and down (22.5°) with the left eye wide open: one packet per sample, as processed
+        // Looking right and down (22.5°) with the left eye wide open: one packet per sample, as processed (the
+        // widening shows once it has lasted WIDEN_SUSTAIN)
         let look = [(std::f32::consts::PI / 8.0).tan(), -(std::f32::consts::PI / 8.0).tan()];
-        for index in 0..3 {
+        let widened_from = (WIDEN_SUSTAIN / f64::from(NOMINAL_DT)).ceil() as usize;
+        for index in 0..widened_from + 3 {
             // (the rate limit is tested on its own below)
             bridge.livelink_throttle = Throttle::default();
             bridge.on_sample(reading(index, look, [1.0, 0.55])).unwrap();
@@ -3347,8 +3428,8 @@ mod tests {
                 assert!((openness * 0.75 + wide * 0.25 - lid).abs() < 1e-6);
                 assert_eq!([x, y], gaze);
             }
-            assert!(left.1 > 0.0 && right.0 < 1.0);
-            assert!(left.2 > 0.0 && left.3 < 0.0);
+            assert!(right.0 < 1.0 && left.2 > 0.0 && left.3 < 0.0);
+            assert_eq!(left.1 > 0.0, index >= widened_from, "{index}");
         }
         // Tracking runs, so no neutral packets in between
         bridge.keep_livelink_alive();
