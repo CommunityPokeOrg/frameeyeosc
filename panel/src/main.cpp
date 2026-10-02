@@ -94,10 +94,13 @@ struct Options {
     bool fakeTargetNull = false;
     bool fakeLocked = false;
     bool fakeConfigError = false;
+    bool fakeSourceError = false;
     bool fakeBroken = false;
     bool fakeWriteError = false;
     bool fakeCustom = false;
     bool fakeIndependent = false; ///< --fake-independent: independent_eyes on, the gaze pad per eye
+    std::string fakeDominantEye;  ///< --fake-dominant-eye: "left" / "right" ("Track Dominant Eye Only")
+    bool fakeOpennessSaturated = false;  ///< --fake-openness-saturated: a relaxed open eye reads 1.0
     std::string fakePrompt;       ///< vrchat / etvr / livelink
     std::string fakeUpdate;       ///< a made-up update state (see printUsage)
     std::string fakeFit;          ///< a made-up eye fit state (see printUsage)
@@ -203,10 +206,13 @@ void printUsage() {
         "      --fake-slow-tracker  The eye tracker delivers only 15 samples a second\n"
         "      --fake-locked     Some keys locked by the command line\n"
         "      --fake-config-error  frameeyeosc reports a config error\n"
+        "      --fake-source-error  frameeyeosc can't read the eye tracker (an unsupported shared-memory version)\n"
         "      --fake-broken     config.json can't be parsed\n"
         "      --fake-write-error  The panel failed to write config.json\n"
         "      --fake-custom     Gaze smoothing values that match no preset\n"
         "      --fake-independent  Move eyes separately (the left column shows each eye's gaze)\n"
+        "      --fake-dominant-eye left|right  \"Track Dominant Eye Only\" is on with that eye\n"
+        "      --fake-openness-saturated  A relaxed open eye reads 1.0 (SteamOS 0.4.3), so widening can't come through\n"
         "      --fake-prompt vrchat|etvr|livelink  The recommended-settings question\n"
         "      --fake-autostart on|off|missing|unknown\n"
         "      --fake-update checking|uptodate|available|manual|installing|installed|checkfailed|installfailed\n"
@@ -342,6 +348,8 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.fake = options.fakeLocked = true;
         } else if (arg == "--fake-config-error") {
             options.fake = options.fakeConfigError = true;
+        } else if (arg == "--fake-source-error") {
+            options.fake = options.fakeSourceError = true;
         } else if (arg == "--fake-broken") {
             options.fake = options.fakeBroken = true;
         } else if (arg == "--fake-write-error") {
@@ -350,6 +358,16 @@ bool parseOptions(int argc, char** argv, Options& options) {
             options.fake = options.fakeCustom = true;
         } else if (arg == "--fake-independent") {
             options.fake = options.fakeIndependent = true;
+        } else if (arg == "--fake-dominant-eye" && hasNext) {
+            options.fakeDominantEye = argv[++i];
+            if (options.fakeDominantEye != "left" && options.fakeDominantEye != "right") {
+                std::fprintf(stderr, "--fake-dominant-eye must be left or right: %s\n",
+                             options.fakeDominantEye.c_str());
+                return false;
+            }
+            options.fake = true;
+        } else if (arg == "--fake-openness-saturated") {
+            options.fake = options.fakeOpennessSaturated = true;
         } else if (arg == "--fake-prompt" && hasNext) {
             options.fakePrompt = argv[++i];
             if (options.fakePrompt != kOutputVrchat && options.fakePrompt != kOutputEtvr &&
@@ -665,7 +683,7 @@ PanelModel fakeModel(const Options& options) {
         }
         s.trackerRate = options.fakeSlowTracker ? 15.0 : 89.6;
         s.rate = options.fakePaused ? 0.0 : s.trackerRate;
-        s.tracking = !options.fakeNoTracking;
+        s.tracking = !options.fakeNoTracking && !options.fakeSourceError;
         if (s.tracking) {
             s.hasRaw = true;
             s.openness = {{0.81, 0.79}};
@@ -697,6 +715,11 @@ PanelModel fakeModel(const Options& options) {
         s.configPath = options.configPath;
         s.calibrationPath = "/home/steamos/.config/frameeyeosc/calibration";
         if (options.fakeConfigError) s.configError = "lid_closed must be below lid_open";
+        if (options.fakeSourceError) {
+            s.sourceError = "unsupported eye shared-memory version 6; supported: 4, 5";
+        }
+        s.dominantEye = options.fakeDominantEye;
+        s.opennessSaturated = options.fakeOpennessSaturated;
         s.effective = root;
         if (options.fakeLocked) {
             s.locked = {key::kOutput, key::kPort, key::kRaw, key::kLidOpen, key::kIndependentEyes, key::kGazeOffsetY};
@@ -907,8 +930,13 @@ int runPrint(const Options& options) {
                     status.scales.v[0], status.scales.v[1], status.learning ? "yes" : "no");
         std::string locked;
         for (const auto& name : status.locked) locked += " " + name;
-        std::printf("  locked:%s\n  config_error: %s\n  config_path: %s\n", locked.empty() ? " (none)" : locked.c_str(),
-                    status.configError.empty() ? "null" : status.configError.c_str(), status.configPath.c_str());
+        std::printf("  locked:%s\n  config_error: %s\n  source_error: %s\n  config_path: %s\n",
+                    locked.empty() ? " (none)" : locked.c_str(),
+                    status.configError.empty() ? "null" : status.configError.c_str(),
+                    status.sourceError.empty() ? "null" : status.sourceError.c_str(), status.configPath.c_str());
+        std::printf("  dominant_eye: %s, openness_saturated: %s\n",
+                    status.dominantEye.empty() ? "null" : status.dominantEye.c_str(),
+                    status.opennessSaturated ? "true" : "false");
     }
     const Autostart autostart = readAutostart();
     std::printf("autostart (%s): %s\n", kServiceName,
@@ -940,7 +968,8 @@ std::string statusSignature(const EyeStatus& s) {
                   s.rawGazeEye[0].v[1], s.rawGazeEye[1].v[0], s.rawGazeEye[1].v[1], s.sentGazeEye[0].v[0],
                   s.sentGazeEye[0].v[1], s.sentGazeEye[1].v[0], s.sentGazeEye[1].v[1]);
     signature += eyes;
-    signature += "|" + s.configError + "|" + s.configPath + "|" + s.calibrationPath + "|";
+    signature += "|" + s.configError + "|" + s.sourceError + "|" + s.dominantEye + "|" +
+                 (s.opennessSaturated ? "saturated" : "") + "|" + s.configPath + "|" + s.calibrationPath + "|";
     for (const auto& name : s.locked) signature += name + ",";
     if (s.effective.isObject()) signature += writeJson(s.effective);
     return signature;
@@ -1004,20 +1033,35 @@ long long writeCaptureRequest(PanelModel& model, const char* target, double seco
 }
 
 /**
- * Bring a config.json from 0.5.x or earlier up to date, once (see migrateLidScales), and read it again.
+ * Bring an older config.json up to date, once (see migrateLidScales and migrateGazePresets), and read it again.
  * @param model the model (its config is re-read after a write)
  */
 void migrateConfig(PanelModel& model) {
-    if (!model.config.exists || !model.config.error.empty() || model.config.root.get(key::kLidWiden) != nullptr) return;
-    std::string log;
+    if (!model.config.exists || !model.config.error.empty() || !configNeedsMigration(model.config.root)) return;
+    std::string lidLog;
+    std::string gazeLog;
+    bool lids = false;
+    bool gaze = false;
     std::string error;
-    const bool ok = updateConfigFile(model.configPath, [&log](JsonValue& root) { migrateLidScales(root, log); }, error);
+    const bool ok = updateConfigFile(
+        model.configPath,
+        [&](JsonValue& root) {
+            lids = migrateLidScales(root, lidLog);
+            gaze = migrateGazePresets(root, gazeLog);
+        },
+        error);
     if (!ok) {
-        std::fprintf(stderr, "[config] could not add lid_widen: %s\n", error.c_str());
+        std::fprintf(stderr, "[config] could not bring config.json up to date: %s\n", error.c_str());
         return;
     }
-    std::fprintf(stderr, "[config] from before 0.6.0: lid_widen = \"normal\"%s%s\n", log.empty() ? "" : "; ",
-                 log.c_str());
+    if (lids) {
+        std::fprintf(stderr, "[config] from before 0.6.0: lid_widen = \"normal\"%s%s\n", lidLog.empty() ? "" : "; ",
+                     lidLog.c_str());
+    }
+    if (gaze) {
+        std::fprintf(stderr, "[config] gaze presets from before version 2: %s\n",
+                     gazeLog.empty() ? "own values, kept" : gazeLog.c_str());
+    }
     model.config = readConfigFile(model.configPath);
 }
 

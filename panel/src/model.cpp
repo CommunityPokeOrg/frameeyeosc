@@ -11,12 +11,41 @@ namespace {
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
-/** Light / medium / strong: lower values smooth more (medium is frameeyeosc's default). */
+/**
+ * Light / medium / strong (medium is frameeyeosc's default): one soft follow, from light to strong steadier at rest and
+ * slower to settle after a saccade. Strong is the one a user picked in VRChat over both the old strong (it kept
+ * sliding) and the quick re-tune of the 0.7.0 test builds (0.2 / 1.5 / 2.5, which snapped to each new place); medium
+ * and light keep its low derivative cutoff and raise the rest step by step. Replayed on two 60-minute recordings
+ * (deadzone 0.005), 90% of a saccade is reached after 167 / 256 / 422 ms and 156 / 289 / 433 ms, the gaze slides on a
+ * median 0.61 / 1.59 / 3.33° and 0.68 / 1.84 / 3.86° between 0.1 and 0.5 s after the eyes landed, and jitter while
+ * fixating is 0.30 / 0.30 / 0.31° and 0.28 / 0.28 / 0.28°: each between the old preset of its name and the quick one.
+ */
 const GazePreset kGazePresets[3] = {
+    {0.5, 3.0, 0.8},
+    {0.3, 1.5, 0.5},
+    {0.2, 0.8, 0.3},
+};
+
+/**
+ * The presets up to 0.6.x. Their beta was so low that the filter eased off long before it had caught up with a saccade,
+ * so the gaze kept sliding after the eyes had stopped: with strong, 90% of the way after a median 589 ms.
+ */
+const GazePreset kOldGazePresets[3] = {
     {1.0, 1.5, 1.0},
     {0.4, 0.8, 0.5},
     {0.2, 0.4, 0.3},
 };
+
+/**
+ * The deadzone default up to 0.6.x (0.9°) and now (0.225°). A deadzone holds the gaze until the eyes move further than
+ * it, which with the soft presets also holds back the last part of each move: 0.01 would add about 90 ms to strong's
+ * 90% time and 0.2° to where it is 250 ms after landing, for 0.03° less jitter.
+ */
+constexpr double kOldGazeDeadzone = 0.02;
+constexpr double kNewGazeDeadzone = 0.005;
+
+/** The presets' names in the log. */
+const char* const kPresetNames[3] = {"light", "medium", "strong"};
 
 /** Eyelid smoothing recommended for ETVR (provisional; to be tuned on the headset). */
 constexpr double kEtvrLidMinCutoff = 10.0;
@@ -157,6 +186,53 @@ bool migrateLidScales(JsonValue& root, std::string& log) {
     }
     root.set(key::kLidWiden, JsonValue::makeString(kLidWidenModes[2]));
     return true;
+}
+
+bool migrateGazePresets(JsonValue& root, std::string& log) {
+    log.clear();
+    if (root.type != JsonValue::Type::Object) return false;
+    const JsonValue* version = root.get(key::kVersion);
+    if (version != nullptr && version->isNumber() && version->number >= kConfigVersion) return false;
+    const char* keys[3] = {key::kGazeMinCutoff, key::kGazeBeta, key::kGazeDCutoff};
+    double values[3];
+    bool written = true;
+    for (int i = 0; i < 3; ++i) {
+        const JsonValue* value = root.get(keys[i]);
+        written &= value != nullptr && value->isNumber();
+        values[i] = written ? value->number : kNaN;
+    }
+    for (int i = 0; written && i < 3; ++i) {
+        const GazePreset& old = kOldGazePresets[i];
+        if (std::fabs(old.minCutoff - values[0]) > 1e-6 || std::fabs(old.beta - values[1]) > 1e-6 ||
+            std::fabs(old.dCutoff - values[2]) > 1e-6) {
+            continue;
+        }
+        const GazePreset& now = kGazePresets[i];
+        root.set(key::kGazeMinCutoff, JsonValue::makeNumber(now.minCutoff));
+        root.set(key::kGazeBeta, JsonValue::makeNumber(now.beta));
+        root.set(key::kGazeDCutoff, JsonValue::makeNumber(now.dCutoff));
+        char text[160];
+        std::snprintf(text, sizeof(text), "gaze %s %g / %g / %g -> %g / %g / %g", kPresetNames[i], old.minCutoff,
+                      old.beta, old.dCutoff, now.minCutoff, now.beta, now.dCutoff);
+        log = text;
+        // A preset user's deadzone at the old default goes to the new one too; a deadzone of their own stays
+        const JsonValue* deadzone = root.get(key::kGazeDeadzone);
+        if (deadzone != nullptr && deadzone->isNumber() && std::fabs(deadzone->number - kOldGazeDeadzone) < 1e-9) {
+            root.set(key::kGazeDeadzone, JsonValue::makeNumber(kNewGazeDeadzone));
+            std::snprintf(text, sizeof(text), ", gaze_deadzone %g -> %g", kOldGazeDeadzone, kNewGazeDeadzone);
+            log += text;
+        }
+        break;
+    }
+    root.set(key::kVersion, JsonValue::makeNumber(kConfigVersion, true));
+    return true;
+}
+
+bool configNeedsMigration(const JsonValue& root) {
+    if (root.type != JsonValue::Type::Object) return false;
+    const JsonValue* version = root.get(key::kVersion);
+    const bool current = version != nullptr && version->isNumber() && version->number >= kConfigVersion;
+    return root.get(key::kLidWiden) == nullptr || !current;
 }
 
 WidenState widenState(const SettingsView& view) {

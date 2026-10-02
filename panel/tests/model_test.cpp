@@ -1,6 +1,7 @@
 // Tests for the panel's shared rules (model.cpp): what an eye fit writes and what "Reset" clears, which re-wear fit
-// auto_recenter asks for, and the output types behind the destination cards. Built with the panel as model-test;
-// exits non-zero on failure.
+// auto_recenter asks for, the output types behind the destination cards, the gaze presets and their migration, and
+// status.json's source_error, dominant_eye and openness_saturated. Built with the panel as model-test; exits non-zero
+// on failure.
 #include "model.h"
 
 #include <algorithm>
@@ -207,11 +208,124 @@ void testMigrateLidScales() {
     CHECK(plain.get(key::kLidWiden) != nullptr);
 }
 
+/**
+ * A config root with these gaze values (none written for a negative one) and this version (none for 0).
+ * @param minCutoff gaze_min_cutoff
+ * @param beta gaze_beta
+ * @param dCutoff gaze_d_cutoff
+ * @param deadzone gaze_deadzone
+ * @param version version
+ * @return the root object
+ */
+JsonValue gazeRoot(double minCutoff, double beta, double dCutoff, double deadzone, int version) {
+    JsonValue root;
+    root.type = JsonValue::Type::Object;
+    root.set(key::kLidWiden, JsonValue::makeString("high"));
+    if (version > 0) root.set(key::kVersion, JsonValue::makeNumber(version, true));
+    const char* keys[4] = {key::kGazeMinCutoff, key::kGazeBeta, key::kGazeDCutoff, key::kGazeDeadzone};
+    const double values[4] = {minCutoff, beta, dCutoff, deadzone};
+    for (int i = 0; i < 4; ++i) {
+        if (values[i] >= 0) root.set(keys[i], JsonValue::makeNumber(values[i]));
+    }
+    return root;
+}
+
+/**
+ * Which preset a config root's gaze values match, as the panel shows it.
+ * @param root the root object
+ * @return 0..2, or -1
+ */
+int presetOf(const JsonValue& root) {
+    PanelModel model;
+    model.config.exists = true;
+    model.config.root = root;
+    return matchingGazePreset(SettingsView(model));
+}
+
+/** Medium is frameeyeosc's default, and from light to strong each preset smooths more at rest. */
+void testGazePresets() {
+    const GazePreset* presets = gazePresets();
+    CHECK(findSetting(key::kGazeMinCutoff)->defaultNumber == presets[1].minCutoff);
+    CHECK(findSetting(key::kGazeBeta)->defaultNumber == presets[1].beta);
+    CHECK(findSetting(key::kGazeDCutoff)->defaultNumber == presets[1].dCutoff);
+    CHECK(findSetting(key::kGazeDeadzone)->defaultNumber == 0.005);
+    CHECK(findSetting(key::kVersion)->defaultNumber == kConfigVersion);
+    for (int i = 0; i < 2; ++i) {
+        CHECK(presets[i].minCutoff > presets[i + 1].minCutoff && presets[i].beta > presets[i + 1].beta);
+        CHECK(presets[i].dCutoff >= presets[i + 1].dCutoff);
+    }
+}
+
+/** Gaze values exactly at an old preset become the new preset of the same name, once; anything else stays. */
+void testMigrateGazePresets() {
+    const double old[3][3] = {{1.0, 1.5, 1.0}, {0.4, 0.8, 0.5}, {0.2, 0.4, 0.3}};
+    std::string log;
+    for (int i = 0; i < 3; ++i) {
+        JsonValue root = gazeRoot(old[i][0], old[i][1], old[i][2], 0.02, 1);
+        CHECK(presetOf(root) == -1 && configNeedsMigration(root));
+        CHECK(migrateGazePresets(root, log));
+        CHECK(presetOf(root) == i);
+        CHECK(std::fabs(numberIn(root, key::kGazeDeadzone) - 0.005) < 1e-9);
+        CHECK(numberIn(root, key::kVersion) == kConfigVersion && root.get(key::kVersion)->integer);
+        CHECK(log.find(" -> ") != std::string::npos && log.find("gaze_deadzone 0.02 -> 0.005") != std::string::npos);
+        CHECK(!configNeedsMigration(root));
+        // Once only: the old values written again afterwards (by hand) stay
+        root = gazeRoot(old[i][0], old[i][1], old[i][2], 0.02, kConfigVersion);
+        CHECK(!migrateGazePresets(root, log) && numberIn(root, key::kGazeBeta) == old[i][1]);
+    }
+    // No version at all counts as 1
+    JsonValue unversioned = gazeRoot(0.4, 0.8, 0.5, 0.02, 0);
+    CHECK(configNeedsMigration(unversioned) && migrateGazePresets(unversioned, log) && presetOf(unversioned) == 1);
+    // Own values: kept, and so is their deadzone; only the version is written
+    JsonValue own = gazeRoot(0.2, 0.4, 0.35, 0.02, 1);
+    CHECK(migrateGazePresets(own, log) && log.empty());
+    CHECK(numberIn(own, key::kGazeDCutoff) == 0.35 && numberIn(own, key::kGazeDeadzone) == 0.02);
+    CHECK(numberIn(own, key::kVersion) == kConfigVersion);
+    // A preset with a deadzone of one's own: the preset moves, the deadzone stays
+    JsonValue tuned = gazeRoot(0.2, 0.4, 0.3, 0.015, 1);
+    CHECK(migrateGazePresets(tuned, log) && presetOf(tuned) == 2 && numberIn(tuned, key::kGazeDeadzone) == 0.015);
+    CHECK(log.find("deadzone") == std::string::npos);
+    // Values not written: frameeyeosc's defaults (the new medium) apply, nothing to match
+    JsonValue empty = gazeRoot(-1, -1, -1, -1, 0);
+    CHECK(migrateGazePresets(empty, log) && log.empty() && empty.get(key::kGazeMinCutoff) == nullptr);
+    // Needed for a version 1 file, and for one without lid_widen (from before 0.6.0) whatever its version
+    CHECK(configNeedsMigration(gazeRoot(0.3, 1.5, 0.5, 0.005, 1)));
+    CHECK(!configNeedsMigration(gazeRoot(0.3, 1.5, 0.5, 0.005, kConfigVersion)));
+    JsonValue noWiden;
+    noWiden.type = JsonValue::Type::Object;
+    noWiden.set(key::kVersion, JsonValue::makeNumber(kConfigVersion, true));
+    CHECK(configNeedsMigration(noWiden));
+}
+
 /** The destination cards' button arguments stand for the output types both ways. */
 void testOutputArgs() {
     for (int arg = 0; arg < 3; ++arg) CHECK(argOfOutput(outputOfArg(arg)) == arg);
     CHECK(std::string(outputOfArg(2)) == kOutputLivelink);
     CHECK(argOfOutput("osc") == -1);
+}
+
+/** status.json says why frameeyeosc can't read the eye tracker in source_error; null or missing means it can. */
+void testSourceError() {
+    const std::string reason = "unsupported eye shared-memory version 6; supported: 4, 5";
+    EyeStatus status = parseStatus("{\"pid\": 1, \"tracking\": false, \"source_error\": \"" + reason + "\"}", 0, false);
+    CHECK(status.present && !status.tracking && status.sourceError == reason && status.configError.empty());
+    status = parseStatus("{\"pid\": 1, \"tracking\": true, \"source_error\": null}", 0, false);
+    CHECK(status.present && status.tracking && status.sourceError.empty());
+    // From a frameeyeosc older than the field
+    CHECK(parseStatus("{\"pid\": 1}", 0, false).sourceError.empty());
+}
+
+/** status.json's dominant_eye ("left" / "right", else nothing) and openness_saturated (missing = false). */
+void testDominantEyeAndSaturation() {
+    EyeStatus status = parseStatus("{\"pid\": 1, \"dominant_eye\": \"right\", \"openness_saturated\": true}", 0, false);
+    CHECK(status.dominantEye == "right" && status.opennessSaturated);
+    status = parseStatus("{\"pid\": 1, \"dominant_eye\": \"left\", \"openness_saturated\": false}", 0, false);
+    CHECK(status.dominantEye == "left" && !status.opennessSaturated);
+    status = parseStatus("{\"pid\": 1, \"dominant_eye\": null}", 0, false);
+    CHECK(status.dominantEye.empty() && !status.opennessSaturated);
+    // From frameeyeosc before 0.7.0, or a value this doesn't know
+    CHECK(parseStatus("{\"pid\": 1}", 0, false).dominantEye.empty());
+    CHECK(parseStatus("{\"pid\": 1, \"dominant_eye\": \"both\"}", 0, false).dominantEye.empty());
 }
 
 }  // namespace
@@ -227,6 +341,10 @@ int main() {
     testOutputArgs();
     testWidenState();
     testMigrateLidScales();
+    testSourceError();
+    testDominantEyeAndSaturation();
+    testGazePresets();
+    testMigrateGazePresets();
     if (gFailures == 0) std::printf("model-test: all passed\n");
     return gFailures == 0 ? 0 : 1;
 }

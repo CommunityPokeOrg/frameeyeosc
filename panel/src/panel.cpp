@@ -953,6 +953,17 @@ void EyePanel::drawStatus(const Pen& pen, const UiText& t, const PanelModel& m) 
 
     // Gaze: raw = ring, sent = filled dot
     pen.text(x0, 430, t.gazeTitle, 15, kTextMuted, true);
+    // "Track Dominant Eye Only": the Frame tracks one eye, and both eyes get its gaze. Said on the title
+    // line, right-aligned (the per-eye legend gives it its place)
+    const char* oneEye = !s.running              ? nullptr
+                         : s.dominantEye == "left"  ? t.dominantEyeLeft
+                         : s.dominantEye == "right" ? t.dominantEyeRight
+                                                    : nullptr;
+    if (oneEye != nullptr) {
+        const double room = x1 - x0 - pen.measure(t.gazeTitle, 15, true) - 14;
+        const double size = fitSize(pen, oneEye, 14, 10, room, false);
+        pen.text(x1 - pen.measure(oneEye, size, false), 430, oneEye, size, kText);
+    }
     /**
      * A gaze pad: crosshair, a circle at half range, the raw gaze as a ring and the sent gaze as a dot, seen the way
      * the user looks (+x right, +y up).
@@ -1007,7 +1018,7 @@ void EyePanel::drawStatus(const Pen& pen, const UiText& t, const PanelModel& m) 
     const bool perEye = SettingsView(m).flag(key::kIndependentEyes);
     if (perEye) {
         // The legend on the title line: ring = raw, the two eye colors = sent
-        {
+        if (oneEye == nullptr) {
             const double sentW = pen.measure(t.legendSent, 14, false);
             const double rawW = pen.measure(t.legendRaw, 14, false);
             double lx = x1 - sentW;
@@ -1050,7 +1061,8 @@ void EyePanel::drawStatus(const Pen& pen, const UiText& t, const PanelModel& m) 
                  kTextMuted);
     }
 
-    // One red message at the bottom: the panel's own failure first, then frameeyeosc's config error
+    // One red message at the bottom: the panel's own failure first, then why frameeyeosc can't read the eye tracker,
+    // then its config error
     std::string message;
     if (m.panelErrorBroken) {
         message = t.errConfigBroken;
@@ -1060,6 +1072,8 @@ void EyePanel::drawStatus(const Pen& pen, const UiText& t, const PanelModel& m) 
         message = t.errConfigBroken;
     } else if (m.autostart.writeFailed) {
         message = t.errAutostart;
+    } else if (s.running && !s.sourceError.empty()) {
+        message = std::string(t.sourceErrorPrefix) + s.sourceError;
     } else if (s.running && !s.configError.empty()) {
         message = std::string(t.errorPrefix) + s.configError;
     }
@@ -1434,7 +1448,7 @@ void EyePanel::drawOutput(const Pen& pen, const UiText& t, const PanelModel& m, 
     }
 }
 
-void EyePanel::drawGaze(const Pen& pen, const UiText& t, const SettingsView& v) {
+void EyePanel::drawGaze(const Pen& pen, const UiText& t, const PanelModel& m, const SettingsView& v) {
     double y = kRowTop;
     const double cy = (kRowH - kControlH) / 2;
     const bool raw = v.flag(key::kRaw);
@@ -1501,10 +1515,11 @@ void EyePanel::drawGaze(const Pen& pen, const UiText& t, const SettingsView& v) 
                     on ? formatSetting(key::kGazeHoldBelow, value) : std::string("—"), on, locked);
     }
     y += kRowH + kRowGap;
-    // Independent eyes
+    // Independent eyes; while the Frame tracks one eye alone, both eyes get its gaze either way
     {
         const bool locked = v.locked(key::kIndependentEyes);
-        drawRowLabel(pen, t, y, kRowH, t.rowIndependent, t.hintIndependent, locked);
+        const bool oneEye = m.status.running && !m.status.dominantEye.empty();
+        drawRowLabel(pen, t, y, kRowH, t.rowIndependent, oneEye ? t.hintIndependentOneEye : t.hintIndependent, locked);
         drawSegmented(pen, kControlX, y + cy, 300, kControlH,
                       {{t.on, {PanelAction::SetBool, key::kIndependentEyes, 1}},
                        {t.off, {PanelAction::SetBool, key::kIndependentEyes, 0}}},
@@ -1999,6 +2014,11 @@ void EyePanel::drawLids(const Pen& pen, const UiText& t, const PanelModel& m, co
             if (widen.room[0] && !widen.room[1]) note = t.widenFollowsRight;
             if (!widen.room[0] && !widen.room[1]) note = t.widenNoRoom;
         }
+        // On a SteamOS where a relaxed open eye already reads 1.0 there is nothing above it to widen by
+        if (s.running && s.opennessSaturated) {
+            note = t.opennessSaturated;
+            notice = true;
+        }
         pen.text(kInnerX, y + 18, note, fitSize(pen, note, 15, 11, kInnerRight - bw - 12 - kInnerX, notice),
                  notice ? kText : kTextMuted, notice);
     }
@@ -2006,8 +2026,11 @@ void EyePanel::drawLids(const Pen& pen, const UiText& t, const PanelModel& m, co
     {
         const double top = y + marksShift;
         if (!anyFitted) {
-            pen.text(kInnerX, top + 16, t.marksTitle,
-                     fitSize(pen, t.marksTitle, 15, 11, kInnerRight - kInnerX, false), kTextMuted);
+            // Marks 3 and 4 widen these eyes, which can't happen while the openness tops out at 1.0
+            const bool saturated = s.running && s.opennessSaturated;
+            const char* title = saturated ? t.opennessSaturated : t.marksTitle;
+            pen.text(kInnerX, top + 16, title, fitSize(pen, title, 15, 11, kInnerRight - kInnerX, saturated),
+                     saturated ? kText : kTextMuted, saturated);
         }
         const double barX = kInnerX + 34;
         const double barW = kInnerRight - barX;
@@ -2578,7 +2601,7 @@ void EyePanel::render(const PanelModel& model) {
     switch (tab_) {
         case PanelTab::Basic: drawBasic(pen, t, model, view); break;
         case PanelTab::Output: drawOutput(pen, t, model, view); break;
-        case PanelTab::Gaze: drawGaze(pen, t, view); break;
+        case PanelTab::Gaze: drawGaze(pen, t, model, view); break;
         case PanelTab::EyeFit: drawEyeFit(pen, t, model, view); break;
         case PanelTab::Lids: drawLids(pen, t, model, view); break;
         case PanelTab::Advanced: drawAdvanced(pen, t, model, view); break;

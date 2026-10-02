@@ -333,9 +333,10 @@ private:
      * The Gaze tab.
      * @param pen drawing tools
      * @param t texts
+     * @param model what is shown (the status, for the one-eye hint)
      * @param view the settings shown
      */
-    void drawGaze(const Pen& pen, const UiText& t, const SettingsView& view);
+    void drawGaze(const Pen& pen, const UiText& t, const PanelModel& model, const SettingsView& view);
 
     /**
      * The Eye fit tab: one button for the whole fit (gaze and eyelids), re-centering, the result, and the values

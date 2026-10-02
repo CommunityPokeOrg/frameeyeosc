@@ -72,6 +72,9 @@ struct EyeStatus {
     std::string configPath;
     std::string calibrationPath;
     std::string configError;          ///< one line from frameeyeosc; empty if none
+    std::string sourceError;          ///< why frameeyeosc can't read the eye tracker (it keeps trying); empty if it can
+    std::string dominantEye;  ///< "left" / "right" while "Track Dominant Eye Only" is on; empty otherwise
+    bool opennessSaturated = false;  ///< a relaxed open eye reads 1.0 (SteamOS 0.4.3), so widening can't come through
     std::vector<std::string> locked;  ///< config keys set on the command line
     JsonValue effective;              ///< the settings in effect (config keys)
     GazeCaptureStatus capture;        ///< the latest gaze capture

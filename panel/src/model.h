@@ -142,6 +142,24 @@ WidenState widenState(const SettingsView& view);
  */
 bool migrateLidScales(JsonValue& root, std::string& log);
 
+/**
+ * Bring a settings file from before the version 2 presets (version 1 or none) up to date, once: gaze smoothing that
+ * exactly matches one of the old light / medium / strong presets becomes the new preset of the same name, and if it
+ * did, a deadzone at the old default (0.02) becomes the new one (0.005). Any other values are the user's own and stay.
+ * version is then written as 2, which marks the file as done.
+ * @param root the config's root object (changed in place)
+ * @param log what was changed, for the log (empty if nothing but the version)
+ * @return true if root changed (the version was older)
+ */
+bool migrateGazePresets(JsonValue& root, std::string& log);
+
+/**
+ * Whether a settings file still needs migrateLidScales or migrateGazePresets (no lid_widen, or a version below 2).
+ * @param root the config's root object
+ * @return true if one of them would change it
+ */
+bool configNeedsMigration(const JsonValue& root);
+
 /** The fit run by itself when the headset is put on (auto_recenter). */
 enum class AutoRecenter { Off, Center, Tilt };
 

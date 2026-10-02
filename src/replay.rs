@@ -2,7 +2,9 @@
 //! processing (--replay) to compare settings by a few numbers.
 
 use crate::config::{LidFit, Settings};
-use crate::{CAL_SETTLE, EyeData, LidCalibration, MAX_GAP, NOMINAL_DT, Sample, Smoother, TIMEOUT, gaze_angles, step};
+use crate::{
+    CAL_SETTLE, EyeData, LidCalibration, MAX_GAP, NOMINAL_DT, Sample, Saturation, Smoother, TIMEOUT, gaze_angles, step,
+};
 use std::error::Error;
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
@@ -491,6 +493,31 @@ fn estimate_lid_fit(samples: &[EyeData]) -> Option<[LidFit; 2]> {
     }))
 }
 
+/// Whether and from when the live loop would have reported the openness as saturated (status.json's
+/// openness_saturated), as a report line.
+fn saturation_line(samples: &[EyeData]) -> String {
+    let mut saturation = Saturation::default();
+    let mut first = None;
+    let mut on = 0;
+    for data in samples {
+        saturation.add(data);
+        if saturation.on {
+            on += 1;
+            first.get_or_insert(data.sample_time);
+        }
+    }
+    let start = samples.first().map_or(0.0, |data| data.sample_time);
+    match first {
+        Some(time) => format!(
+            "Openness saturated (relaxed open eyes read 1.000, so widening can't come through): from {:.1} s in, \
+             {:.1}% of the samples\n",
+            time - start,
+            on as f64 * 100.0 / samples.len() as f64
+        ),
+        None => "Openness not saturated (widening can come through)\n".to_owned(),
+    }
+}
+
 /// p50 / p90 / p99 of each eye's larger x/y variance in one of the covariance fields.
 fn covariance_line(samples: &[EyeData], label: &str, field: fn(&EyeData) -> [[f32; 3]; 2], limit: f32) -> String {
     let eyes = [0, 1].map(|eye| {
@@ -558,6 +585,8 @@ fn report(input: &Path, samples: &[EyeData], skipped: usize, settings: &Settings
         }
         None => text.push_str("\nNo lid fit can be read from this recording (it needs up, ahead, down and eyes shut).\n"),
     }
+    text.push('\n');
+    text.push_str(&saturation_line(samples));
     text.push_str(&format!(
         "\nCovariance, larger of x/y per eye: p50 / p90 / p99 (share above gaze_quality_limit {})\n",
         settings.gaze_quality_limit
@@ -691,8 +720,10 @@ mod tests {
         // Held for --blink-hold-ms (80) from the last closed sample.
         assert!(after.shut_ms >= 80.0, "{after:?}");
         assert!(after.blink_jump < before.blink_jump, "{before:?} {after:?}");
-        // The deadzone keeps both still while fixating; the left eye's wild stretch is not a fixation.
-        assert!(after.jitter <= before.jitter, "{before:?} {after:?}");
+        // The filter and the deadzone keep both all but still while fixating (under 0.02° against noise of about 0.2°,
+        // a 0.004 spread against the deadzone's 0.005), the despike more so; the left eye's wild stretch is not a
+        // fixation.
+        assert!(after.jitter <= before.jitter && before.jitter < 0.02, "{before:?} {after:?}");
         assert!(after.flicker <= before.flicker, "{before:?} {after:?}");
     }
 
@@ -720,6 +751,22 @@ mod tests {
         assert_eq!((right.up, right.open, right.down, right.closed), (0.85, 0.8, 0.62, 0.26));
         assert!(estimate_lid_fit(&samples[..540]).is_none());
         assert_eq!(open_reference(&samples), [0.9, 0.8]);
+    }
+
+    #[test]
+    fn saturation_is_reported_from_when_it_shows() {
+        // The synthetic recording: six seconds, open well below 1.000
+        assert_eq!(saturation_line(&synthetic()), "Openness not saturated (widening can come through)\n");
+        let samples: Vec<EyeData> = (0..900)
+            .map(|i| EyeData {
+                sample_time: 50.0 + f64::from(i) / 90.0,
+                openness: [1.0, 0.97],
+                ..EyeData::default()
+            })
+            .collect();
+        let line = saturation_line(&samples);
+        assert!(line.starts_with("Openness saturated ("), "{line}");
+        assert!(line.ends_with(": from 6.7 s in, 33.4% of the samples\n"), "{line}");
     }
 
     #[test]
