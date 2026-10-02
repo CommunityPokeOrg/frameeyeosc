@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.0 (2026-10-03)
+## 0.7.0 (2026-10-02)
 
 A softer gaze that settles where the eyes stop, fitted eyelids that stay open, no wide-eyed flash before a blink, frameeyeosc that waits for the eye tracker instead of exiting, and what SteamOS 0.4.3 changed. Measured by replaying two 60-minute VRChat recordings (2026-10-01 22:48, eyelid widening off, and 01:09, "More") and three recordings on SteamOS 0.4.3 (2026-10-02).
 
