@@ -725,11 +725,20 @@ fn write_calibration(path: &Path, [left, right]: [f32; 2]) -> io::Result<()> {
     fs::rename(temporary, path)
 }
 
-/// A fitted eye's expected open reading for an up/down gaze (-1..1): a line through its down, straight
-/// ahead and up readings, carried on past them, and never below half the straight-ahead one.
+/// A fitted eye's expected open reading for an up/down gaze (-1..1): a line through its down, straight-ahead and up
+/// readings, held at the down and up readings beyond them (15° down and up), never above the straight-ahead reading
+/// and never below half of it.
+///
+/// Never above the straight-ahead reading: fits often read an eye more open looking up or down than straight ahead
+/// (one user's left eye 0.833 down, 0.703 ahead and 0.860 up), but over a 60-minute recording that eye's openness was
+/// flat (0.74-0.77 from 20° down to 15° up). Expecting more there sent a relaxed eye as half closed 562 times an
+/// hour and below 0.6 30.8% of the time; capped and held, 0 times and 8.9%. Looking down may still expect less, which
+/// is what the fit is for. Held beyond the fitted readings: the line carried on past them made those mistakes larger
+/// the further the eyes went.
 fn expected_open(fit: &LidFit, vertical: f32) -> f32 {
+    let vertical = vertical.clamp(-LID_FIT_PITCH, LID_FIT_PITCH);
     let slope = if vertical >= 0.0 { fit.up - fit.open } else { fit.open - fit.down };
-    (fit.open + slope * vertical / LID_FIT_PITCH).max(0.5 * fit.open)
+    (fit.open + slope * vertical / LID_FIT_PITCH).clamp(0.5 * fit.open, fit.open)
 }
 
 /// A fitted eye's openness on the --lid-closed / --lid-open scale: its closed reading (plus a margin)
@@ -791,7 +800,7 @@ fn fitted_lid(openness: f32, vertical: f32, fit: &LidFit, settings: &Settings) -
         return lid_open;
     };
     let start_at = expected + start;
-    // Looking up raises the expected reading, and the openness still stops at 1.000: keep some range
+    // An eye that reads near 1.000 straight ahead has little room below where the openness stops: keep some range
     let full_at = (expected + full).min(OPENNESS_CAP).max(start_at + 0.01);
     if openness <= start_at {
         lid_open + (lid_widen_start - lid_open) * (openness - expected) / start
@@ -2380,14 +2389,57 @@ mod tests {
     }
 
     #[test]
-    fn expected_openness_follows_the_gaze_up_and_down() {
+    fn expected_openness_follows_the_gaze_down_but_never_tops_straight_ahead() {
+        // Left: 0.95 up, 0.9 straight ahead, 0.7 down
         let fit = fitted().lid_fit()[0].unwrap();
         assert!((expected_open(&fit, 0.0) - 0.9).abs() < 1e-6);
-        assert!((expected_open(&fit, LID_FIT_PITCH) - 0.95).abs() < 1e-6);
+        // Down: along the line to the down reading, and held there beyond it (15° down)
+        assert!((expected_open(&fit, -0.5 * LID_FIT_PITCH) - 0.8).abs() < 1e-6);
         assert!((expected_open(&fit, -LID_FIT_PITCH) - 0.7).abs() < 1e-6);
-        // Carried on past the down reading, but never below half the straight-ahead one.
-        assert!((expected_open(&fit, -1.5 * LID_FIT_PITCH) - 0.6).abs() < 1e-6);
-        assert!((expected_open(&fit, -1.0) - 0.45).abs() < 1e-6);
+        for vertical in [-1.5 * LID_FIT_PITCH, -0.75, -1.0] {
+            assert!((expected_open(&fit, vertical) - 0.7).abs() < 1e-6, "{vertical}");
+        }
+        // Up reads more open in the fit, but no more than straight ahead is ever expected
+        for vertical in [0.1, LID_FIT_PITCH, 0.5, 1.0] {
+            assert_eq!(expected_open(&fit, vertical), 0.9, "{vertical}");
+        }
+        // A fit more open up and down than straight ahead (one user's left eye, 2026-10-01): flat everywhere
+        let v_shape = LidFit {
+            closed: 0.205,
+            up: 0.86,
+            open: 0.703,
+            down: 0.833,
+        };
+        for vertical in [-1.0, -LID_FIT_PITCH, -0.1, 0.0, 0.1, LID_FIT_PITCH, 1.0] {
+            assert_eq!(expected_open(&v_shape, vertical), 0.703, "{vertical}");
+        }
+        // An eye that reads less open looking up follows that, and holds it beyond 15° up
+        let lower_up = LidFit { up: 0.8, ..fit };
+        assert!((expected_open(&lower_up, 0.5 * LID_FIT_PITCH) - 0.85).abs() < 1e-6);
+        for vertical in [LID_FIT_PITCH, 0.6, 1.0] {
+            assert!((expected_open(&lower_up, vertical) - 0.8).abs() < 1e-6, "{vertical}");
+        }
+        // Never below half the straight-ahead reading, however low the down one
+        let steep = LidFit {
+            closed: 0.1,
+            up: 0.9,
+            open: 0.9,
+            down: 0.3,
+        };
+        assert!((expected_open(&steep, -LID_FIT_PITCH) - 0.45).abs() < 1e-6);
+        assert!((expected_open(&steep, -1.0) - 0.45).abs() < 1e-6);
+        // From straight ahead outwards it only ever falls or stays, within the fitted readings
+        for fit in [fit, v_shape, lower_up, steep] {
+            for direction in [-1.0_f32, 1.0] {
+                let mut last = expected_open(&fit, 0.0);
+                for step in 1..=100 {
+                    let value = expected_open(&fit, direction * step as f32 / 100.0);
+                    assert!(value <= last + 1e-6 && value <= fit.open, "{fit:?} {direction} {step}");
+                    assert!(value >= fit.up.min(fit.down).max(0.5 * fit.open).min(fit.open) - 1e-6, "{fit:?}");
+                    last = value;
+                }
+            }
+        }
     }
 
     #[test]
@@ -2480,9 +2532,17 @@ mod tests {
             assert!((right(half) - 0.875).abs() < 1e-3, "{widen:?}: {}", right(half));
             assert!((right(0.8 + full) - 1.0).abs() < 1e-5, "{widen:?}");
             assert_eq!(right(1.0), 1.0);
-            // Relative to the expected reading for where the eyes look: looking up the right eye reads 0.82
-            let up = lid_inputs([0.96, 0.82 + start - 0.001], LID_FIT_PITCH, [1.0; 2], &settings);
-            assert!((lid_to_vrcft(up[1], &settings) - 0.75).abs() < 1e-5);
+            // Relative to the expected reading for where the eyes look, which is never above the straight-ahead one:
+            // looking up (fitted 0.82 there) widening starts and is full at the same readings as straight ahead...
+            let up = |raw: f32| lid_to_vrcft(lid_inputs([0.96, raw], LID_FIT_PITCH, [1.0; 2], &settings)[1], &settings);
+            assert!((up(0.8 + start - 0.001) - 0.75).abs() < 1e-5, "{widen:?}");
+            assert!(up(0.8 + start + 0.01) > 0.75, "{widen:?}");
+            assert!((up(0.8 + full) - 1.0).abs() < 1e-5, "{widen:?}");
+            // ...and looking down (0.7 there) from the down reading
+            let down =
+                |raw: f32| lid_to_vrcft(lid_inputs([0.96, raw], -LID_FIT_PITCH, [1.0; 2], &settings)[1], &settings);
+            assert!((down(0.7 + start - 0.001) - 0.75).abs() < 1e-5, "{widen:?}");
+            assert!((down(0.7 + full) - 1.0).abs() < 1e-5, "{widen:?}");
         }
         // A +0.10 widen: fully with "high", partly with "normal", not with "low"
         let widened = |widen| sent_lids(&user_fit(widen), [0.945, 0.935], [1.0; 2])[1];
@@ -2626,8 +2686,12 @@ mod tests {
                 }
             }
         }
-        // The case that stepped before: 45° down, where the expected reading is far below the open one
-        let settings = user_fit(Widen::Normal);
+        // The case that stepped before: far down, where the expected reading is below the floor of the range (a down
+        // reading of 0.4 against 0.835 straight ahead)
+        let settings = Settings {
+            lid_fit_down_right: Some(0.4),
+            ..user_fit(Widen::Normal)
+        };
         let right = settings.lid_fit()[1].unwrap();
         let expected = expected_open(&right, -1.0);
         let at = lid_to_vrcft(fitted_lid(expected, -1.0, &right, &settings), &settings);
@@ -2810,7 +2874,7 @@ mod tests {
             ..settings()
         };
         let fit = settings.lid_fit()[0].unwrap();
-        // 22° down the expected open reading is floored at 0.45, only 0.05 above closed; the range is
+        // 22° down the expected open reading is held at the down reading, 0.5, only 0.1 above closed; the range is
         // floored at half the straight-ahead one (0.25), so 0.05 of wobble moves the lid a fifth of the way.
         let vertical = -22.0 / 45.0;
         let step_lid = fitted_openness(0.5, vertical, &fit, &settings) - fitted_openness(0.45, vertical, &fit, &settings);
@@ -2819,6 +2883,31 @@ mod tests {
         // Straight ahead nothing changes: the range there is the whole one.
         let ahead = fitted_openness(0.9, 0.0, &fit, &settings);
         assert!((ahead - settings.lid_open).abs() < 1e-5);
+    }
+
+    #[test]
+    fn widening_stays_reachable_wherever_the_eyes_look() {
+        let generic = Settings {
+            lid_fit_open_right: Some(0.8),
+            lid_fit_up_right: Some(0.82),
+            ..fitted()
+        };
+        for widen in [Widen::Low, Widen::Normal, Widen::High] {
+            for base in [user_fit(widen), generic.clone()] {
+                let settings = Settings { lid_widen: widen, ..base };
+                let fit = settings.lid_fit()[1].unwrap();
+                assert!(widen_room(&fit, widen));
+                let (start, _) = widen_offsets(widen).unwrap();
+                for vertical in [-1.0, -0.5, -LID_FIT_PITCH, -0.1, 0.0, 0.1, LID_FIT_PITCH, 0.5, 1.0] {
+                    let lid = |raw: f32| lid_to_vrcft(fitted_lid(raw, vertical, &fit, &settings), &settings);
+                    // Widening starts at most `start` above the straight-ahead reading, and is full by 1.000
+                    let begins = open_reading(&fit, vertical) + start;
+                    assert!(begins <= fit.open + start + 1e-6, "{widen:?} {vertical}");
+                    assert!(lid(begins + 0.01) > 0.75, "{widen:?} {vertical}");
+                    assert_eq!(lid(OPENNESS_CAP), 1.0, "{widen:?} {vertical}");
+                }
+            }
+        }
     }
 
     #[test]
