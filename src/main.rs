@@ -9,6 +9,7 @@ mod status;
 
 use capture::{Capture, CaptureResult, CaptureState};
 use clap::{CommandFactory, FromArgMatches, Parser};
+use frameeyeosc::extensions::{self, Envelope};
 use config::{ActiveType, Config, LidFit, OutputKind, Reload, Settings, Widen};
 use memmap2::{MmapMut, MmapOptions};
 use rosc::{OscMessage, OscPacket, OscType, encoder};
@@ -283,6 +284,10 @@ struct Args {
     /// Send unsmoothed values (eyelid remapping still applies)
     #[arg(long)]
     raw: bool,
+    /// Do not join the extensions bus: other apps can't discover or message frameeyeosc
+    /// (docs/extensions.md)
+    #[arg(long)]
+    no_extensions: bool,
     /// One Euro minimum cutoff in Hz for gaze; lower is steadier at rest
     #[arg(long, default_value_t = 0.3)]
     gaze_min_cutoff: f32,
@@ -1970,6 +1975,8 @@ struct Bridge {
     capture_result: Option<CaptureResult>,
     // The panel's debug gaze dots (only while gaze_debug_dots is on).
     dots: dots::DotStream,
+    // The extensions bus registration (only while the `extensions` setting is on).
+    extensions: Option<extensions::Extension>,
     // When the last neutral Live Link packet went out.
     livelink_neutral: Option<Instant>,
     // Keeps the Live Link samples at or below LIVELINK_MAX_HZ.
@@ -2000,6 +2007,9 @@ impl Bridge {
         }
         self.output.set_target(Target::of(&settings));
         self.smoother.configure(&settings);
+        if self.settings.extensions != settings.extensions {
+            self.extensions = if settings.extensions { register_extension() } else { None };
+        }
         if reset_calibration {
             eprintln!("Starting eyelid calibration over");
             self.calibration.reset(settings.lid_open);
@@ -2114,6 +2124,75 @@ impl Bridge {
         }
     }
 
+    /// Answer whatever arrived on the extensions bus since the last call.
+    fn poll_extensions(&mut self) {
+        let Some(bus) = self.extensions.as_mut() else {
+            return;
+        };
+        for message in bus.poll() {
+            let (kind, data) = self.extension_reply(&message);
+            if let Some(bus) = self.extensions.as_mut()
+                && let Err(error) = bus.reply(&message, &kind, data)
+            {
+                eprintln!("Could not reply to extension {:?}: {error}", message.from);
+            }
+        }
+    }
+
+    /// What a peer's message gets back: (reply kind, payload). Unknown kinds get an error
+    /// reply rather than silence, so a sender can tell "no such kind" from "app gone".
+    fn extension_reply(&self, message: &Envelope) -> (String, serde_json::Value) {
+        match message.kind.as_str() {
+            "ping" => (
+                "pong".into(),
+                serde_json::json!({"time": status::unix_time(SystemTime::now())}),
+            ),
+            "get-status" => ("status".into(), self.extension_status()),
+            "get-eyes" => ("eyes".into(), self.extension_eyes()),
+            other => (
+                "error".into(),
+                serde_json::json!({"reason": format!("unknown kind {other}")}),
+            ),
+        }
+    }
+
+    /// A compact status for other apps: what status.json tells the panel, minus the fields
+    /// only the panel needs.
+    fn extension_status(&self) -> serde_json::Value {
+        serde_json::json!({
+            "sending": self.settings.sending,
+            "output": self.settings.output,
+            "tracking": self.active_since.is_some(),
+            "target": self.output.addr().map(|addr| addr.to_string()),
+            "rate": per_second(&self.sent),
+            "tracker_rate": self
+                .active_since
+                .is_some_and(|since| since.elapsed() >= RATE_WINDOW)
+                .then(|| per_second(&self.received)),
+            "openness_saturated": self.smoother.saturation.on,
+            "config_error": self.config.error.as_deref(),
+            "time": status::unix_time(SystemTime::now()),
+        })
+    }
+
+    /// The latest processed sample for other apps: gaze and lids as sent (1.0 = 45°;
+    /// lids on the output's scale and in VRCFT units) plus the raw Frame openness.
+    fn extension_eyes(&self) -> serde_json::Value {
+        let Some(sample) = &self.latest else {
+            return serde_json::json!({"tracking": false});
+        };
+        let pair = |values: [f32; 6], first: usize| status::round([values[first], values[first + 1]]);
+        serde_json::json!({
+            "tracking": true,
+            "gaze": pair(sample.gaze, 4),
+            "gaze_left": pair(sample.gaze, 0),
+            "gaze_right": pair(sample.gaze, 2),
+            "lids": status::round(output_lids(self.settings.output, sample.lids)),
+            "lids_vrcft": status::round(sample.lids),
+            "openness": status::round(sample.openness),
+        })
+    }
+
     /// `source_error`: why the eye tracker's shared memory can't be read, if it can't; `dominant_eye`: the eye the
     /// Frame tracks alone, if "Track Dominant Eye Only" is on.
     fn status<'a>(&'a self, source_error: Option<&'a str>, dominant_eye: Option<DominantEye>) -> Status<'a> {
@@ -2168,6 +2247,24 @@ impl Bridge {
             locked: &self.config.locked,
             effective: settings,
             gaze_capture: self.capture_result.as_ref(),
+        }
+    }
+}
+
+/// Put frameeyeosc on the extensions bus so other apps can find it and ask for status or
+/// eye data. Failing to register (another instance holds the name, no runtime dir) only means
+/// other apps can't reach this instance; eye tracking output is unaffected.
+fn register_extension() -> Option<extensions::Extension> {
+    let info = extensions::Registration {
+        version: Some(env!("CARGO_PKG_VERSION").into()),
+        description: Some("Steam Frame eye tracking sent to VRChat over OSC".into()),
+        accepts: ["ping", "get-status", "get-eyes"].iter().map(|kind| kind.to_string()).collect(),
+    };
+    match extensions::Extension::register("frameeyeosc", info) {
+        Ok(extension) => Some(extension),
+        Err(error) => {
+            eprintln!("Could not join the extensions bus: {error}");
+            None
         }
     }
 }
@@ -2253,6 +2350,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         smoother: Smoother::new(&settings),
         calibration: LidCalibration::load(calibration_path, settings.lid_open),
         config,
+        extensions: if settings.extensions { register_extension() } else { None },
         settings,
         started: SystemTime::now(),
         active_since: None,
@@ -2297,6 +2395,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             None => std::thread::sleep(POLL),
         }
         bridge.check_capture();
+        bridge.poll_extensions();
         bridge.keep_livelink_alive();
         if status_file.due() {
             if let Some(line) = eye.refresh_dominant_eye() {
@@ -3550,6 +3649,7 @@ mod tests {
             capture: None,
             capture_result: None,
             dots: dots::DotStream::new(Path::new("/nonexistent")),
+            extensions: None,
             livelink_neutral: None,
             livelink_throttle: Throttle::default(),
         };

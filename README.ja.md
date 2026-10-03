@@ -151,6 +151,7 @@ sudo は要りません。全部ホームフォルダ（`~/.local/bin`、`~/.con
 | `fit_sounds` | | `true` | 目を合わせている間、パネルが短い音を鳴らす。frameeyeosc 本体は使わない |
 | `auto_recenter` | | `"center"` | 視線を合わせてあるとき、ヘッドセットを被るたびにパネルが 1 回だけ自動で合わせ直すもの: `"center"` 正面だけ（点 1 つ・2.5 秒）、`"tilt"` 正面と傾き（正面・上・下の点、約 7.5 秒）、`"off"` 何もしない。［もう一度合わせる］の隣のボタンも同じものを手で始める（`"off"` のときは正面だけ）。frameeyeosc 本体は使わない |
 | `update_check` | | `true` | パネルが起動時と 1 日 1 回（確認に失敗したときは 1 時間後）、GitHub に新しい版がないか確かめる。frameeyeosc 本体は使わない |
+| `extensions` | `--no-extensions` | `true` | 拡張バスに参加し、ヘッドセット上のほかのアプリが frameeyeosc を見つけてメッセージを送れるようにする（[拡張 API](#拡張-api)） |
 
 コマンドラインのオプションは、このファイルより優先されます。オプションは `~/.config/frameeyeosc/env` に書き、`systemctl --user restart frameeyeosc` で反映します:
 
@@ -163,6 +164,10 @@ FRAMEEYEOSC_ARGS="--gaze-min-cutoff 0.3 --lid-sync 0.6"
 ## 状態ファイル
 
 frameeyeosc は 1 秒に 10 回、今の様子を `$XDG_RUNTIME_DIR/frameeyeosc/status.json`（ふつうは `/run/user/1000/frameeyeosc/status.json`）に書きます。中身は、送信中か、送り先、毎秒の送信回数、目のトラッカーから毎秒届くサンプルの数（`tracker_rate`）、最新の生の値と送った値、キャリブレーション、今効いている設定、コマンドで固定中の項目、設定のエラー、目のデータを読めないときはその理由（`source_error`）、「Track Dominant Eye Only」の設定がオンのあいだ Frame が追っている目（`dominant_eye`: `"left"` か `"right"`。オフなら `null`）、ふつうに開いた目が 1.0 と読まれて見開きが届かないかどうか（`openness_saturated`）、最後の目合わせの測定です。パネルはこれを読んで表示します。フォルダは本人しか読めず、メモリの上にあって再起動すると消えます。残るのは最新の値だけです。
+
+## 拡張 API
+
+ヘッドセット上のほかのアプリ同士は「拡張バス」でお互いを見つけ、メッセージをやりとりできる。`$XDG_RUNTIME_DIR/frame-apps/` にあるフォルダで、アプリごとに小さな JSON の記述ファイルと Unix データグラムの受信箱を登録する。仲介するプロセスはなく、データが機器の外に出ることもない。`extensions` がオンの間（初期値）、frameeyeosc は `frameeyeosc` として登録され、`ping`、`get-status`、`get-eyes`（送信している最新の視線とまぶたの値）に答える。プロトコルや frameeyeosc が受け付ける種類、Rust・Python・`frameeyeosc-ext` ツールからの使い方は [docs/extensions.md](docs/extensions.md)（英語）。`contrib/ext-echo.py` がそのまま動く例になっている。
 
 ## VRCFaceTracking（ETVR）モード
 

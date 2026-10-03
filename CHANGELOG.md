@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+An extensions API for apps on the Steam Frame.
+
+- Apps can now find each other and exchange messages through the extensions bus: a folder in `$XDG_RUNTIME_DIR/frame-apps/` where each app registers a JSON descriptor (`<name>.json`, with a heartbeat) and a Unix datagram inbox (`<name>.sock`). A message is one datagram of UTF-8 JSON (`{"v":1,"from","kind","data"}`), fire-and-forget like the panel's gaze dots — nothing leaves the device, and crashed apps are reclaimed by the next one taking the name. The protocol and how to use it from Rust, Python or a shell are in docs/extensions.md; `src/extensions.rs` is the implementation (also usable as the `frameeyeosc` library), `contrib/ext-echo.py` a complete example, and `frameeyeosc-ext` (`cargo build --release --bin frameeyeosc-ext`) a tool to list apps and send messages.
+- frameeyeosc joins the bus itself as `frameeyeosc` and answers `ping`, `get-status` (a compact version of the status file) and `get-eyes` (the latest gaze and eyelids as sent, so another app can react to blinks or where you look). `"extensions": false` in config.json or `--no-extensions` keeps it off the bus.
+
 ## 0.7.0 (2026-10-02)
 
 A softer gaze that settles where the eyes stop, fitted eyelids that stay open, no wide-eyed flash before a blink, frameeyeosc that waits for the eye tracker instead of exiting, and what SteamOS 0.4.3 changed. Measured by replaying two 60-minute VRChat recordings (2026-10-01 22:48, eyelid widening off, and 01:09, "More") and three recordings on SteamOS 0.4.3 (2026-10-02).

@@ -151,6 +151,7 @@ Settings are in `~/.config/frameeyeosc/config.json`. The panel writes it, and yo
 | `fit_sounds` | | `true` | The panel plays short sounds during the eye fit. frameeyeosc itself ignores it |
 | `auto_recenter` | | `"center"` | What the panel fits by itself once each time the headset is put on (when the gaze is fitted): `"center"` straight ahead only (one dot, 2.5 seconds), `"tilt"` straight ahead and the tilt (straight ahead, up and down, about 7.5 seconds), `"off"` nothing. The button next to "Fit again" runs the same (`"center"` when it is off). frameeyeosc itself ignores it |
 | `update_check` | | `true` | The panel looks for a new release on GitHub at start and once a day (an hour later after a failed check). frameeyeosc itself ignores it |
+| `extensions` | `--no-extensions` | `true` | Join the extensions bus so other apps on the headset can find and message frameeyeosc (see [Extensions API](#extensions-api)) |
 
 Command-line options win over the file. They go in `~/.config/frameeyeosc/env` (then `systemctl --user restart frameeyeosc`):
 
@@ -163,6 +164,10 @@ Whatever is set there can't be changed from the file, and the panel shows it as 
 ## Status file
 
 frameeyeosc writes what it is doing to `$XDG_RUNTIME_DIR/frameeyeosc/status.json` (usually `/run/user/1000/frameeyeosc/status.json`) ten times a second: whether it is sending, the destination, messages per second, the eye tracker's samples per second (`tracker_rate`), the latest raw and sent values, the calibration, the settings in effect, which of them are locked by the command line, any config error, why the eye data can't be read if it can't (`source_error`), which eye the Frame tracks alone while the "Track Dominant Eye Only" setting is on (`dominant_eye`: `"left"` or `"right"`; `null` while it is off), whether a relaxed open eye reads 1.0 so widening can't come through (`openness_saturated`), and the latest eye fit measurement. The panel reads it. The folder is readable only by you, lives in memory, and is gone after a reboot. Only the latest values are kept.
+
+## Extensions API
+
+Other apps on the headset can find each other and exchange messages through the extensions bus — a folder in `$XDG_RUNTIME_DIR/frame-apps/` where each app registers a small JSON descriptor and a Unix datagram inbox. There is no broker and nothing leaves the device. While `extensions` is on, frameeyeosc registers as `frameeyeosc` and answers `ping`, `get-status` and `get-eyes` (the latest gaze and eyelids as sent). The protocol, the kinds frameeyeosc accepts, and how to use it from Rust, Python or the `frameeyeosc-ext` tool are in [docs/extensions.md](docs/extensions.md); `contrib/ext-echo.py` is a complete example app.
 
 ## VRCFaceTracking (ETVR) mode
 

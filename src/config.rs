@@ -144,6 +144,9 @@ pub struct Settings {
     pub gaze_gain_x_right: Option<f32>,
     /// Stream each sample's sent gaze to the panel, which shows it as dots (debug). Not a command-line option.
     pub gaze_debug_dots: bool,
+    /// Join the extensions bus ($XDG_RUNTIME_DIR/frame-apps) so other apps can discover and
+    /// message frameeyeosc; see docs/extensions.md
+    pub extensions: bool,
     /// Each eye's Frame openness measured by the panel's eye fit: eyes shut, and open while looking
     /// up, straight ahead and down. None until fitted; see `lid_fit`. Not command-line options.
     pub lid_fit_closed_left: Option<f32>,
@@ -209,6 +212,7 @@ impl Default for Settings {
             gaze_gain_x_left: None,
             gaze_gain_x_right: None,
             gaze_debug_dots: false,
+            extensions: true,
             lid_fit_closed_left: None,
             lid_fit_closed_right: None,
             lid_fit_up_left: None,
@@ -528,6 +532,10 @@ pub fn apply_args(settings: &mut Settings, args: &Args, given: &HashSet<String>)
     if given.contains("no_despike") {
         settings.despike = !args.no_despike;
         locked.push("despike");
+    }
+    if given.contains("no_extensions") {
+        settings.extensions = !args.no_extensions;
+        locked.push("extensions");
     }
     pin!(
         blink_sync_below,
